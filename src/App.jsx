@@ -34,6 +34,35 @@ const MODEL_FIELDS = [
   ["bottomFinishing", "Bottom / Length Finishing"],
 ];
 
+const CORE_FIT_FIELDS = ["shoulder", "chest", "waist", "hips"];
+
+function nearestSize(customerM, sizes) {
+  let best = null, bestScore = Infinity;
+  sizes.forEach((sz) => {
+    let score = 0, count = 0;
+    CORE_FIT_FIELDS.forEach((f) => {
+      const c = parseFloat(customerM[f]);
+      const m = parseFloat(sz.measurements[f]);
+      if (!isNaN(c) && !isNaN(m)) { score += Math.abs(c - m); count++; }
+    });
+    if (count > 0) {
+      const avg = score / count;
+      if (avg < bestScore) { bestScore = avg; best = sz; }
+    }
+  });
+  return best;
+}
+
+function computeDeltas(customerM, baseM) {
+  const out = {};
+  MEASURE_FIELDS.forEach(([k]) => {
+    const c = parseFloat(customerM[k]);
+    const b = parseFloat(baseM[k]);
+    out[k] = (!isNaN(c) && !isNaN(b)) ? +(c - b).toFixed(1) : null;
+  });
+  return out;
+}
+
 const ITEM_TYPES = ["Abaya", "Sheila", "Jalabiya", "Set"];
 const SHEILA_TYPES = ["Chiffon", "Crepe", "Georgette", "Plain"];
 const ORDER_TYPES = ["New", "Alteration"];
@@ -403,6 +432,39 @@ function SalesPanel({ config, orders, refresh, session, subpage, setSubpage, sel
     await refresh(); flash("Changes saved");
   };
 
+  const handleSaveProfile = async (form, fit) => {
+    const row = {
+      name: form.name, mobile: form.mobile, measurements: form.measurements, model: form.model,
+      recommended_size: fit && !fit.error ? fit.size : null, deltas: fit && !fit.error ? fit.deltas : {},
+      branch: session.branch, created_by: session.name,
+    };
+    const { error } = await supabase.from("customer_profiles").insert(row);
+    if (error) { flash("Error: " + error.message); return; }
+    setSubpage("records"); flash("Customer profile saved");
+  };
+
+  const handleCreateOrderFromRequirement = async (form, fit) => {
+    const profileRow = {
+      name: form.name, mobile: form.mobile, measurements: form.measurements, model: form.model,
+      recommended_size: fit && !fit.error ? fit.size : null, deltas: fit && !fit.error ? fit.deltas : {},
+      branch: session.branch, created_by: session.name,
+    };
+    const { data: profile } = await supabase.from("customer_profiles").insert(profileRow).select().single();
+
+    const now = new Date().toISOString();
+    const fitNote = fit && !fit.error ? `Closest size: ${fit.size}. Adjustments: ${MEASURE_FIELDS.map(([k, l]) => `${l} ${fit.deltas[k] > 0 ? "+" : ""}${fit.deltas[k] ?? "—"}`).join(", ")}` : "";
+    const orderRow = {
+      name: form.name, mobile: form.mobile, order_type: "New", model: form.model, item: ITEM_TYPES[0],
+      prepared_by: session.name, branch: session.branch, measurements: form.measurements,
+      comments: fitNote, status: "job_created",
+      history: [{ note: "Job order created from customer requirement", by: session.name, at: now }],
+    };
+    const { data: order, error } = await supabase.from("job_orders").insert(orderRow).select().single();
+    if (error) { flash("Error: " + error.message); return; }
+    if (profile) await supabase.from("customer_profiles").update({ job_order_id: order.id }).eq("id", profile.id);
+    await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created from requirement");
+  };
+
   const runHistoryUpdate = async (id, status, note) => {
     const current = orders.find((o) => o.id === id);
     const history = [...current.history, { note, by: session.name, at: new Date().toISOString() }];
@@ -415,12 +477,16 @@ function SalesPanel({ config, orders, refresh, session, subpage, setSubpage, sel
   const handleResubmit = (id) => runHistoryUpdate(id, "job_created", "Resubmitted to Production");
 
   if (subpage === "new") return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
+  if (subpage === "requirement") {
+    return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSaveProfile={handleSaveProfile} onCreateOrder={handleCreateOrderFromRequirement} />;
+  }
 
   return (
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL RECORDS</h2>
       <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />
       <div className="no-print" style={{ textAlign: "right", marginBottom: 10 }}>
+        <button onClick={() => setSubpage("requirement")} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em", marginRight: 8 }}>+ NEW REQUIREMENT</button>
         <button onClick={() => setSubpage("new")} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em" }}>+ NEW JOB ORDER</button>
       </div>
       <OrderTable orders={filtered} onOpen={setSelectedId} editableStatuses={["job_rejected", "ready_to_deliver"]} />
@@ -501,6 +567,78 @@ function JobOrderForm({ config, session, onCancel, onSubmit }) {
         <button onClick={() => window.print()} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>PRINT / SAVE PDF</button>
         <button disabled={!valid} onClick={() => onSubmit(form, file)} style={{ background: valid ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>SUBMIT</button>
         <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>CANCEL</button>
+      </div>
+    </div>
+  );
+}
+
+function RequirementForm({ config, session, onCancel, onSaveProfile, onCreateOrder }) {
+  const [form, setForm] = useState({
+    name: "", mobile: "", model: config.models[0]?.modelNo || "",
+    measurements: Object.fromEntries(MEASURE_FIELDS.map(([k]) => [k, ""])),
+  });
+  const [sizes, setSizes] = useState([]);
+  const [fit, setFit] = useState(null); // { size, deltas }
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const setMeasure = (k) => (e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }));
+
+  useEffect(() => {
+    const m = config.models.find((mm) => mm.modelNo === form.model);
+    if (!m) { setSizes([]); return; }
+    supabase.from("model_sizes").select("*").eq("model_id", m.id).then(({ data }) => setSizes(data || []));
+  }, [form.model, config.models]);
+
+  const computeFit = () => {
+    if (sizes.length === 0) { setFit({ error: "No size measurements saved for this model yet — add them in Admin > Add/Remove Model." }); return; }
+    const best = nearestSize(form.measurements, sizes);
+    if (!best) { setFit({ error: "Enter at least shoulder, chest, waist or hips to compute a match." }); return; }
+    setFit({ size: best.size_label, deltas: computeDeltas(form.measurements, best.measurements) });
+  };
+
+  const valid = form.name.trim() && form.mobile.trim();
+
+  return (
+    <div>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>CUSTOMER REQUIREMENT</h2>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 6 }}>
+        <Field label="Customer Name"><input style={inputStyle} value={form.name} onChange={set("name")} /></Field>
+        <Field label="Mobile No"><input style={inputStyle} value={form.mobile} onChange={set("mobile")} /></Field>
+        <Field label="Model"><select style={inputStyle} value={form.model} onChange={set("model")}>{config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}</option>)}</select></Field>
+      </div>
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>CUSTOMER FITTING MEASUREMENTS</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 12 }}>
+        {MEASURE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form.measurements[k]} onChange={setMeasure(k)} /></Field>)}
+      </div>
+
+      <button onClick={computeFit} style={{ marginTop: 14, background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Compute Fit</button>
+
+      {fit && fit.error && <div style={{ color: "#C1302B", marginTop: 12, fontSize: 13 }}>{fit.error}</div>}
+
+      {fit && !fit.error && (
+        <div style={{ marginTop: 18, border: "1px solid #C9CDD3", padding: 16 }}>
+          <div style={{ fontWeight: 700, marginBottom: 10 }}>Closest base size: {fit.size}</div>
+          <table>
+            <thead><tr style={{ fontSize: 12, textAlign: "left", borderBottom: "1px solid #E5E5E5" }}><th>Measurement</th><th>Customer</th><th>Difference from {fit.size}</th></tr></thead>
+            <tbody>
+              {MEASURE_FIELDS.map(([k, l]) => (
+                <tr key={k} style={{ fontSize: 13 }}>
+                  <td style={{ padding: "4px 0" }}>{l}</td>
+                  <td>{form.measurements[k] || "—"}</td>
+                  <td style={{ color: fit.deltas[k] > 0 ? "#2F8F46" : fit.deltas[k] < 0 ? "#C1302B" : "#1A1A1A", fontWeight: 600 }}>
+                    {fit.deltas[k] == null ? "—" : (fit.deltas[k] > 0 ? "+" : "") + fit.deltas[k]}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 22 }}>
+        <button disabled={!valid} onClick={() => onSaveProfile(form, fit)} style={{ background: valid ? "#1A1A1A" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save Profile</button>
+        <button disabled={!valid} onClick={() => onCreateOrder(form, fit)} style={{ background: valid ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save & Create Job Order</button>
+        <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Cancel</button>
       </div>
     </div>
   );
@@ -771,6 +909,52 @@ function ManageList({ title, items, fields, onAdd, onRemove }) {
   );
 }
 
+function ModelSizes({ model, refresh, flash }) {
+  const [sizes, setSizes] = useState([]);
+  const [form, setForm] = useState({ size_label: "Small", measurements: Object.fromEntries(MEASURE_FIELDS.map(([k]) => [k, ""])) });
+
+  const load = () => supabase.from("model_sizes").select("*").eq("model_id", model.id).then(({ data }) => setSizes(data || []));
+  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const setMeasure = (k) => (e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }));
+
+  const add = async () => {
+    const { error } = await supabase.from("model_sizes").insert({ model_id: model.id, size_label: form.size_label, measurements: form.measurements });
+    if (error) { flash("Error: " + error.message); return; }
+    setForm({ size_label: "Small", measurements: Object.fromEntries(MEASURE_FIELDS.map(([k]) => [k, ""])) });
+    load(); flash("Size added");
+  };
+  const remove = async (id) => { await supabase.from("model_sizes").delete().eq("id", id); load(); };
+
+  return (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>SIZE MEASUREMENTS FOR {model.modelNo}</div>
+      {sizes.map((s) => (
+        <div key={s.id} style={{ fontSize: 12.5, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
+          <span><strong>{s.size_label}:</strong> {MEASURE_FIELDS.map(([k, l]) => `${l} ${s.measurements[k] || "—"}`).join(", ")}</span>
+          <a className="link" style={{ color: "#C1302B" }} onClick={() => remove(s.id)}>Remove</a>
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
+        <div>
+          <div style={label13}>Size Label</div>
+          <select style={{ ...inputStyle, width: 110 }} value={form.size_label} onChange={set("size_label")}>
+            {["Small", "Medium", "Large", "X-Large"].map((s) => <option key={s}>{s}</option>)}
+          </select>
+        </div>
+        {MEASURE_FIELDS.map(([k, l]) => (
+          <div key={k} style={{ width: 70 }}>
+            <div style={{ ...label13, fontSize: 9.5 }}>{l}</div>
+            <input style={{ ...inputStyle, padding: "6px 6px" }} value={form.measurements[k]} onChange={setMeasure(k)} />
+          </div>
+        ))}
+        <button onClick={add} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, height: 34 }}>Add Size</button>
+      </div>
+    </div>
+  );
+}
+
 function ManageModels({ config, refresh, flash }) {
   const blank = Object.fromEntries(MODEL_FIELDS.map(([k]) => [k, ""]));
   const [form, setForm] = useState(blank);
@@ -792,9 +976,12 @@ function ManageModels({ config, refresh, flash }) {
       <button onClick={add} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, marginBottom: 24 }}>Add Model</button>
       <div style={{ display: "grid", gap: 10 }}>
         {config.models.map((m) => (
-          <div key={m.id} style={{ border: "1px solid #E5E5E5", padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div><strong>{m.modelNo}</strong> — {m.mainFabricCode} — {m.sizeRange}</div>
-            <a className="link" style={{ color: "#C1302B" }} onClick={() => remove(m.id)}>Remove</a>
+          <div key={m.id} style={{ border: "1px solid #E5E5E5", padding: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div><strong>{m.modelNo}</strong> — {m.mainFabricCode} — {m.sizeRange}</div>
+              <a className="link" style={{ color: "#C1302B" }} onClick={() => remove(m.id)}>Remove</a>
+            </div>
+            <ModelSizes model={m} refresh={refresh} flash={flash} />
           </div>
         ))}
       </div>
