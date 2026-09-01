@@ -687,6 +687,33 @@ function AdminPanel({ config, refresh, orders, session, subpage, setSubpage, sel
     await refresh(); flash("Changes saved");
   };
 
+  const handleCreate = async (form, file) => {
+    let attachmentUrl = null;
+    if (file) {
+      const path = `${Date.now()}-${file.name}`;
+      const { error: upErr } = await supabase.storage.from("attachments").upload(path, file);
+      if (!upErr) {
+        const { data } = supabase.storage.from("attachments").getPublicUrl(path);
+        attachmentUrl = data.publicUrl;
+      }
+    }
+    const now = new Date().toISOString();
+    const row = {
+      invoice_no: form.invoiceNo || null, name: form.name, mobile: form.mobile, order_type: form.orderType,
+      model: form.model, item: form.item, prepared_by: session.name, branch: form.branch || session.branch,
+      measurements: form.measurements, sheila_type: form.sheilaType, abaya_option: form.abayaOption,
+      button_till: form.buttonTill, delivery_date: form.deliveryDate || null,
+      attachment_url: attachmentUrl || form.attachmentNote || null, comments: form.comments,
+      status: "job_created", history: [{ note: `Job order created by Admin (${session.name})`, by: session.name, at: now }],
+    };
+    const { data, error } = await supabase.from("job_orders").insert(row).select().single();
+    if (error) { flash("Error: " + error.message); return; }
+    await refresh();
+    setSubpage("records");
+    setSelectedId(data.id);
+    flash("Job order created");
+  };
+
   if (subpage === "branches") return <ManageList title="ADD / REMOVE BRANCH" items={config.branches} fields={[["name", "Branch Name"]]}
     onAdd={async (item) => { const { error } = await supabase.from("branches").insert(item); if (error) flash("Error: " + error.message); else { await refresh(); flash("Branch added"); } }}
     onRemove={async (id) => { await supabase.from("branches").delete().eq("id", id); await refresh(); }} />;
@@ -698,11 +725,17 @@ function AdminPanel({ config, refresh, orders, session, subpage, setSubpage, sel
 
   if (subpage === "models") return <ManageModels config={config} refresh={refresh} flash={flash} />;
   if (subpage === "viewmodels") return <ModelBrowser models={config.models} />;
+  if (subpage === "new") {
+    return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
+  }
 
   return (
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL RECORDS</h2>
       <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />
+      <div className="no-print" style={{ textAlign: "right", marginBottom: 10 }}>
+        <button onClick={() => setSubpage("new")} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em" }}>+ NEW JOB ORDER</button>
+      </div>
       <OrderTable orders={filtered} onOpen={setSelectedId} showDelete onDelete={handleDeleteOrder} />
       {selected && <OrderDetail order={selected} role="admin" session={session} onClose={() => setSelectedId(null)} onSaveFields={handleSaveFields} onAction={() => {}} onDelete={handleDeleteOrder} />}
     </div>
