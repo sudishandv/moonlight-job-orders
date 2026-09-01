@@ -147,6 +147,7 @@ export default function App() {
   const [config, setConfig] = useState(null);
   const [orders, setOrders] = useState(null);
   const [profiles, setProfiles] = useState(null);
+  const [requirementItems, setRequirementItems] = useState(null);
   const [subpage, setSubpage] = useState("records");
   const [selectedId, setSelectedId] = useState(null);
   const [toast, setToast] = useState(null);
@@ -166,16 +167,21 @@ export default function App() {
   }, [session]);
 
   const loadAll = useCallback(async () => {
-    const [{ data: branches }, { data: salespersons }, { data: models }, { data: ords }, { data: profs }] = await Promise.all([
+    const [{ data: branches }, { data: salespersons }, { data: models }, { data: ords }, { data: profs }, { data: reqItems }] = await Promise.all([
       supabase.from("branches").select("*").order("name"),
       supabase.from("salespersons").select("*").order("name"),
       supabase.from("models").select("*").order("model_no"),
       supabase.from("job_orders").select("*").order("created_at", { ascending: false }),
       supabase.from("customer_profiles").select("*").order("created_at", { ascending: false }),
+      supabase.from("requirement_items").select("*").order("created_at", { ascending: false }),
     ]);
     setConfig({ branches: branches || [], salespersons: salespersons || [], models: (models || []).map(dbToModel) });
     setOrders((ords || []).map(dbToOrder));
     setProfiles((profs || []).map((p) => ({ ...p, createdAt: p.created_at })));
+    setRequirementItems((reqItems || []).map((r) => ({
+      id: r.id, profileId: r.profile_id, model: r.model, recommendedSize: r.recommended_size,
+      deltas: r.deltas, jobOrderId: r.job_order_id, createdAt: r.created_at,
+    })));
   }, []);
 
   useEffect(() => { if (profile) loadAll(); }, [profile, loadAll]);
@@ -183,14 +189,14 @@ export default function App() {
   if (session === undefined) return <Loading text="Loading…" />;
   if (!session) return <LoginScreen onLoggedIn={() => {}} />;
   if (profile === null) return <NoProfileScreen onSignOut={() => supabase.auth.signOut()} />;
-  if (!config || !orders || !profiles) return <Loading text="Loading job orders…" />;
+  if (!config || !orders || !profiles || !requirementItems) return <Loading text="Loading job orders…" />;
 
   const refresh = loadAll;
 
   return (
     <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()}>
       {profile.role === "sales" && (
-        <SalesPanel config={config} orders={orders} profiles={profiles} refresh={refresh} session={profile}
+        <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
       {profile.role === "production" && (
@@ -198,7 +204,7 @@ export default function App() {
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
       {profile.role === "admin" && (
-        <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} session={profile}
+        <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
       {toast && (
@@ -268,6 +274,7 @@ function Shell({ session, subpage, setSubpage, onLogout, children }) {
             <>
               <span>|</span>
               <a className="link" onClick={() => setSubpage("customers")}>CUSTOMERS</a>
+              <a className="link" onClick={() => setSubpage("requirements")}>REQUIREMENTS</a>
             </>
           )}
           <span>|</span>
@@ -402,7 +409,7 @@ function useFilteredOrders(orders, query, statusFilter) {
 
 /* ================= Sales Panel ================= */
 
-function SalesPanel({ config, orders, profiles, refresh, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
+function SalesPanel({ config, orders, profiles, requirementItems, refresh, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const filtered = useFilteredOrders(orders, query, statusFilter);
@@ -441,9 +448,10 @@ function SalesPanel({ config, orders, profiles, refresh, session, subpage, setSu
     await refresh(); flash("Changes saved");
   };
 
-  const handleSaveRequirement = async (customer, measurements, items, createOrders) => {
+  const handleSaveRequirement = async (customer, measurements, items, notes, signatureUrl, createOrders) => {
     const { data: profile, error: pErr } = await supabase.from("customer_profiles").insert({
       name: customer.name, mobile: customer.mobile, measurements, branch: session.branch, created_by: session.name,
+      notes: notes || null, signature_url: signatureUrl || null,
     }).select().single();
     if (pErr) { flash("Error: " + pErr.message); return; }
 
@@ -453,7 +461,7 @@ function SalesPanel({ config, orders, profiles, refresh, session, subpage, setSu
       let jobOrderId = null;
       if (createOrders) {
         const now = new Date().toISOString();
-        const fitNote = `Closest size: ${it.size}. Adjustments: ${MEASURE_FIELDS.map(([k, l]) => `${l} ${it.deltas[k] > 0 ? "+" : ""}${it.deltas[k] ?? "—"}`).join(", ")}`;
+        const fitNote = `Selected size: ${it.size}.${notes ? " Notes: " + notes : ""} Adjustments: ${MEASURE_FIELDS.map(([k, l]) => `${l} ${it.deltas[k] > 0 ? "+" : ""}${it.deltas[k] ?? "—"}`).join(", ")}`;
         const { data: order } = await supabase.from("job_orders").insert({
           name: customer.name, mobile: customer.mobile, order_type: "New", model: it.model, item: ITEM_TYPES[0],
           prepared_by: session.name, branch: session.branch, measurements, comments: fitNote, status: "job_created",
@@ -469,6 +477,20 @@ function SalesPanel({ config, orders, profiles, refresh, session, subpage, setSu
     await refresh();
     if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
     else { setSubpage("customers"); flash("Customer profile saved"); }
+  };
+
+  const handleCreateOrderFromRow = async (row) => {
+    const now = new Date().toISOString();
+    const fitNote = `Selected size: ${row.recommendedSize || "—"}.${row.profile.notes ? " Notes: " + row.profile.notes : ""}`;
+    const { data: order, error } = await supabase.from("job_orders").insert({
+      name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model, item: ITEM_TYPES[0],
+      prepared_by: session.name, branch: row.profile.branch || session.branch, measurements: row.profile.measurements,
+      comments: fitNote, status: "job_created",
+      history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
+    }).select().single();
+    if (error) { flash("Error: " + error.message); return; }
+    await supabase.from("requirement_items").update({ job_order_id: order.id }).eq("id", row.id);
+    await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created");
   };
 
   const runHistoryUpdate = async (id, status, note) => {
@@ -488,6 +510,9 @@ function SalesPanel({ config, orders, profiles, refresh, session, subpage, setSu
   }
   if (subpage === "customers") {
     return <CustomersPage profiles={profiles} orders={orders} />;
+  }
+  if (subpage === "requirements") {
+    return <RequirementsPage items={requirementItems} profiles={profiles} onCreateOrder={handleCreateOrderFromRow} />;
   }
 
   return (
@@ -581,43 +606,121 @@ function JobOrderForm({ config, session, onCancel, onSubmit }) {
   );
 }
 
+function SignaturePad({ canvasRef, onDrawn }) {
+  const drawing = React.useRef(false);
+  const getPos = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    return { x: (e.clientX - rect.left) * (canvasRef.current.width / rect.width), y: (e.clientY - rect.top) * (canvasRef.current.height / rect.height) };
+  };
+  const start = (e) => { drawing.current = true; const ctx = canvasRef.current.getContext("2d"); const p = getPos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+  const move = (e) => {
+    if (!drawing.current) return;
+    const ctx = canvasRef.current.getContext("2d"); const p = getPos(e);
+    ctx.lineWidth = 2; ctx.lineCap = "round"; ctx.strokeStyle = "#1A1A1A";
+    ctx.lineTo(p.x, p.y); ctx.stroke();
+    onDrawn(true);
+  };
+  const end = () => { drawing.current = false; };
+  const clear = () => {
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    onDrawn(false);
+  };
+  return (
+    <div>
+      <canvas ref={canvasRef} width={500} height={150}
+        style={{ border: "1px solid #C9CDD3", borderRadius: 3, touchAction: "none", width: "100%", maxWidth: 500, background: "#fff" }}
+        onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerLeave={end} />
+      <button type="button" onClick={clear} style={{ marginTop: 6, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "5px 12px", fontSize: 12 }}>Clear Signature</button>
+    </div>
+  );
+}
+
 function RequirementForm({ config, session, onCancel, onSave }) {
   const [customer, setCustomer] = useState({ name: "", mobile: "" });
   const [measurements, setMeasurements] = useState(Object.fromEntries(MEASURE_FIELDS.map(([k]) => [k, ""])));
   const [items, setItems] = useState([]);
   const [pickModel, setPickModel] = useState(config.models[0]?.modelNo || "");
+  const [notes, setNotes] = useState("");
+  const [signed, setSigned] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loadMobile, setLoadMobile] = useState("");
+  const [loadMsg, setLoadMsg] = useState("");
+  const sigCanvasRef = React.useRef(null);
 
   const setC = (k) => (e) => setCustomer((c) => ({ ...c, [k]: e.target.value }));
   const setM = (k) => (e) => setMeasurements((m) => ({ ...m, [k]: e.target.value }));
+
+  const loadByMobile = async () => {
+    if (!loadMobile.trim()) return;
+    setLoadMsg("Searching…");
+    const { data } = await supabase.from("customer_profiles").select("*").eq("mobile", loadMobile.trim()).order("created_at", { ascending: false }).limit(1);
+    if (data && data[0]) {
+      setCustomer({ name: data[0].name, mobile: data[0].mobile });
+      setMeasurements({ ...Object.fromEntries(MEASURE_FIELDS.map(([k]) => [k, ""])), ...(data[0].measurements || {}) });
+      setLoadMsg(`Loaded measurements from ${fmtDate(data[0].created_at)}.`);
+    } else {
+      setLoadMsg("No existing profile found for that number.");
+    }
+  };
 
   const addItem = async () => {
     const model = config.models.find((m) => m.modelNo === pickModel);
     if (!model) return;
     const { data: sizes } = await supabase.from("model_sizes").select("*").eq("model_id", model.id);
     if (!sizes || sizes.length === 0) {
-      setItems((it) => [...it, { model: pickModel, error: "No size chart saved for this model yet — add one in Admin > Add/Remove Model." }]);
+      setItems((it) => [...it, { model: pickModel, sizes: [], error: "No size chart saved for this model yet — add one in Admin > Add/Remove Model." }]);
       return;
     }
     const best = nearestSize(measurements, sizes);
     if (!best) {
-      setItems((it) => [...it, { model: pickModel, error: "Enter shoulder / chest / waist / hips first to compute a match." }]);
+      setItems((it) => [...it, { model: pickModel, sizes, error: "Enter shoulder / chest / waist / hips first to compute a match." }]);
       return;
     }
-    setItems((it) => [...it, { model: pickModel, size: best.size_label, deltas: computeDeltas(measurements, best.measurements) }]);
+    setItems((it) => [...it, { model: pickModel, sizes, size: best.size_label, auto: best.size_label, deltas: computeDeltas(measurements, best.measurements) }]);
+  };
+  const changeItemSize = (idx, sizeLabel) => {
+    setItems((prev) => prev.map((it, i) => {
+      if (i !== idx) return it;
+      const sizeObj = it.sizes.find((s) => s.size_label === sizeLabel);
+      if (!sizeObj) return it;
+      return { ...it, size: sizeLabel, deltas: computeDeltas(measurements, sizeObj.measurements) };
+    }));
   };
   const removeItem = (idx) => setItems((it) => it.filter((_, i) => i !== idx));
   const customerValid = customer.name.trim() && customer.mobile.trim();
 
+  const uploadSignature = async () => {
+    if (!signed || !sigCanvasRef.current) return null;
+    const blob = await new Promise((resolve) => sigCanvasRef.current.toBlob(resolve, "image/png"));
+    if (!blob) return null;
+    const path = `signatures/${Date.now()}.png`;
+    const { error } = await supabase.storage.from("attachments").upload(path, blob);
+    if (error) return null;
+    const { data } = supabase.storage.from("attachments").getPublicUrl(path);
+    return data.publicUrl;
+  };
+
   const save = async (createOrders) => {
     setSaving(true);
-    await onSave(customer, measurements, items, createOrders);
+    const signatureUrl = await uploadSignature();
+    await onSave(customer, measurements, items, notes, signatureUrl, createOrders);
     setSaving(false);
   };
 
   return (
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>CUSTOMER REQUIREMENT</h2>
+
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", justifyContent: "center", marginBottom: 16, flexWrap: "wrap" }}>
+        <div>
+          <div style={label13}>Load existing customer by mobile</div>
+          <input style={{ ...inputStyle, width: 200 }} value={loadMobile} onChange={(e) => setLoadMobile(e.target.value)} placeholder="Mobile number" />
+        </div>
+        <button onClick={loadByMobile} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "9px 16px", fontSize: 13, fontWeight: 700 }}>Load Measurements</button>
+        {loadMsg && <span style={{ fontSize: 12, color: "#8a8a8a" }}>{loadMsg}</span>}
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 6 }}>
         <Field label="Customer Name"><input style={inputStyle} value={customer.name} onChange={setC("name")} /></Field>
         <Field label="Mobile No"><input style={inputStyle} value={customer.mobile} onChange={setC("mobile")} /></Field>
@@ -641,8 +744,16 @@ function RequirementForm({ config, session, onCancel, onSave }) {
 
       {items.map((it, idx) => (
         <div key={idx} style={{ border: "1px solid #C9CDD3", padding: 14, marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-            <strong>{it.model}{it.size ? ` — Closest size: ${it.size}` : ""}</strong>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+            <strong>{it.model}</strong>
+            {!it.error && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 12, color: "#8a8a8a" }}>Size:</span>
+                <select value={it.size} onChange={(e) => changeItemSize(idx, e.target.value)} style={{ ...inputStyle, width: 130, padding: "4px 6px" }}>
+                  {it.sizes.map((s) => <option key={s.id} value={s.size_label}>{s.size_label}{s.size_label === it.auto ? " (auto match)" : ""}</option>)}
+                </select>
+              </div>
+            )}
             <a className="link" style={{ color: "#C1302B" }} onClick={() => removeItem(idx)}>Remove</a>
           </div>
           {it.error ? <div style={{ color: "#C1302B", fontSize: 13 }}>{it.error}</div> : (
@@ -663,11 +774,51 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         </div>
       ))}
 
-      <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 20 }}>
+      <div style={{ marginTop: 8 }}>
+        <Field label="Special Requirements / Notes"><textarea style={{ ...inputStyle, minHeight: 70 }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Any special requests from the customer…" /></Field>
+      </div>
+
+      <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #E5E5E5" }}>
+        <div style={label13}>Customer Signature — confirms agreement to the measurements & sizes above</div>
+        <SignaturePad canvasRef={sigCanvasRef} onDrawn={setSigned} />
+        {!signed && <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 4 }}>Required before creating a job order (optional if only saving the profile).</div>}
+      </div>
+
+      <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 22 }}>
         <button disabled={!customerValid || saving} onClick={() => save(false)} style={{ background: customerValid ? "#1A1A1A" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save Profile</button>
-        <button disabled={!customerValid || items.length === 0 || saving} onClick={() => save(true)} style={{ background: (customerValid && items.length > 0) ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save & Create Job Order(s)</button>
+        <button disabled={!customerValid || items.length === 0 || !signed || saving} onClick={() => save(true)} style={{ background: (customerValid && items.length > 0 && signed) ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save & Create Job Order(s)</button>
         <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Cancel</button>
       </div>
+    </div>
+  );
+}
+
+function RequirementsPage({ items, profiles, onCreateOrder }) {
+  const rows = items.map((it) => ({ ...it, profile: profiles.find((p) => p.id === it.profileId) })).filter((r) => r.profile);
+  return (
+    <div>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>CUSTOMER REQUIREMENTS</h2>
+      {rows.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No requirements saved yet.</div> : (
+        <table>
+          <thead><tr style={{ borderBottom: "2px solid #1A1A1A", fontSize: 12.5, textAlign: "left" }}>
+            <th style={{ padding: "9px 10px" }}>Name</th><th style={{ padding: "9px 10px" }}>Mobile</th><th style={{ padding: "9px 10px" }}>Model</th>
+            <th style={{ padding: "9px 10px" }}>Size</th><th style={{ padding: "9px 10px" }}>Date</th><th style={{ padding: "9px 10px" }}>Job Order</th><th style={{ padding: "9px 10px" }}></th>
+          </tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} style={{ borderBottom: "1px solid #E5E5E5", fontSize: 13.5 }}>
+                <td style={{ padding: "9px 10px" }}>{r.profile.name}</td>
+                <td style={{ padding: "9px 10px" }}>{r.profile.mobile}</td>
+                <td style={{ padding: "9px 10px" }}>{r.model}</td>
+                <td style={{ padding: "9px 10px" }}>{r.recommendedSize || "—"}</td>
+                <td style={{ padding: "9px 10px" }}>{fmtDate(r.createdAt)}</td>
+                <td style={{ padding: "9px 10px" }}>{r.jobOrderId ? <span style={{ color: "#2F8F46", fontWeight: 700 }}>Created</span> : <span style={{ color: "#8a8a8a" }}>Not yet</span>}</td>
+                <td style={{ padding: "9px 10px" }}>{!r.jobOrderId && <a className="link" onClick={() => onCreateOrder(r)}>Create Job Order</a>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
@@ -906,7 +1057,7 @@ function ModelBrowser({ models }) {
 
 /* ================= Admin Panel ================= */
 
-function AdminPanel({ config, refresh, orders, profiles, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
+function AdminPanel({ config, refresh, orders, profiles, requirementItems, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const filtered = useFilteredOrders(orders, query, statusFilter);
@@ -950,9 +1101,10 @@ function AdminPanel({ config, refresh, orders, profiles, session, subpage, setSu
     flash("Job order created");
   };
 
-  const handleSaveRequirement = async (customer, measurements, items, createOrders) => {
+  const handleSaveRequirement = async (customer, measurements, items, notes, signatureUrl, createOrders) => {
     const { data: profile, error: pErr } = await supabase.from("customer_profiles").insert({
       name: customer.name, mobile: customer.mobile, measurements, branch: session.branch, created_by: session.name,
+      notes: notes || null, signature_url: signatureUrl || null,
     }).select().single();
     if (pErr) { flash("Error: " + pErr.message); return; }
 
@@ -962,7 +1114,7 @@ function AdminPanel({ config, refresh, orders, profiles, session, subpage, setSu
       let jobOrderId = null;
       if (createOrders) {
         const now = new Date().toISOString();
-        const fitNote = `Closest size: ${it.size}. Adjustments: ${MEASURE_FIELDS.map(([k, l]) => `${l} ${it.deltas[k] > 0 ? "+" : ""}${it.deltas[k] ?? "—"}`).join(", ")}`;
+        const fitNote = `Selected size: ${it.size}.${notes ? " Notes: " + notes : ""} Adjustments: ${MEASURE_FIELDS.map(([k, l]) => `${l} ${it.deltas[k] > 0 ? "+" : ""}${it.deltas[k] ?? "—"}`).join(", ")}`;
         const { data: order } = await supabase.from("job_orders").insert({
           name: customer.name, mobile: customer.mobile, order_type: "New", model: it.model, item: ITEM_TYPES[0],
           prepared_by: session.name, branch: session.branch, measurements, comments: fitNote, status: "job_created",
@@ -978,6 +1130,20 @@ function AdminPanel({ config, refresh, orders, profiles, session, subpage, setSu
     await refresh();
     if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
     else { setSubpage("customers"); flash("Customer profile saved"); }
+  };
+
+  const handleCreateOrderFromRow = async (row) => {
+    const now = new Date().toISOString();
+    const fitNote = `Selected size: ${row.recommendedSize || "—"}.${row.profile.notes ? " Notes: " + row.profile.notes : ""}`;
+    const { data: order, error } = await supabase.from("job_orders").insert({
+      name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model, item: ITEM_TYPES[0],
+      prepared_by: session.name, branch: row.profile.branch || session.branch, measurements: row.profile.measurements,
+      comments: fitNote, status: "job_created",
+      history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
+    }).select().single();
+    if (error) { flash("Error: " + error.message); return; }
+    await supabase.from("requirement_items").update({ job_order_id: order.id }).eq("id", row.id);
+    await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created");
   };
 
   if (subpage === "branches") return <ManageList title="ADD / REMOVE BRANCH" items={config.branches} fields={[["name", "Branch Name"]]}
@@ -999,6 +1165,9 @@ function AdminPanel({ config, refresh, orders, profiles, session, subpage, setSu
   }
   if (subpage === "customers") {
     return <CustomersPage profiles={profiles} orders={orders} />;
+  }
+  if (subpage === "requirements") {
+    return <RequirementsPage items={requirementItems} profiles={profiles} onCreateOrder={handleCreateOrderFromRow} />;
   }
 
   return (
