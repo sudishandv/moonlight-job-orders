@@ -852,6 +852,39 @@ function AdminPanel({ config, refresh, orders, session, subpage, setSubpage, sel
     flash("Job order created");
   };
 
+  const handleSaveProfile = async (form, fit) => {
+    const row = {
+      name: form.name, mobile: form.mobile, measurements: form.measurements, model: form.model,
+      recommended_size: fit && !fit.error ? fit.size : null, deltas: fit && !fit.error ? fit.deltas : {},
+      branch: form.branch || session.branch, created_by: session.name,
+    };
+    const { error } = await supabase.from("customer_profiles").insert(row);
+    if (error) { flash("Error: " + error.message); return; }
+    setSubpage("records"); flash("Customer profile saved");
+  };
+
+  const handleCreateOrderFromRequirement = async (form, fit) => {
+    const profileRow = {
+      name: form.name, mobile: form.mobile, measurements: form.measurements, model: form.model,
+      recommended_size: fit && !fit.error ? fit.size : null, deltas: fit && !fit.error ? fit.deltas : {},
+      branch: form.branch || session.branch, created_by: session.name,
+    };
+    const { data: profile } = await supabase.from("customer_profiles").insert(profileRow).select().single();
+
+    const now = new Date().toISOString();
+    const fitNote = fit && !fit.error ? `Closest size: ${fit.size}. Adjustments: ${MEASURE_FIELDS.map(([k, l]) => `${l} ${fit.deltas[k] > 0 ? "+" : ""}${fit.deltas[k] ?? "—"}`).join(", ")}` : "";
+    const orderRow = {
+      name: form.name, mobile: form.mobile, order_type: "New", model: form.model, item: ITEM_TYPES[0],
+      prepared_by: session.name, branch: form.branch || session.branch, measurements: form.measurements,
+      comments: fitNote, status: "job_created",
+      history: [{ note: `Job order created from customer requirement by Admin (${session.name})`, by: session.name, at: now }],
+    };
+    const { data: order, error } = await supabase.from("job_orders").insert(orderRow).select().single();
+    if (error) { flash("Error: " + error.message); return; }
+    if (profile) await supabase.from("customer_profiles").update({ job_order_id: order.id }).eq("id", profile.id);
+    await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created from requirement");
+  };
+
   if (subpage === "branches") return <ManageList title="ADD / REMOVE BRANCH" items={config.branches} fields={[["name", "Branch Name"]]}
     onAdd={async (item) => { const { error } = await supabase.from("branches").insert(item); if (error) flash("Error: " + error.message); else { await refresh(); flash("Branch added"); } }}
     onRemove={async (id) => { await supabase.from("branches").delete().eq("id", id); await refresh(); }} />;
@@ -866,12 +899,16 @@ function AdminPanel({ config, refresh, orders, session, subpage, setSubpage, sel
   if (subpage === "new") {
     return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
   }
+  if (subpage === "requirement") {
+    return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSaveProfile={handleSaveProfile} onCreateOrder={handleCreateOrderFromRequirement} />;
+  }
 
   return (
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL RECORDS</h2>
       <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />
       <div className="no-print" style={{ textAlign: "right", marginBottom: 10 }}>
+        <button onClick={() => setSubpage("requirement")} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em", marginRight: 8 }}>+ NEW REQUIREMENT</button>
         <button onClick={() => setSubpage("new")} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em" }}>+ NEW JOB ORDER</button>
       </div>
       <OrderTable orders={filtered} onOpen={setSelectedId} showDelete onDelete={handleDeleteOrder} />
