@@ -146,6 +146,7 @@ export default function App() {
   const [profile, setProfile] = useState(null);
   const [config, setConfig] = useState(null);
   const [orders, setOrders] = useState(null);
+  const [profiles, setProfiles] = useState(null);
   const [subpage, setSubpage] = useState("records");
   const [selectedId, setSelectedId] = useState(null);
   const [toast, setToast] = useState(null);
@@ -165,14 +166,16 @@ export default function App() {
   }, [session]);
 
   const loadAll = useCallback(async () => {
-    const [{ data: branches }, { data: salespersons }, { data: models }, { data: ords }] = await Promise.all([
+    const [{ data: branches }, { data: salespersons }, { data: models }, { data: ords }, { data: profs }] = await Promise.all([
       supabase.from("branches").select("*").order("name"),
       supabase.from("salespersons").select("*").order("name"),
       supabase.from("models").select("*").order("model_no"),
       supabase.from("job_orders").select("*").order("created_at", { ascending: false }),
+      supabase.from("customer_profiles").select("*").order("created_at", { ascending: false }),
     ]);
     setConfig({ branches: branches || [], salespersons: salespersons || [], models: (models || []).map(dbToModel) });
     setOrders((ords || []).map(dbToOrder));
+    setProfiles((profs || []).map((p) => ({ ...p, createdAt: p.created_at })));
   }, []);
 
   useEffect(() => { if (profile) loadAll(); }, [profile, loadAll]);
@@ -180,14 +183,14 @@ export default function App() {
   if (session === undefined) return <Loading text="Loading…" />;
   if (!session) return <LoginScreen onLoggedIn={() => {}} />;
   if (profile === null) return <NoProfileScreen onSignOut={() => supabase.auth.signOut()} />;
-  if (!config || !orders) return <Loading text="Loading job orders…" />;
+  if (!config || !orders || !profiles) return <Loading text="Loading job orders…" />;
 
   const refresh = loadAll;
 
   return (
     <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()}>
       {profile.role === "sales" && (
-        <SalesPanel config={config} orders={orders} refresh={refresh} session={profile}
+        <SalesPanel config={config} orders={orders} profiles={profiles} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
       {profile.role === "production" && (
@@ -195,7 +198,7 @@ export default function App() {
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
       {profile.role === "admin" && (
-        <AdminPanel config={config} refresh={refresh} orders={orders} session={profile}
+        <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
       {toast && (
@@ -259,6 +262,12 @@ function Shell({ session, subpage, setSubpage, onLogout, children }) {
               <span>|</span>
               <a className="link" onClick={() => setSubpage("records")}>PRODUCTION PANEL</a>
               <a className="link" onClick={() => setSubpage("items")}>ITEM DETAILS</a>
+            </>
+          )}
+          {(session.role === "sales" || session.role === "admin") && (
+            <>
+              <span>|</span>
+              <a className="link" onClick={() => setSubpage("customers")}>CUSTOMERS</a>
             </>
           )}
           <span>|</span>
@@ -393,7 +402,7 @@ function useFilteredOrders(orders, query, statusFilter) {
 
 /* ================= Sales Panel ================= */
 
-function SalesPanel({ config, orders, refresh, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
+function SalesPanel({ config, orders, profiles, refresh, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const filtered = useFilteredOrders(orders, query, statusFilter);
@@ -432,37 +441,34 @@ function SalesPanel({ config, orders, refresh, session, subpage, setSubpage, sel
     await refresh(); flash("Changes saved");
   };
 
-  const handleSaveProfile = async (form, fit) => {
-    const row = {
-      name: form.name, mobile: form.mobile, measurements: form.measurements, model: form.model,
-      recommended_size: fit && !fit.error ? fit.size : null, deltas: fit && !fit.error ? fit.deltas : {},
-      branch: session.branch, created_by: session.name,
-    };
-    const { error } = await supabase.from("customer_profiles").insert(row);
-    if (error) { flash("Error: " + error.message); return; }
-    setSubpage("records"); flash("Customer profile saved");
-  };
+  const handleSaveRequirement = async (customer, measurements, items, createOrders) => {
+    const { data: profile, error: pErr } = await supabase.from("customer_profiles").insert({
+      name: customer.name, mobile: customer.mobile, measurements, branch: session.branch, created_by: session.name,
+    }).select().single();
+    if (pErr) { flash("Error: " + pErr.message); return; }
 
-  const handleCreateOrderFromRequirement = async (form, fit) => {
-    const profileRow = {
-      name: form.name, mobile: form.mobile, measurements: form.measurements, model: form.model,
-      recommended_size: fit && !fit.error ? fit.size : null, deltas: fit && !fit.error ? fit.deltas : {},
-      branch: session.branch, created_by: session.name,
-    };
-    const { data: profile } = await supabase.from("customer_profiles").insert(profileRow).select().single();
-
-    const now = new Date().toISOString();
-    const fitNote = fit && !fit.error ? `Closest size: ${fit.size}. Adjustments: ${MEASURE_FIELDS.map(([k, l]) => `${l} ${fit.deltas[k] > 0 ? "+" : ""}${fit.deltas[k] ?? "—"}`).join(", ")}` : "";
-    const orderRow = {
-      name: form.name, mobile: form.mobile, order_type: "New", model: form.model, item: ITEM_TYPES[0],
-      prepared_by: session.name, branch: session.branch, measurements: form.measurements,
-      comments: fitNote, status: "job_created",
-      history: [{ note: "Job order created from customer requirement", by: session.name, at: now }],
-    };
-    const { data: order, error } = await supabase.from("job_orders").insert(orderRow).select().single();
-    if (error) { flash("Error: " + error.message); return; }
-    if (profile) await supabase.from("customer_profiles").update({ job_order_id: order.id }).eq("id", profile.id);
-    await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created from requirement");
+    let lastOrderId = null;
+    for (const it of items) {
+      if (it.error) continue;
+      let jobOrderId = null;
+      if (createOrders) {
+        const now = new Date().toISOString();
+        const fitNote = `Closest size: ${it.size}. Adjustments: ${MEASURE_FIELDS.map(([k, l]) => `${l} ${it.deltas[k] > 0 ? "+" : ""}${it.deltas[k] ?? "—"}`).join(", ")}`;
+        const { data: order } = await supabase.from("job_orders").insert({
+          name: customer.name, mobile: customer.mobile, order_type: "New", model: it.model, item: ITEM_TYPES[0],
+          prepared_by: session.name, branch: session.branch, measurements, comments: fitNote, status: "job_created",
+          history: [{ note: "Job order created from customer requirement", by: session.name, at: now }],
+        }).select().single();
+        jobOrderId = order?.id || null;
+        lastOrderId = jobOrderId;
+      }
+      await supabase.from("requirement_items").insert({
+        profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: it.deltas || {}, job_order_id: jobOrderId,
+      });
+    }
+    await refresh();
+    if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
+    else { setSubpage("customers"); flash("Customer profile saved"); }
   };
 
   const runHistoryUpdate = async (id, status, note) => {
@@ -478,7 +484,10 @@ function SalesPanel({ config, orders, refresh, session, subpage, setSubpage, sel
 
   if (subpage === "new") return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
   if (subpage === "requirement") {
-    return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSaveProfile={handleSaveProfile} onCreateOrder={handleCreateOrderFromRequirement} />;
+    return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSave={handleSaveRequirement} />;
+  }
+  if (subpage === "customers") {
+    return <CustomersPage profiles={profiles} orders={orders} />;
   }
 
   return (
@@ -572,73 +581,162 @@ function JobOrderForm({ config, session, onCancel, onSubmit }) {
   );
 }
 
-function RequirementForm({ config, session, onCancel, onSaveProfile, onCreateOrder }) {
-  const [form, setForm] = useState({
-    name: "", mobile: "", model: config.models[0]?.modelNo || "",
-    measurements: Object.fromEntries(MEASURE_FIELDS.map(([k]) => [k, ""])),
-  });
-  const [sizes, setSizes] = useState([]);
-  const [fit, setFit] = useState(null); // { size, deltas }
-  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
-  const setMeasure = (k) => (e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }));
+function RequirementForm({ config, session, onCancel, onSave }) {
+  const [customer, setCustomer] = useState({ name: "", mobile: "" });
+  const [measurements, setMeasurements] = useState(Object.fromEntries(MEASURE_FIELDS.map(([k]) => [k, ""])));
+  const [items, setItems] = useState([]);
+  const [pickModel, setPickModel] = useState(config.models[0]?.modelNo || "");
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    const m = config.models.find((mm) => mm.modelNo === form.model);
-    if (!m) { setSizes([]); return; }
-    supabase.from("model_sizes").select("*").eq("model_id", m.id).then(({ data }) => setSizes(data || []));
-  }, [form.model, config.models]);
+  const setC = (k) => (e) => setCustomer((c) => ({ ...c, [k]: e.target.value }));
+  const setM = (k) => (e) => setMeasurements((m) => ({ ...m, [k]: e.target.value }));
 
-  const computeFit = () => {
-    if (sizes.length === 0) { setFit({ error: "No size measurements saved for this model yet — add them in Admin > Add/Remove Model." }); return; }
-    const best = nearestSize(form.measurements, sizes);
-    if (!best) { setFit({ error: "Enter at least shoulder, chest, waist or hips to compute a match." }); return; }
-    setFit({ size: best.size_label, deltas: computeDeltas(form.measurements, best.measurements) });
+  const addItem = async () => {
+    const model = config.models.find((m) => m.modelNo === pickModel);
+    if (!model) return;
+    const { data: sizes } = await supabase.from("model_sizes").select("*").eq("model_id", model.id);
+    if (!sizes || sizes.length === 0) {
+      setItems((it) => [...it, { model: pickModel, error: "No size chart saved for this model yet — add one in Admin > Add/Remove Model." }]);
+      return;
+    }
+    const best = nearestSize(measurements, sizes);
+    if (!best) {
+      setItems((it) => [...it, { model: pickModel, error: "Enter shoulder / chest / waist / hips first to compute a match." }]);
+      return;
+    }
+    setItems((it) => [...it, { model: pickModel, size: best.size_label, deltas: computeDeltas(measurements, best.measurements) }]);
   };
+  const removeItem = (idx) => setItems((it) => it.filter((_, i) => i !== idx));
+  const customerValid = customer.name.trim() && customer.mobile.trim();
 
-  const valid = form.name.trim() && form.mobile.trim();
+  const save = async (createOrders) => {
+    setSaving(true);
+    await onSave(customer, measurements, items, createOrders);
+    setSaving(false);
+  };
 
   return (
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>CUSTOMER REQUIREMENT</h2>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 6 }}>
-        <Field label="Customer Name"><input style={inputStyle} value={form.name} onChange={set("name")} /></Field>
-        <Field label="Mobile No"><input style={inputStyle} value={form.mobile} onChange={set("mobile")} /></Field>
-        <Field label="Model"><select style={inputStyle} value={form.model} onChange={set("model")}>{config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}</option>)}</select></Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 6 }}>
+        <Field label="Customer Name"><input style={inputStyle} value={customer.name} onChange={setC("name")} /></Field>
+        <Field label="Mobile No"><input style={inputStyle} value={customer.mobile} onChange={setC("mobile")} /></Field>
       </div>
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>CUSTOMER FITTING MEASUREMENTS</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 12 }}>
-        {MEASURE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form.measurements[k]} onChange={setMeasure(k)} /></Field>)}
+        {MEASURE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={measurements[k]} onChange={setM(k)} /></Field>)}
       </div>
 
-      <button onClick={computeFit} style={{ marginTop: 14, background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Compute Fit</button>
-
-      {fit && fit.error && <div style={{ color: "#C1302B", marginTop: 12, fontSize: 13 }}>{fit.error}</div>}
-
-      {fit && !fit.error && (
-        <div style={{ marginTop: 18, border: "1px solid #C9CDD3", padding: 16 }}>
-          <div style={{ fontWeight: 700, marginBottom: 10 }}>Closest base size: {fit.size}</div>
-          <table>
-            <thead><tr style={{ fontSize: 12, textAlign: "left", borderBottom: "1px solid #E5E5E5" }}><th>Measurement</th><th>Customer</th><th>Difference from {fit.size}</th></tr></thead>
-            <tbody>
-              {MEASURE_FIELDS.map(([k, l]) => (
-                <tr key={k} style={{ fontSize: 13 }}>
-                  <td style={{ padding: "4px 0" }}>{l}</td>
-                  <td>{form.measurements[k] || "—"}</td>
-                  <td style={{ color: fit.deltas[k] > 0 ? "#2F8F46" : fit.deltas[k] < 0 ? "#C1302B" : "#1A1A1A", fontWeight: 600 }}>
-                    {fit.deltas[k] == null ? "—" : (fit.deltas[k] > 0 ? "+" : "") + fit.deltas[k]}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "20px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>ITEMS</div>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginBottom: 16 }}>
+        <div>
+          <div style={label13}>Model</div>
+          <select style={{ ...inputStyle, width: 200 }} value={pickModel} onChange={(e) => setPickModel(e.target.value)}>
+            {config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}</option>)}
+          </select>
         </div>
-      )}
+        <button onClick={addItem} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>+ Add Item</button>
+      </div>
 
-      <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 22 }}>
-        <button disabled={!valid} onClick={() => onSaveProfile(form, fit)} style={{ background: valid ? "#1A1A1A" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save Profile</button>
-        <button disabled={!valid} onClick={() => onCreateOrder(form, fit)} style={{ background: valid ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save & Create Job Order</button>
+      {items.map((it, idx) => (
+        <div key={idx} style={{ border: "1px solid #C9CDD3", padding: 14, marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+            <strong>{it.model}{it.size ? ` — Closest size: ${it.size}` : ""}</strong>
+            <a className="link" style={{ color: "#C1302B" }} onClick={() => removeItem(idx)}>Remove</a>
+          </div>
+          {it.error ? <div style={{ color: "#C1302B", fontSize: 13 }}>{it.error}</div> : (
+            <table>
+              <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer</th><th>Difference</th></tr></thead>
+              <tbody>
+                {MEASURE_FIELDS.map(([k, l]) => (
+                  <tr key={k} style={{ fontSize: 13 }}>
+                    <td>{l}</td><td>{measurements[k] || "—"}</td>
+                    <td style={{ color: it.deltas[k] > 0 ? "#2F8F46" : it.deltas[k] < 0 ? "#C1302B" : "#1A1A1A", fontWeight: 600 }}>
+                      {it.deltas[k] == null ? "—" : (it.deltas[k] > 0 ? "+" : "") + it.deltas[k]}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ))}
+
+      <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 20 }}>
+        <button disabled={!customerValid || saving} onClick={() => save(false)} style={{ background: customerValid ? "#1A1A1A" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save Profile</button>
+        <button disabled={!customerValid || items.length === 0 || saving} onClick={() => save(true)} style={{ background: (customerValid && items.length > 0) ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save & Create Job Order(s)</button>
         <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function CustomersPage({ profiles, orders }) {
+  const [selected, setSelected] = useState(null);
+  const [query, setQuery] = useState("");
+  const filtered = profiles.filter((p) => !query.trim() || p.name.toLowerCase().includes(query.toLowerCase()) || (p.mobile || "").includes(query));
+  return (
+    <div>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>CUSTOMER RECORDS</h2>
+      <div className="no-print" style={{ textAlign: "center", marginBottom: 18 }}>
+        <input placeholder="Search name or mobile number" value={query} onChange={(e) => setQuery(e.target.value)} style={{ ...inputStyle, width: 280, display: "inline-block" }} />
+      </div>
+      {filtered.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No customer profiles found.</div> : (
+        <table>
+          <thead><tr style={{ borderBottom: "2px solid #1A1A1A", fontSize: 12.5, textAlign: "left" }}>
+            <th style={{ padding: "9px 10px" }}>Name</th><th style={{ padding: "9px 10px" }}>Mobile</th><th style={{ padding: "9px 10px" }}>Branch</th><th style={{ padding: "9px 10px" }}>Created</th><th style={{ padding: "9px 10px" }}>View</th>
+          </tr></thead>
+          <tbody>
+            {filtered.map((p) => (
+              <tr key={p.id} style={{ borderBottom: "1px solid #E5E5E5", fontSize: 13.5 }}>
+                <td style={{ padding: "9px 10px" }}>{p.name}</td>
+                <td style={{ padding: "9px 10px" }}>{p.mobile}</td>
+                <td style={{ padding: "9px 10px" }}>{p.branch}</td>
+                <td style={{ padding: "9px 10px" }}>{fmtDate(p.createdAt)}</td>
+                <td style={{ padding: "9px 10px" }}><a className="link" onClick={() => setSelected(p)}>View</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {selected && <CustomerDetail profile={selected} orders={orders} onClose={() => setSelected(null)} />}
+    </div>
+  );
+}
+
+function CustomerDetail({ profile, orders, onClose }) {
+  const history = orders.filter((o) => o.mobile === profile.mobile);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", justifyContent: "flex-end", zIndex: 50 }} className="no-print" onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", width: 480, maxWidth: "100%", height: "100%", overflowY: "auto", padding: "26px 28px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20 }}>{profile.name}</div>
+            <div style={{ fontSize: 13.5, color: "#8a8a8a" }}>{profile.mobile}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: "#8a8a8a" }}>×</button>
+        </div>
+
+        <div style={{ fontWeight: 700, fontSize: 12.5, margin: "18px 0 6px" }}>FITTING MEASUREMENTS</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, fontSize: 13, marginBottom: 16 }}>
+          {MEASURE_FIELDS.map(([k, l]) => <div key={k}>{l}: {profile.measurements?.[k] || "—"}</div>)}
+        </div>
+
+        <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>ALL ORDERS FOR THIS PHONE NUMBER</div>
+        {history.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>No job orders placed yet.</div> : (
+          <div style={{ display: "grid", gap: 8 }}>
+            {history.map((o) => (
+              <div key={o.id} style={{ border: "1px solid #E5E5E5", padding: 10, fontSize: 13 }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span className="mono">{o.invoiceNo}</span>
+                  <StatusTag status={o.status} />
+                </div>
+                <div>{o.model} — {fmtDate(o.createdAt)}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -808,7 +906,7 @@ function ModelBrowser({ models }) {
 
 /* ================= Admin Panel ================= */
 
-function AdminPanel({ config, refresh, orders, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
+function AdminPanel({ config, refresh, orders, profiles, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const filtered = useFilteredOrders(orders, query, statusFilter);
@@ -852,37 +950,34 @@ function AdminPanel({ config, refresh, orders, session, subpage, setSubpage, sel
     flash("Job order created");
   };
 
-  const handleSaveProfile = async (form, fit) => {
-    const row = {
-      name: form.name, mobile: form.mobile, measurements: form.measurements, model: form.model,
-      recommended_size: fit && !fit.error ? fit.size : null, deltas: fit && !fit.error ? fit.deltas : {},
-      branch: form.branch || session.branch, created_by: session.name,
-    };
-    const { error } = await supabase.from("customer_profiles").insert(row);
-    if (error) { flash("Error: " + error.message); return; }
-    setSubpage("records"); flash("Customer profile saved");
-  };
+  const handleSaveRequirement = async (customer, measurements, items, createOrders) => {
+    const { data: profile, error: pErr } = await supabase.from("customer_profiles").insert({
+      name: customer.name, mobile: customer.mobile, measurements, branch: session.branch, created_by: session.name,
+    }).select().single();
+    if (pErr) { flash("Error: " + pErr.message); return; }
 
-  const handleCreateOrderFromRequirement = async (form, fit) => {
-    const profileRow = {
-      name: form.name, mobile: form.mobile, measurements: form.measurements, model: form.model,
-      recommended_size: fit && !fit.error ? fit.size : null, deltas: fit && !fit.error ? fit.deltas : {},
-      branch: form.branch || session.branch, created_by: session.name,
-    };
-    const { data: profile } = await supabase.from("customer_profiles").insert(profileRow).select().single();
-
-    const now = new Date().toISOString();
-    const fitNote = fit && !fit.error ? `Closest size: ${fit.size}. Adjustments: ${MEASURE_FIELDS.map(([k, l]) => `${l} ${fit.deltas[k] > 0 ? "+" : ""}${fit.deltas[k] ?? "—"}`).join(", ")}` : "";
-    const orderRow = {
-      name: form.name, mobile: form.mobile, order_type: "New", model: form.model, item: ITEM_TYPES[0],
-      prepared_by: session.name, branch: form.branch || session.branch, measurements: form.measurements,
-      comments: fitNote, status: "job_created",
-      history: [{ note: `Job order created from customer requirement by Admin (${session.name})`, by: session.name, at: now }],
-    };
-    const { data: order, error } = await supabase.from("job_orders").insert(orderRow).select().single();
-    if (error) { flash("Error: " + error.message); return; }
-    if (profile) await supabase.from("customer_profiles").update({ job_order_id: order.id }).eq("id", profile.id);
-    await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created from requirement");
+    let lastOrderId = null;
+    for (const it of items) {
+      if (it.error) continue;
+      let jobOrderId = null;
+      if (createOrders) {
+        const now = new Date().toISOString();
+        const fitNote = `Closest size: ${it.size}. Adjustments: ${MEASURE_FIELDS.map(([k, l]) => `${l} ${it.deltas[k] > 0 ? "+" : ""}${it.deltas[k] ?? "—"}`).join(", ")}`;
+        const { data: order } = await supabase.from("job_orders").insert({
+          name: customer.name, mobile: customer.mobile, order_type: "New", model: it.model, item: ITEM_TYPES[0],
+          prepared_by: session.name, branch: session.branch, measurements, comments: fitNote, status: "job_created",
+          history: [{ note: `Job order created from customer requirement by Admin (${session.name})`, by: session.name, at: now }],
+        }).select().single();
+        jobOrderId = order?.id || null;
+        lastOrderId = jobOrderId;
+      }
+      await supabase.from("requirement_items").insert({
+        profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: it.deltas || {}, job_order_id: jobOrderId,
+      });
+    }
+    await refresh();
+    if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
+    else { setSubpage("customers"); flash("Customer profile saved"); }
   };
 
   if (subpage === "branches") return <ManageList title="ADD / REMOVE BRANCH" items={config.branches} fields={[["name", "Branch Name"]]}
@@ -900,7 +995,10 @@ function AdminPanel({ config, refresh, orders, session, subpage, setSubpage, sel
     return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
   }
   if (subpage === "requirement") {
-    return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSaveProfile={handleSaveProfile} onCreateOrder={handleCreateOrderFromRequirement} />;
+    return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSave={handleSaveRequirement} />;
+  }
+  if (subpage === "customers") {
+    return <CustomersPage profiles={profiles} orders={orders} />;
   }
 
   return (
