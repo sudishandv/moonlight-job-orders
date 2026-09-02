@@ -95,6 +95,27 @@ async function nextJobOrderNumbers(count) {
   return count === 1 ? [String(base)] : Array.from({ length: count }, (_, i) => `${base}-${i + 1}`);
 }
 
+function diffSummary(before, form, fileChanged) {
+  const changed = [];
+  const norm = {
+    name: before.name || "", mobile: before.mobile || "", orderType: before.orderType || "New",
+    model: before.model || "", item: before.item || ITEM_TYPES[0], branch: before.branch || "",
+    sheilaType: before.sheilaType || SHEILA_TYPES[0], abayaOption: before.abayaOption || "fullButton",
+    deliveryDate: before.deliveryDate || "", comments: before.comments || "",
+  };
+  const simpleMap = { name: "Name", mobile: "Mobile", orderType: "Order Type", model: "Model", item: "Item", branch: "Branch", sheilaType: "Sheila Type", abayaOption: "Abaya Option", deliveryDate: "Delivery Date", comments: "Comments" };
+  Object.entries(simpleMap).forEach(([k, label]) => {
+    const oldV = norm[k] || "—", newV = form[k] || "—";
+    if (oldV !== newV) changed.push(`${label} (${oldV} → ${newV})`);
+  });
+  ALL_MEASURE_FIELDS.forEach(([k, l]) => {
+    const oldV = before.measurements?.[k] || "—", newV = form.measurements?.[k] || "—";
+    if (oldV !== newV) changed.push(`${l} (${oldV} → ${newV})`);
+  });
+  if (fileChanged) changed.push("Attachment (replaced)");
+  return changed;
+}
+
 const ITEM_TYPES = ["Abaya", "Sheila", "Jalabiya", "Set"];
 const SHEILA_TYPES = ["Chiffon", "Crepe", "Georgette", "Plain"];
 const ORDER_TYPES = ["New", "Alteration"];
@@ -455,6 +476,7 @@ function useFilteredOrders(orders, query, statusFilter) {
 function SalesPanel({ config, orders, profiles, requirementItems, refresh, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [editingOrderId, setEditingOrderId] = useState(null);
   const filtered = useFilteredOrders(orders, query, statusFilter);
   const selected = orders.find((o) => o.id === selectedId);
 
@@ -484,6 +506,32 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     setSubpage("records");
     setSelectedId(data.id);
     flash("Job order created");
+  };
+
+  const handleUpdateOrderFull = async (form, file) => {
+    const before = orders.find((o) => o.id === editingOrderId);
+    let attachmentUrl = before?.attachmentUrl || null;
+    if (file) {
+      const path = `${Date.now()}-${file.name}`;
+      const { error: upErr } = await supabase.storage.from("attachments").upload(path, file);
+      if (!upErr) {
+        const { data } = supabase.storage.from("attachments").getPublicUrl(path);
+        attachmentUrl = data.publicUrl;
+      }
+    }
+    const changed = diffSummary(before, form, !!file);
+    const now = new Date().toISOString();
+    const note = changed.length ? `Job order edited — changed: ${changed.join(", ")}` : "Job order edited (no field changes detected)";
+    const history = [...(before?.history || []), { note, by: session.name, at: now }];
+    const { error } = await supabase.from("job_orders").update({
+      name: form.name, mobile: form.mobile, order_type: form.orderType,
+      model: form.model, item: form.item, branch: form.branch, measurements: form.measurements,
+      sheila_type: form.sheilaType, abaya_option: form.abayaOption, button_till: form.buttonTill,
+      delivery_date: form.deliveryDate || null, attachment_url: attachmentUrl, comments: form.comments,
+      history, updated_at: now,
+    }).eq("id", editingOrderId);
+    if (error) { flash("Error: " + error.message); return; }
+    await refresh(); setSubpage("records"); setSelectedId(editingOrderId); flash("Job order updated");
   };
 
   const handleSaveFields = async (id, fields) => {
@@ -561,6 +609,14 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
   const handleResubmit = (id) => runHistoryUpdate(id, "job_created", "Resubmitted to Production");
 
   if (subpage === "new") return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
+  if (subpage === "editOrder") {
+    const editing = orders.find((o) => o.id === editingOrderId);
+    return <JobOrderForm config={config} session={session} initialOrder={editing} onCancel={() => setSubpage("records")} onSubmit={handleUpdateOrderFull} />;
+  }
+  if (subpage === "viewOrder") {
+    const viewing = orders.find((o) => o.id === editingOrderId);
+    return <JobOrderForm config={config} session={session} initialOrder={viewing} readOnly onCancel={() => setSubpage("records")} />;
+  }
   if (subpage === "requirement") {
     return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSave={handleSaveRequirement} />;
   }
@@ -586,20 +642,31 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
         <button onClick={() => setSubpage("new")} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em" }}>+ NEW JOB ORDER</button>
       </div>
       <OrderTable orders={filtered} onOpen={setSelectedId} editableStatuses={["job_rejected", "ready_to_deliver"]} />
-      {selected && <OrderDetail order={selected} role="sales" session={session} onClose={() => setSelectedId(null)} onSaveFields={handleSaveFields} onAction={handleAction} onResubmit={handleResubmit} />}
+      {selected && <OrderDetail order={selected} role="sales" session={session} onClose={() => setSelectedId(null)}
+        onSaveFields={handleSaveFields} onAction={handleAction} onResubmit={handleResubmit}
+        onEditFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("editOrder"); }}
+        onViewFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("viewOrder"); }} />}
     </div>
   );
 }
 
 /* ---------------- Job Order form ---------------- */
 
-function JobOrderForm({ config, session, onCancel, onSubmit }) {
-  const [form, setForm] = useState({
+function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readOnly }) {
+  const isEdit = !!initialOrder;
+  const [form, setForm] = useState(() => isEdit ? {
+    name: initialOrder.name || "", mobile: initialOrder.mobile || "", invoiceNo: initialOrder.invoiceNo || "",
+    orderType: initialOrder.orderType || "New", model: initialOrder.model || config.models[0]?.modelNo || "",
+    item: initialOrder.item || ITEM_TYPES[0], branch: initialOrder.branch || session.branch || config.branches[0]?.name || "",
+    measurements: { ...Object.fromEntries(ALL_MEASURE_FIELDS.map(([k]) => [k, ""])), ...(initialOrder.measurements || {}) },
+    sheilaType: initialOrder.sheilaType || SHEILA_TYPES[0], abayaOption: initialOrder.abayaOption || "fullButton",
+    buttonTill: initialOrder.buttonTill || "", deliveryDate: initialOrder.deliveryDate || "", comments: initialOrder.comments || "",
+  } : {
     name: "", mobile: "", invoiceNo: "", orderType: "New", model: config.models[0]?.modelNo || "",
     item: ITEM_TYPES[0], branch: session.branch || config.branches[0]?.name || "",
-    measurements: Object.fromEntries(MEASURE_FIELDS.map(([k]) => [k, ""])),
+    measurements: Object.fromEntries(ALL_MEASURE_FIELDS.map(([k]) => [k, ""])),
     sheilaType: SHEILA_TYPES[0], abayaOption: "fullButton", buttonTill: "",
-    deliveryDate: "", attachmentNote: "", comments: "",
+    deliveryDate: "", comments: "",
   });
   const [file, setFile] = useState(null);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -609,34 +676,37 @@ function JobOrderForm({ config, session, onCancel, onSubmit }) {
 
   return (
     <div>
-      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>JOB ORDER</h2>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>{isEdit ? "EDIT JOB ORDER" : "JOB ORDER"}</h2>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 6 }}>
-        <Field label="Name"><input style={inputStyle} value={form.name} onChange={set("name")} /></Field>
-        <Field label="Mobile No"><input style={inputStyle} value={form.mobile} onChange={set("mobile")} /></Field>
-        <Field label="Date"><input style={inputStyle} value={fmtDate(new Date())} disabled /></Field>
-        <Field label="Invoice No"><input style={inputStyle} value={form.invoiceNo} onChange={set("invoiceNo")} placeholder="optional" /></Field>
-        <Field label="Order Type"><select style={inputStyle} value={form.orderType} onChange={set("orderType")}>{ORDER_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
-        <Field label="Model"><select style={inputStyle} value={form.model} onChange={set("model")}>{config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}</option>)}</select></Field>
-        <Field label="Select Item"><select style={inputStyle} value={form.item} onChange={set("item")}>{ITEM_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
-        <Field label="Prepared By"><input style={inputStyle} value={session.name} disabled /></Field>
-        <Field label="Branch"><select style={inputStyle} value={form.branch} onChange={set("branch")}>{config.branches.map((b) => <option key={b.id} value={b.name}>{b.name}</option>)}</select></Field>
+        <Field label="Name"><input style={inputStyle} value={form.name} onChange={set("name")} disabled={readOnly} /></Field>
+        <Field label="Mobile No"><input style={inputStyle} value={form.mobile} onChange={set("mobile")} disabled={readOnly} /></Field>
+        <Field label="Date"><input style={inputStyle} value={isEdit ? fmtDate(initialOrder.createdAt) : fmtDate(new Date())} disabled /></Field>
+        <Field label="Job Order No"><input style={inputStyle} value={isEdit ? (initialOrder.jobOrderNo || "—") : "Auto-generated on save"} disabled /></Field>
+        <Field label="Order Type"><select style={inputStyle} value={form.orderType} onChange={set("orderType")} disabled={readOnly}>{ORDER_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
+        <Field label="Model"><select style={inputStyle} value={form.model} onChange={set("model")} disabled={readOnly}>{config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}</option>)}</select></Field>
+        <Field label="Select Item"><select style={inputStyle} value={form.item} onChange={set("item")} disabled={readOnly}>{ITEM_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
+        <Field label="Prepared By"><input style={inputStyle} value={isEdit ? initialOrder.preparedBy : session.name} disabled /></Field>
+        <Field label="Branch"><select style={inputStyle} value={form.branch} onChange={set("branch")} disabled={readOnly}>{config.branches.map((b) => <option key={b.id} value={b.name}>{b.name}</option>)}</select></Field>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 12, marginTop: 14 }}>
-        {MEASURE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form.measurements[k]} onChange={setMeasure(k)} /></Field>)}
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>MEASUREMENTS</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 12 }}>
+        {(readOnly ? ALL_MEASURE_FIELDS.filter(([k]) => form.measurements[k]) : ALL_MEASURE_FIELDS).map(([k, l]) => (
+          <Field key={k} label={l}><input style={inputStyle} value={form.measurements[k] || ""} onChange={setMeasure(k)} disabled={readOnly} /></Field>
+        ))}
       </div>
 
       <div style={{ display: "flex", gap: 26, alignItems: "flex-end", marginTop: 6, marginBottom: 18, flexWrap: "wrap" }}>
-        <Field label="Sheila Type"><select style={{ ...inputStyle, width: 180 }} value={form.sheilaType} onChange={set("sheilaType")}>{SHEILA_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
+        <Field label="Sheila Type"><select style={{ ...inputStyle, width: 180 }} value={form.sheilaType} onChange={set("sheilaType")} disabled={readOnly}>{SHEILA_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
         <div>
           <div style={label13}>Abaya Option</div>
           <div style={{ display: "flex", gap: 16, fontSize: 13.5, paddingTop: 6 }}>
             {[["fullButton", "Full Button"], ["normal", "Normal"], ["buttonFromTill", "Button From/Till"]].map(([k, l]) => (
               <label key={k} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                <input type="radio" checked={form.abayaOption === k} onChange={() => setForm((f) => ({ ...f, abayaOption: k }))} /> {l}
+                <input type="radio" checked={form.abayaOption === k} onChange={() => setForm((f) => ({ ...f, abayaOption: k }))} disabled={readOnly} /> {l}
               </label>
             ))}
-            {form.abayaOption === "buttonFromTill" && <input style={{ ...inputStyle, width: 90 }} value={form.buttonTill} onChange={set("buttonTill")} placeholder="e.g. 20cm" />}
+            {form.abayaOption === "buttonFromTill" && <input style={{ ...inputStyle, width: 90 }} value={form.buttonTill} onChange={set("buttonTill")} placeholder="e.g. 20cm" disabled={readOnly} />}
           </div>
         </div>
       </div>
@@ -654,17 +724,22 @@ function JobOrderForm({ config, session, onCancel, onSubmit }) {
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-        <Field label="Delivery Date"><input type="date" style={inputStyle} value={form.deliveryDate} onChange={set("deliveryDate")} /></Field>
+        <Field label="Delivery Date"><input type="date" style={inputStyle} value={form.deliveryDate} onChange={set("deliveryDate")} disabled={readOnly} /></Field>
         <Field label="Attachment (photo/video reference)">
-          <input type="file" accept="image/*,video/*" onChange={(e) => setFile(e.target.files?.[0] || null)} style={inputStyle} />
+          {isEdit && initialOrder.attachmentUrl ? (
+            <div style={{ fontSize: 12.5 }}>Current file: <a className="link" href={initialOrder.attachmentUrl} target="_blank" rel="noreferrer">View</a>{!readOnly && " — choose a new file below to replace it."}</div>
+          ) : readOnly ? <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No attachment.</div> : null}
+          {!readOnly && <input type="file" accept="image/*,video/*" onChange={(e) => setFile(e.target.files?.[0] || null)} style={inputStyle} />}
         </Field>
       </div>
-      <Field label="Comments"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.comments} onChange={set("comments")} /></Field>
+      <Field label="Comments"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.comments} onChange={set("comments")} disabled={readOnly} /></Field>
 
       <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 20 }}>
         <button onClick={() => window.print()} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>PRINT / SAVE PDF</button>
-        <button disabled={!valid} onClick={() => onSubmit(form, file)} style={{ background: valid ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>SUBMIT</button>
-        <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>CANCEL</button>
+        {!readOnly && (
+          <button disabled={!valid} onClick={() => onSubmit(form, file)} style={{ background: valid ? (isEdit ? "#2F8F46" : "#3B6FA0") : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>{isEdit ? "Save Changes" : "SUBMIT"}</button>
+        )}
+        <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>{readOnly ? "CLOSE" : "CANCEL"}</button>
       </div>
     </div>
   );
@@ -1096,7 +1171,7 @@ function CustomerDetail({ profile, orders, onClose }) {
 
 /* ---------------- Order detail ---------------- */
 
-function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, onResubmit, onDelete }) {
+function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, onResubmit, onDelete, onEditFull, onViewFull }) {
   const [edit, setEdit] = useState(false);
   const [comment, setComment] = useState("");
   const [pendingAction, setPendingAction] = useState(null);
@@ -1136,7 +1211,12 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
               {ALL_MEASURE_FIELDS.filter(([k]) => order.measurements && order.measurements[k]).map(([k, l]) => <div key={k}>{l}: {order.measurements[k]}</div>)}
             </div>
 
-            {editable && <button onClick={() => setEdit(true)} style={{ marginTop: 14, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Edit Details</button>}
+            {onViewFull && (
+              <button onClick={() => onViewFull(order.id)} style={{ marginTop: 14, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>View Full Job Order</button>
+            )}
+            {editable && onEditFull && (
+              <button onClick={() => onEditFull(order.id)} style={{ marginTop: 14, marginLeft: 8, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Edit Full Job Order</button>
+            )}
             <button onClick={() => window.print()} style={{ marginTop: 14, marginLeft: 8, background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Print</button>
             {resubmittable && <button onClick={() => onResubmit(order.id)} style={{ marginTop: 14, marginLeft: 8, background: "#2F8F46", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Resubmit to Production</button>}
 
@@ -1267,6 +1347,7 @@ function ModelBrowser({ models }) {
 function AdminPanel({ config, refresh, orders, profiles, requirementItems, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [editingOrderId, setEditingOrderId] = useState(null);
   const filtered = useFilteredOrders(orders, query, statusFilter);
   const selected = orders.find((o) => o.id === selectedId);
 
@@ -1311,6 +1392,32 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     setSubpage("records");
     setSelectedId(data.id);
     flash("Job order created");
+  };
+
+  const handleUpdateOrderFull = async (form, file) => {
+    const before = orders.find((o) => o.id === editingOrderId);
+    let attachmentUrl = before?.attachmentUrl || null;
+    if (file) {
+      const path = `${Date.now()}-${file.name}`;
+      const { error: upErr } = await supabase.storage.from("attachments").upload(path, file);
+      if (!upErr) {
+        const { data } = supabase.storage.from("attachments").getPublicUrl(path);
+        attachmentUrl = data.publicUrl;
+      }
+    }
+    const changed = diffSummary(before, form, !!file);
+    const now = new Date().toISOString();
+    const note = changed.length ? `Job order edited — changed: ${changed.join(", ")}` : "Job order edited (no field changes detected)";
+    const history = [...(before?.history || []), { note, by: session.name, at: now }];
+    const { error } = await supabase.from("job_orders").update({
+      name: form.name, mobile: form.mobile, order_type: form.orderType,
+      model: form.model, item: form.item, branch: form.branch, measurements: form.measurements,
+      sheila_type: form.sheilaType, abaya_option: form.abayaOption, button_till: form.buttonTill,
+      delivery_date: form.deliveryDate || null, attachment_url: attachmentUrl, comments: form.comments,
+      history, updated_at: now,
+    }).eq("id", editingOrderId);
+    if (error) { flash("Error: " + error.message); return; }
+    await refresh(); setSubpage("records"); setSelectedId(editingOrderId); flash("Job order updated");
   };
 
   const handleSaveRequirement = async (customer, measurements, items, deliveryDate, signatureUrl, createOrders) => {
@@ -1384,6 +1491,14 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
   if (subpage === "new") {
     return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
   }
+  if (subpage === "editOrder") {
+    const editing = orders.find((o) => o.id === editingOrderId);
+    return <JobOrderForm config={config} session={session} initialOrder={editing} onCancel={() => setSubpage("records")} onSubmit={handleUpdateOrderFull} />;
+  }
+  if (subpage === "viewOrder") {
+    const viewing = orders.find((o) => o.id === editingOrderId);
+    return <JobOrderForm config={config} session={session} initialOrder={viewing} readOnly onCancel={() => setSubpage("records")} />;
+  }
   if (subpage === "requirement") {
     return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSave={handleSaveRequirement} />;
   }
@@ -1403,7 +1518,10 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
         <button onClick={() => setSubpage("new")} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em" }}>+ NEW JOB ORDER</button>
       </div>
       <OrderTable orders={filtered} onOpen={setSelectedId} showDelete onDelete={handleDeleteOrder} />
-      {selected && <OrderDetail order={selected} role="admin" session={session} onClose={() => setSelectedId(null)} onSaveFields={handleSaveFields} onAction={() => {}} onDelete={handleDeleteOrder} />}
+      {selected && <OrderDetail order={selected} role="admin" session={session} onClose={() => setSelectedId(null)}
+        onSaveFields={handleSaveFields} onAction={() => {}} onDelete={handleDeleteOrder}
+        onEditFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("editOrder"); }}
+        onViewFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("viewOrder"); }} />}
     </div>
   );
 }
