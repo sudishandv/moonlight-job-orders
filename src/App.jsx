@@ -77,6 +77,24 @@ function computeDeltas(fields, customerM, baseM) {
   return out;
 }
 
+function suggestionMeasurements(customerM, deltas) {
+  const out = {};
+  FITTING_FIELDS.forEach(([k]) => {
+    const c = parseFloat(customerM[k]);
+    const d = deltas ? deltas[k] : null;
+    if (!isNaN(c) && d != null) {
+      out[k] = String(+(c + d).toFixed(2));
+    }
+  });
+  return out;
+}
+
+async function nextJobOrderNumbers(count) {
+  const { data: base, error } = await supabase.rpc("next_job_order_base");
+  if (error || base == null) return Array.from({ length: count }, (_, i) => `TEMP-${Date.now()}-${i + 1}`);
+  return count === 1 ? [String(base)] : Array.from({ length: count }, (_, i) => `${base}-${i + 1}`);
+}
+
 const ITEM_TYPES = ["Abaya", "Sheila", "Jalabiya", "Set"];
 const SHEILA_TYPES = ["Chiffon", "Crepe", "Georgette", "Plain"];
 const ORDER_TYPES = ["New", "Alteration"];
@@ -89,7 +107,7 @@ const fmtDateTime = (d) => { try { return new Date(d).toLocaleString(undefined, 
 
 function dbToOrder(r) {
   return {
-    id: r.id, invoiceNo: r.invoice_no, name: r.name, mobile: r.mobile, orderType: r.order_type,
+    id: r.id, invoiceNo: r.invoice_no, jobOrderNo: r.job_order_no, name: r.name, mobile: r.mobile, orderType: r.order_type,
     model: r.model, item: r.item, preparedBy: r.prepared_by, branch: r.branch,
     measurements: r.measurements || {}, sheilaType: r.sheila_type, abayaOption: r.abaya_option,
     buttonTill: r.button_till, deliveryDate: r.delivery_date, attachmentUrl: r.attachment_url,
@@ -194,7 +212,7 @@ export default function App() {
     setProfiles((profs || []).map((p) => ({ ...p, createdAt: p.created_at })));
     setRequirementItems((reqItems || []).map((r) => ({
       id: r.id, profileId: r.profile_id, model: r.model, recommendedSize: r.recommended_size,
-      deltas: r.deltas, jobOrderId: r.job_order_id, createdAt: r.created_at,
+      deltas: r.deltas, notes: r.notes, jobOrderId: r.job_order_id, createdAt: r.created_at,
     })));
   }, []);
 
@@ -394,18 +412,18 @@ function OrderTable({ orders, onOpen, editableStatuses, showDelete, onDelete }) 
     <table>
       <thead>
         <tr style={{ borderBottom: "2px solid #1A1A1A", fontSize: 12.5, textAlign: "left" }}>
-          {["Name", "Date", "DeliveryDate", "Mobile", "Inv No", "Model", "Salesperson", "Branch", "Status", "View", showDelete ? "Action" : null]
+          {["Job Order No", "Name", "Date", "DeliveryDate", "Mobile", "Model", "Salesperson", "Branch", "Status", "View", showDelete ? "Action" : null]
             .filter(Boolean).map((h) => <th key={h} style={{ padding: "9px 10px", fontWeight: 700 }}>{h}</th>)}
         </tr>
       </thead>
       <tbody>
         {orders.map((o) => (
           <tr key={o.id} style={{ borderBottom: "1px solid #E5E5E5", fontSize: 13.5 }}>
+            <td style={{ padding: "9px 10px" }} className="mono">{o.jobOrderNo || "—"}</td>
             <td style={{ padding: "9px 10px" }}>{o.name}</td>
             <td style={{ padding: "9px 10px" }}>{fmtDate(o.createdAt)}</td>
             <td style={{ padding: "9px 10px" }}>{fmtDate(o.deliveryDate)}</td>
             <td style={{ padding: "9px 10px" }}>{o.mobile}</td>
-            <td style={{ padding: "9px 10px" }} className="mono">{o.invoiceNo}</td>
             <td style={{ padding: "9px 10px" }}>{o.model}</td>
             <td style={{ padding: "9px 10px" }}>{o.preparedBy}</td>
             <td style={{ padding: "9px 10px" }}>{o.branch}</td>
@@ -449,9 +467,10 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
         attachmentUrl = data.publicUrl;
       }
     }
+    const [jobNo] = await nextJobOrderNumbers(1);
     const now = new Date().toISOString();
     const row = {
-      invoice_no: form.invoiceNo || null, name: form.name, mobile: form.mobile, order_type: form.orderType,
+      job_order_no: jobNo, invoice_no: form.invoiceNo || null, name: form.name, mobile: form.mobile, order_type: form.orderType,
       model: form.model, item: form.item, prepared_by: session.name, branch: form.branch || session.branch,
       measurements: form.measurements, sheila_type: form.sheilaType, abaya_option: form.abayaOption,
       button_till: form.buttonTill, delivery_date: form.deliveryDate || null,
@@ -472,30 +491,39 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     await refresh(); flash("Changes saved");
   };
 
-  const handleSaveRequirement = async (customer, measurements, items, notes, signatureUrl, createOrders) => {
+  const handleSaveRequirement = async (customer, measurements, items, deliveryDate, signatureUrl, createOrders) => {
+    const branch = session.branch || (session.role === "admin" ? "Admin" : "");
     const { data: profile, error: pErr } = await supabase.from("customer_profiles").insert({
-      name: customer.name, mobile: customer.mobile, measurements, branch: session.branch, created_by: session.name,
-      notes: notes || null, signature_url: signatureUrl || null,
+      name: customer.name, mobile: customer.mobile, measurements, branch, created_by: session.name,
+      signature_url: signatureUrl || null,
     }).select().single();
     if (pErr) { flash("Error: " + pErr.message); return; }
 
+    const validItems = items.filter((it) => !it.error);
+    const jobNumbers = createOrders && validItems.length > 0 ? await nextJobOrderNumbers(validItems.length) : [];
+
     let lastOrderId = null;
-    for (const it of items) {
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
       if (it.error) continue;
       let jobOrderId = null;
       if (createOrders) {
         const now = new Date().toISOString();
-        const fitNote = `Selected size: ${it.size}.${notes ? " Notes: " + notes : ""} Adjustments: ${FITTING_FIELDS.map(([k, l]) => `${l} ${it.deltas[k] > 0 ? "+" : ""}${it.deltas[k] ?? "—"}`).join(", ")}`;
+        const fitNote = `Selected size: ${it.size}.${it.notes ? " Notes: " + it.notes : ""}`;
+        const vIdx = validItems.indexOf(it);
         const { data: order } = await supabase.from("job_orders").insert({
-          name: customer.name, mobile: customer.mobile, order_type: "New", model: it.model, item: ITEM_TYPES[0],
-          prepared_by: session.name, branch: session.branch, measurements, comments: fitNote, status: "job_created",
+          job_order_no: jobNumbers[vIdx], name: customer.name, mobile: customer.mobile, order_type: "New",
+          model: it.model, item: ITEM_TYPES[0], prepared_by: session.name, branch,
+          measurements: suggestionMeasurements(measurements, it.deltas), delivery_date: deliveryDate || null,
+          comments: fitNote, status: "job_created",
           history: [{ note: "Job order created from customer requirement", by: session.name, at: now }],
         }).select().single();
         jobOrderId = order?.id || null;
         lastOrderId = jobOrderId;
       }
       await supabase.from("requirement_items").insert({
-        profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: it.deltas || {}, job_order_id: jobOrderId,
+        profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: it.deltas || {},
+        notes: it.notes || null, job_order_id: jobOrderId,
       });
     }
     await refresh();
@@ -504,11 +532,14 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
   };
 
   const handleCreateOrderFromRow = async (row) => {
+    const branch = row.profile.branch || (session.role === "admin" ? "Admin" : session.branch || "");
+    const [jobNo] = await nextJobOrderNumbers(1);
     const now = new Date().toISOString();
-    const fitNote = `Selected size: ${row.recommendedSize || "—"}.${row.profile.notes ? " Notes: " + row.profile.notes : ""}`;
+    const fitNote = `Selected size: ${row.recommendedSize || "—"}.${row.notes ? " Notes: " + row.notes : ""}`;
     const { data: order, error } = await supabase.from("job_orders").insert({
-      name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model, item: ITEM_TYPES[0],
-      prepared_by: session.name, branch: row.profile.branch || session.branch, measurements: row.profile.measurements,
+      job_order_no: jobNo, name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model,
+      item: ITEM_TYPES[0], prepared_by: session.name, branch,
+      measurements: suggestionMeasurements(row.profile.measurements, row.deltas),
       comments: fitNote, status: "job_created",
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
@@ -719,7 +750,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const [measurements, setMeasurements] = useState(Object.fromEntries(FITTING_FIELDS.map(([k]) => [k, ""])));
   const [items, setItems] = useState([]);
   const [pickModel, setPickModel] = useState("");
-  const [notes, setNotes] = useState("");
+  const [deliveryDate, setDeliveryDate] = useState("");
   const [signed, setSigned] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadMobile, setLoadMobile] = useState("");
@@ -727,7 +758,6 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const sigCanvasRef = React.useRef(null);
 
   const setC = (k) => (e) => setCustomer((c) => ({ ...c, [k]: e.target.value }));
-  const setM = (k) => (e) => setMeasurements((m) => ({ ...m, [k]: e.target.value }));
   const setMVal = (k) => (v) => setMeasurements((m) => ({ ...m, [k]: v }));
 
   const loadByMobile = async () => {
@@ -748,15 +778,15 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     if (!model) return;
     const { data: sizes } = await supabase.from("model_sizes").select("*").eq("model_id", model.id);
     if (!sizes || sizes.length === 0) {
-      setItems((it) => [...it, { model: pickModel, photoUrl: model.photoUrl, sizes: [], error: "No size chart saved for this model yet — add one in Admin > Add/Remove Model." }]);
+      setItems((it) => [...it, { model: pickModel, photoUrl: model.photoUrl, sizes: [], notes: "", error: "No size chart saved for this model yet — add one in Admin > Add/Remove Model." }]);
       return;
     }
     const best = nearestSize(measurements, sizes);
     if (!best) {
-      setItems((it) => [...it, { model: pickModel, photoUrl: model.photoUrl, sizes, error: "Enter shoulder / chest / waist / hips first to compute a match." }]);
+      setItems((it) => [...it, { model: pickModel, photoUrl: model.photoUrl, sizes, notes: "", error: "Enter shoulder / chest / waist / hips first to compute a match." }]);
       return;
     }
-    setItems((it) => [...it, { model: pickModel, photoUrl: model.photoUrl, sizes, size: best.size_label, auto: best.size_label, deltas: computeDeltas(FITTING_FIELDS, measurements, best.measurements) }]);
+    setItems((it) => [...it, { model: pickModel, photoUrl: model.photoUrl, sizes, size: best.size_label, auto: best.size_label, notes: "", deltas: computeDeltas(FITTING_FIELDS, measurements, best.measurements) }]);
   };
   const changeItemSize = (idx, sizeLabel) => {
     setItems((prev) => prev.map((it, i) => {
@@ -766,9 +796,8 @@ function RequirementForm({ config, session, onCancel, onSave }) {
       return { ...it, size: sizeLabel, deltas: computeDeltas(FITTING_FIELDS, measurements, sizeObj.measurements) };
     }));
   };
-  const setItemDelta = (idx, key, newDelta) => {
-    setItems((prev) => prev.map((it, i) => i !== idx ? it : { ...it, deltas: { ...it.deltas, [key]: newDelta } }));
-  };
+  const setItemDelta = (idx, key, newDelta) => setItems((prev) => prev.map((it, i) => i !== idx ? it : { ...it, deltas: { ...it.deltas, [key]: newDelta } }));
+  const setItemNotes = (idx, text) => setItems((prev) => prev.map((it, i) => i !== idx ? it : { ...it, notes: text }));
   const removeItem = (idx) => setItems((it) => it.filter((_, i) => i !== idx));
   const customerValid = customer.name.trim() && customer.mobile.trim();
 
@@ -786,7 +815,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const save = async (createOrders) => {
     setSaving(true);
     const signatureUrl = await uploadSignature();
-    await onSave(customer, measurements, items, notes, signatureUrl, createOrders);
+    await onSave(customer, measurements, items, deliveryDate, signatureUrl, createOrders);
     setSaving(false);
   };
 
@@ -858,7 +887,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
           </div>
           {it.error ? <div style={{ color: "#C1302B", fontSize: 13 }}>{it.error}</div> : (
             FITTING_FIELDS.filter(([k]) => it.deltas[k] != null).length === 0 ? (
-              <div style={{ fontSize: 13, color: "#8a8a8a" }}>This model's size chart doesn't have matching values for anything entered yet — add more fields to the size chart in Admin, or enter more customer measurements above.</div>
+              <div style={{ fontSize: 13, color: "#8a8a8a" }}>This model's size chart doesn't have matching values for anything entered yet.</div>
             ) : (
               <table>
                 <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer</th><th>Difference</th><th>Suggestion</th></tr></thead>
@@ -884,11 +913,16 @@ function RequirementForm({ config, session, onCancel, onSave }) {
               </table>
             )
           )}
+          <div style={{ marginTop: 10 }}>
+            <Field label="Special Requirements / Notes for this item">
+              <textarea style={{ ...inputStyle, minHeight: 50 }} value={it.notes} onChange={(e) => setItemNotes(idx, e.target.value)} placeholder="Anything specific to this item…" />
+            </Field>
+          </div>
         </div>
       ))}
 
-      <div style={{ marginTop: 8 }}>
-        <Field label="Special Requirements / Notes"><textarea style={{ ...inputStyle, minHeight: 70 }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Any special requests from the customer…" /></Field>
+      <div style={{ marginTop: 16, maxWidth: 260 }}>
+        <Field label="Delivery Date"><input type="date" style={inputStyle} value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} /></Field>
       </div>
 
       <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #E5E5E5" }}>
@@ -1200,9 +1234,10 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
         attachmentUrl = data.publicUrl;
       }
     }
+    const [jobNo] = await nextJobOrderNumbers(1);
     const now = new Date().toISOString();
     const row = {
-      invoice_no: form.invoiceNo || null, name: form.name, mobile: form.mobile, order_type: form.orderType,
+      job_order_no: jobNo, invoice_no: form.invoiceNo || null, name: form.name, mobile: form.mobile, order_type: form.orderType,
       model: form.model, item: form.item, prepared_by: session.name, branch: form.branch || session.branch,
       measurements: form.measurements, sheila_type: form.sheilaType, abaya_option: form.abayaOption,
       button_till: form.buttonTill, delivery_date: form.deliveryDate || null,
@@ -1217,30 +1252,39 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     flash("Job order created");
   };
 
-  const handleSaveRequirement = async (customer, measurements, items, notes, signatureUrl, createOrders) => {
+  const handleSaveRequirement = async (customer, measurements, items, deliveryDate, signatureUrl, createOrders) => {
+    const branch = session.branch || (session.role === "admin" ? "Admin" : "");
     const { data: profile, error: pErr } = await supabase.from("customer_profiles").insert({
-      name: customer.name, mobile: customer.mobile, measurements, branch: session.branch, created_by: session.name,
-      notes: notes || null, signature_url: signatureUrl || null,
+      name: customer.name, mobile: customer.mobile, measurements, branch, created_by: session.name,
+      signature_url: signatureUrl || null,
     }).select().single();
     if (pErr) { flash("Error: " + pErr.message); return; }
 
+    const validItems = items.filter((it) => !it.error);
+    const jobNumbers = createOrders && validItems.length > 0 ? await nextJobOrderNumbers(validItems.length) : [];
+
     let lastOrderId = null;
-    for (const it of items) {
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
       if (it.error) continue;
       let jobOrderId = null;
       if (createOrders) {
         const now = new Date().toISOString();
-        const fitNote = `Selected size: ${it.size}.${notes ? " Notes: " + notes : ""} Adjustments: ${FITTING_FIELDS.map(([k, l]) => `${l} ${it.deltas[k] > 0 ? "+" : ""}${it.deltas[k] ?? "—"}`).join(", ")}`;
+        const fitNote = `Selected size: ${it.size}.${it.notes ? " Notes: " + it.notes : ""}`;
+        const vIdx = validItems.indexOf(it);
         const { data: order } = await supabase.from("job_orders").insert({
-          name: customer.name, mobile: customer.mobile, order_type: "New", model: it.model, item: ITEM_TYPES[0],
-          prepared_by: session.name, branch: session.branch, measurements, comments: fitNote, status: "job_created",
+          job_order_no: jobNumbers[vIdx], name: customer.name, mobile: customer.mobile, order_type: "New",
+          model: it.model, item: ITEM_TYPES[0], prepared_by: session.name, branch,
+          measurements: suggestionMeasurements(measurements, it.deltas), delivery_date: deliveryDate || null,
+          comments: fitNote, status: "job_created",
           history: [{ note: `Job order created from customer requirement by Admin (${session.name})`, by: session.name, at: now }],
         }).select().single();
         jobOrderId = order?.id || null;
         lastOrderId = jobOrderId;
       }
       await supabase.from("requirement_items").insert({
-        profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: it.deltas || {}, job_order_id: jobOrderId,
+        profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: it.deltas || {},
+        notes: it.notes || null, job_order_id: jobOrderId,
       });
     }
     await refresh();
@@ -1249,11 +1293,14 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
   };
 
   const handleCreateOrderFromRow = async (row) => {
+    const branch = row.profile.branch || (session.role === "admin" ? "Admin" : session.branch || "");
+    const [jobNo] = await nextJobOrderNumbers(1);
     const now = new Date().toISOString();
-    const fitNote = `Selected size: ${row.recommendedSize || "—"}.${row.profile.notes ? " Notes: " + row.profile.notes : ""}`;
+    const fitNote = `Selected size: ${row.recommendedSize || "—"}.${row.notes ? " Notes: " + row.notes : ""}`;
     const { data: order, error } = await supabase.from("job_orders").insert({
-      name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model, item: ITEM_TYPES[0],
-      prepared_by: session.name, branch: row.profile.branch || session.branch, measurements: row.profile.measurements,
+      job_order_no: jobNo, name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model,
+      item: ITEM_TYPES[0], prepared_by: session.name, branch,
+      measurements: suggestionMeasurements(row.profile.measurements, row.deltas),
       comments: fitNote, status: "job_created",
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
