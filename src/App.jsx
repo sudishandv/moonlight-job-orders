@@ -45,6 +45,9 @@ const FITTING_FIELDS_TROUSER = [
 ];
 const FITTING_FIELDS = [...FITTING_FIELDS_GENERAL, ...FITTING_FIELDS_TROUSER];
 
+const ALL_MEASURE_FIELDS = [...MEASURE_FIELDS, ...FITTING_FIELDS_GENERAL, ...FITTING_FIELDS_TROUSER]
+  .filter((f, i, arr) => arr.findIndex((x) => x[0] === f[0]) === i);
+
 const CORE_FIT_FIELDS = ["shoulder", "chest", "waist", "hips"];
 
 function nearestSize(customerM, sizes) {
@@ -854,28 +857,32 @@ function RequirementForm({ config, session, onCancel, onSave }) {
             <a className="link" style={{ color: "#C1302B" }} onClick={() => removeItem(idx)}>Remove</a>
           </div>
           {it.error ? <div style={{ color: "#C1302B", fontSize: 13 }}>{it.error}</div> : (
-            <table>
-              <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer</th><th>Difference</th><th>Suggestion</th></tr></thead>
-              <tbody>
-                {FITTING_FIELDS.map(([k, l]) => {
-                  const customerVal = parseFloat(measurements[k]);
-                  const diff = it.deltas[k];
-                  const suggestion = (diff != null && !isNaN(customerVal)) ? +(customerVal + diff).toFixed(1) : null;
-                  return (
-                    <tr key={k} style={{ fontSize: 13 }}>
-                      <td>{l}</td>
-                      <td>{measurements[k] || "—"}</td>
-                      <td style={{ color: diff > 0 ? "#2F8F46" : diff < 0 ? "#C1302B" : "#1A1A1A", fontWeight: 600 }}>
-                        <EditableCell value={diff} onCommit={(newDiff) => setItemDelta(idx, k, newDiff)} />
-                      </td>
-                      <td style={{ fontWeight: 700 }}>
-                        <EditableCell value={suggestion} onCommit={(newSugg) => setItemDelta(idx, k, newSugg == null || isNaN(customerVal) ? null : +(newSugg - customerVal).toFixed(1))} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            FITTING_FIELDS.filter(([k]) => it.deltas[k] != null).length === 0 ? (
+              <div style={{ fontSize: 13, color: "#8a8a8a" }}>This model's size chart doesn't have matching values for anything entered yet — add more fields to the size chart in Admin, or enter more customer measurements above.</div>
+            ) : (
+              <table>
+                <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer</th><th>Difference</th><th>Suggestion</th></tr></thead>
+                <tbody>
+                  {FITTING_FIELDS.filter(([k]) => it.deltas[k] != null).map(([k, l]) => {
+                    const customerVal = parseFloat(measurements[k]);
+                    const diff = it.deltas[k];
+                    const suggestion = (diff != null && !isNaN(customerVal)) ? +(customerVal + diff).toFixed(1) : null;
+                    return (
+                      <tr key={k} style={{ fontSize: 13 }}>
+                        <td>{l}</td>
+                        <td>{measurements[k] || "—"}</td>
+                        <td style={{ color: diff > 0 ? "#2F8F46" : diff < 0 ? "#C1302B" : "#1A1A1A", fontWeight: 600 }}>
+                          <EditableCell value={diff} onCommit={(newDiff) => setItemDelta(idx, k, newDiff)} />
+                        </td>
+                        <td style={{ fontWeight: 700 }}>
+                          <EditableCell value={suggestion} onCommit={(newSugg) => setItemDelta(idx, k, newSugg == null || isNaN(customerVal) ? null : +(newSugg - customerVal).toFixed(1))} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )
           )}
         </div>
       ))}
@@ -1038,10 +1045,11 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
             <Row l="Comments" v={order.comments || "—"} />
             <div style={{ marginTop: 10, fontWeight: 700, fontSize: 12.5, color: "#5a5a5a" }}>MEASUREMENTS</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, fontSize: 13 }}>
-              {MEASURE_FIELDS.map(([k, l]) => <div key={k}>{l}: {order.measurements[k] || "—"}</div>)}
+              {ALL_MEASURE_FIELDS.filter(([k]) => order.measurements && order.measurements[k]).map(([k, l]) => <div key={k}>{l}: {order.measurements[k]}</div>)}
             </div>
 
             {editable && <button onClick={() => setEdit(true)} style={{ marginTop: 14, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Edit Details</button>}
+            <button onClick={() => window.print()} style={{ marginTop: 14, marginLeft: 8, background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Print</button>
             {resubmittable && <button onClick={() => onResubmit(order.id)} style={{ marginTop: 14, marginLeft: 8, background: "#2F8F46", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Resubmit to Production</button>}
 
             {actions.length > 0 && (
@@ -1097,7 +1105,7 @@ function EditFieldsForm({ order, onCancel, onSave }) {
       <Field label="Comments"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.comments || ""} onChange={set("comments")} /></Field>
       <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", margin: "10px 0 6px" }}>MEASUREMENTS</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-        {MEASURE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form.measurements[k] || ""} onChange={setMeasure(k)} /></Field>)}
+        {ALL_MEASURE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form.measurements[k] || ""} onChange={setMeasure(k)} /></Field>)}
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
         <button onClick={() => onSave({ name: form.name, mobile: form.mobile, deliveryDate: form.deliveryDate, comments: form.comments, measurements: form.measurements })} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Save Changes</button>
