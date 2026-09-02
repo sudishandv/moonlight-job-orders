@@ -685,6 +685,32 @@ function EditableCell({ value, onCommit }) {
   );
 }
 
+const stepBtnStyle = { width: 28, height: 28, borderRadius: "50%", border: "1px solid #C9CDD3", background: "#fff", fontSize: 16, lineHeight: "1", cursor: "pointer", color: "#1A1A1A", flexShrink: 0 };
+
+function MeasureStepper({ value, onChange, step = 0.5, min = 0 }) {
+  const [editing, setEditing] = useState(false);
+  const num = parseFloat(value);
+  const display = value === "" || value == null || isNaN(num) ? "—" : value;
+  const set = (v) => onChange(String(Math.max(min, +v.toFixed(2))));
+  const dec = () => set((isNaN(num) ? 0 : num) - step);
+  const inc = () => set((isNaN(num) ? 0 : num) + step);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
+      <button type="button" onClick={dec} style={stepBtnStyle}>−</button>
+      {editing ? (
+        <input autoFocus type="number" inputMode="decimal" value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={() => setEditing(false)}
+          onKeyDown={(e) => e.key === "Enter" && setEditing(false)}
+          style={{ width: 48, textAlign: "center", border: "1px solid #C9CDD3", borderRadius: 3, padding: "5px 2px", fontSize: 13 }} />
+      ) : (
+        <span onClick={() => setEditing(true)} style={{ width: 48, textAlign: "center", fontSize: 13.5, fontWeight: 600, cursor: "text", borderBottom: "1px dashed #C9CDD3", padding: "3px 0" }}>{display}</span>
+      )}
+      <button type="button" onClick={inc} style={stepBtnStyle}>+</button>
+    </div>
+  );
+}
+
 function RequirementForm({ config, session, onCancel, onSave }) {
   const [customer, setCustomer] = useState({ name: "", mobile: "" });
   const [measurements, setMeasurements] = useState(Object.fromEntries(FITTING_FIELDS.map(([k]) => [k, ""])));
@@ -699,6 +725,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
 
   const setC = (k) => (e) => setCustomer((c) => ({ ...c, [k]: e.target.value }));
   const setM = (k) => (e) => setMeasurements((m) => ({ ...m, [k]: e.target.value }));
+  const setMVal = (k) => (v) => setMeasurements((m) => ({ ...m, [k]: v }));
 
   const loadByMobile = async () => {
     if (!loadMobile.trim()) return;
@@ -780,11 +807,11 @@ function RequirementForm({ config, session, onCancel, onSave }) {
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>CUSTOMER FITTING MEASUREMENTS — GENERAL</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 16 }}>
-        {FITTING_FIELDS_GENERAL.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={measurements[k]} onChange={setM(k)} /></Field>)}
+        {FITTING_FIELDS_GENERAL.map(([k, l]) => <Field key={k} label={l}><MeasureStepper value={measurements[k]} onChange={setMVal(k)} /></Field>)}
       </div>
       <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>FOR TROUSER</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
-        {FITTING_FIELDS_TROUSER.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={measurements[k]} onChange={setM(k)} /></Field>)}
+        {FITTING_FIELDS_TROUSER.map(([k, l]) => <Field key={k} label={l}><MeasureStepper value={measurements[k]} onChange={setMVal(k)} /></Field>)}
       </div>
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "20px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>ITEMS</div>
