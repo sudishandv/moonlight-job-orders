@@ -232,7 +232,7 @@ export default function App() {
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
       {profile.role === "production" && (
-        <ProductionPanel config={config} orders={orders} refresh={refresh} session={profile}
+        <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
       {profile.role === "admin" && (
@@ -300,6 +300,7 @@ function Shell({ session, subpage, setSubpage, onLogout, children }) {
               <span>|</span>
               <a className="link" onClick={() => setSubpage("records")}>PRODUCTION PANEL</a>
               <a className="link" onClick={() => setSubpage("items")}>ITEM DETAILS</a>
+              <a className="link" onClick={() => setSubpage("requirements")}>ALL REQUIREMENTS</a>
             </>
           )}
           {(session.role === "sales" || session.role === "admin") && (
@@ -570,7 +571,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     return (
       <div>
         <SalesTabs subpage={subpage} setSubpage={setSubpage} />
-        <RequirementsPage items={requirementItems} profiles={profiles} onCreateOrder={handleCreateOrderFromRow} />
+        <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={false} canCreateOrder={true} onCreateOrder={handleCreateOrderFromRow} />
       </div>
     );
   }
@@ -940,8 +941,11 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   );
 }
 
-function RequirementsPage({ items, profiles, onCreateOrder }) {
-  const rows = items.map((it) => ({ ...it, profile: profiles.find((p) => p.id === it.profileId) })).filter((r) => r.profile);
+function RequirementsPage({ items, profiles, orders, canDelete, canCreateOrder, onCreateOrder, onDelete }) {
+  const [selected, setSelected] = useState(null);
+  const rows = items
+    .map((it) => ({ ...it, profile: profiles.find((p) => p.id === it.profileId), order: orders.find((o) => o.id === it.jobOrderId) }))
+    .filter((r) => r.profile);
   return (
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL REQUIREMENTS</h2>
@@ -949,7 +953,7 @@ function RequirementsPage({ items, profiles, onCreateOrder }) {
         <table>
           <thead><tr style={{ borderBottom: "2px solid #1A1A1A", fontSize: 12.5, textAlign: "left" }}>
             <th style={{ padding: "9px 10px" }}>Name</th><th style={{ padding: "9px 10px" }}>Mobile</th><th style={{ padding: "9px 10px" }}>Model</th>
-            <th style={{ padding: "9px 10px" }}>Size</th><th style={{ padding: "9px 10px" }}>Date</th><th style={{ padding: "9px 10px" }}>Job Order</th><th style={{ padding: "9px 10px" }}></th>
+            <th style={{ padding: "9px 10px" }}>Size</th><th style={{ padding: "9px 10px" }}>Date</th><th style={{ padding: "9px 10px" }}>Job Order No</th><th style={{ padding: "9px 10px" }}></th>
           </tr></thead>
           <tbody>
             {rows.map((r) => (
@@ -959,13 +963,63 @@ function RequirementsPage({ items, profiles, onCreateOrder }) {
                 <td style={{ padding: "9px 10px" }}>{r.model}</td>
                 <td style={{ padding: "9px 10px" }}>{r.recommendedSize || "—"}</td>
                 <td style={{ padding: "9px 10px" }}>{fmtDate(r.createdAt)}</td>
-                <td style={{ padding: "9px 10px" }}>{r.jobOrderId ? <span style={{ color: "#2F8F46", fontWeight: 700 }}>Created</span> : <span style={{ color: "#8a8a8a" }}>Not yet</span>}</td>
-                <td style={{ padding: "9px 10px" }}>{!r.jobOrderId && <a className="link" onClick={() => onCreateOrder(r)}>Create Job Order</a>}</td>
+                <td style={{ padding: "9px 10px" }} className="mono">{r.order ? r.order.jobOrderNo : <span style={{ color: "#8a8a8a" }}>Not yet</span>}</td>
+                <td style={{ padding: "9px 10px", whiteSpace: "nowrap" }}>
+                  <a className="link" onClick={() => setSelected(r)}>View</a>
+                  {!r.order && canCreateOrder && <a className="link" style={{ marginLeft: 10 }} onClick={() => onCreateOrder(r)}>Create Job Order</a>}
+                  {canDelete && <a className="link" style={{ marginLeft: 10, color: "#C1302B" }} onClick={() => onDelete(r.id)}>Delete</a>}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
+      {selected && <RequirementDetail row={selected} onClose={() => setSelected(null)} />}
+    </div>
+  );
+}
+
+function RequirementDetail({ row, onClose }) {
+  const p = row.profile;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", justifyContent: "flex-end", zIndex: 50 }} className="no-print" onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", width: 520, maxWidth: "100%", height: "100%", overflowY: "auto", padding: "26px 28px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20 }}>{p.name}</div>
+            <div style={{ fontSize: 13.5, color: "#8a8a8a" }}>{p.mobile} · {p.branch}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: "#8a8a8a" }}>×</button>
+        </div>
+
+        <div style={{ marginTop: 14, fontSize: 13.5, display: "grid", gap: 4 }}>
+          <div><strong>Model:</strong> {row.model}</div>
+          <div><strong>Size:</strong> {row.recommendedSize || "—"}</div>
+          <div><strong>Date:</strong> {fmtDate(row.createdAt)}</div>
+          <div><strong>Job Order:</strong> {row.order ? row.order.jobOrderNo : "Not created yet"}</div>
+          {row.notes && <div><strong>Notes:</strong> {row.notes}</div>}
+        </div>
+
+        <div style={{ fontWeight: 700, fontSize: 12.5, margin: "16px 0 6px" }}>MEASUREMENTS & COMPUTED DIFFERENCE</div>
+        <table>
+          <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer</th><th>Difference</th><th>Suggestion</th></tr></thead>
+          <tbody>
+            {FITTING_FIELDS.filter(([k]) => row.deltas && row.deltas[k] != null).map(([k, l]) => {
+              const c = parseFloat(p.measurements?.[k]);
+              const d = row.deltas[k];
+              const s = (d != null && !isNaN(c)) ? +(c + d).toFixed(1) : null;
+              return (
+                <tr key={k} style={{ fontSize: 13 }}>
+                  <td>{l}</td><td>{p.measurements?.[k] || "—"}</td><td>{d > 0 ? "+" : ""}{d}</td><td style={{ fontWeight: 700 }}>{s ?? "—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        <div style={{ fontWeight: 700, fontSize: 12.5, margin: "18px 0 6px" }}>CUSTOMER SIGNATURE</div>
+        {p.signature_url ? <img src={p.signature_url} alt="signature" style={{ border: "1px solid #E5E5E5", maxWidth: "100%", background: "#fff" }} /> : <div style={{ fontSize: 13, color: "#8a8a8a" }}>No signature captured for this profile.</div>}
+      </div>
     </div>
   );
 }
@@ -1151,7 +1205,7 @@ function EditFieldsForm({ order, onCancel, onSave }) {
 
 /* ================= Production Panel ================= */
 
-function ProductionPanel({ config, orders, refresh, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
+function ProductionPanel({ config, orders, profiles, requirementItems, refresh, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const visible = orders.filter((o) => o.status !== "ready_to_deliver" && o.status !== "delivered");
@@ -1173,6 +1227,9 @@ function ProductionPanel({ config, orders, refresh, session, subpage, setSubpage
   };
 
   if (subpage === "items") return <ModelBrowser models={config.models} />;
+  if (subpage === "requirements") {
+    return <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={false} canCreateOrder={false} />;
+  }
 
   return (
     <div>
@@ -1217,6 +1274,10 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     const { error } = await supabase.from("job_orders").delete().eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
     setSelectedId(null); await refresh(); flash("Record deleted");
+  };
+  const handleDeleteRequirement = async (id) => {
+    await supabase.from("requirement_items").delete().eq("id", id);
+    await refresh(); flash("Requirement deleted");
   };
   const handleSaveFields = async (id, fields) => {
     const { error } = await supabase.from("job_orders").update({ ...orderFieldsToDb(fields), updated_at: new Date().toISOString() }).eq("id", id);
@@ -1330,7 +1391,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     return <CustomersPage profiles={profiles} orders={orders} />;
   }
   if (subpage === "requirements") {
-    return <RequirementsPage items={requirementItems} profiles={profiles} onCreateOrder={handleCreateOrderFromRow} />;
+    return <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={true} canCreateOrder={true} onCreateOrder={handleCreateOrderFromRow} onDelete={handleDeleteRequirement} />;
   }
 
   return (
