@@ -34,6 +34,17 @@ const MODEL_FIELDS = [
   ["bottomFinishing", "Bottom / Length Finishing"],
 ];
 
+const FITTING_FIELDS_GENERAL = [
+  ["neckSize", "Neck Size"], ["shoulder", "Shoulder"], ["chest", "Chest"], ["waist", "Waist"], ["hips", "Hips"],
+  ["sleeveLength", "Sleeve Length"], ["aroundArmhole", "Around Armhole"], ["bicep", "Bicep"], ["wrist", "Wrist"],
+  ["upperArmLevel", "Upper Arm Level"], ["acrossBackWidth", "Across Back Width"], ["length", "Length"],
+];
+const FITTING_FIELDS_TROUSER = [
+  ["trouserWaist", "Waist"], ["trouserHips", "Hips"], ["trouserThigh", "Thigh"],
+  ["trouserRise", "Rise Front to Back"], ["trouserLength", "Length"],
+];
+const FITTING_FIELDS = [...FITTING_FIELDS_GENERAL, ...FITTING_FIELDS_TROUSER];
+
 const CORE_FIT_FIELDS = ["shoulder", "chest", "waist", "hips"];
 
 function nearestSize(customerM, sizes) {
@@ -53,9 +64,9 @@ function nearestSize(customerM, sizes) {
   return best;
 }
 
-function computeDeltas(customerM, baseM) {
+function computeDeltas(fields, customerM, baseM) {
   const out = {};
-  MEASURE_FIELDS.forEach(([k]) => {
+  fields.forEach(([k]) => {
     const c = parseFloat(customerM[k]);
     const b = parseFloat(baseM[k]);
     out[k] = (!isNaN(c) && !isNaN(b)) ? +(c - b).toFixed(1) : null;
@@ -98,7 +109,7 @@ function dbToModel(r) {
     id: r.id, modelNo: r.model_no, possibleCuts: r.possible_cuts, mainFabricCode: r.main_fabric_code,
     innerFabricCode: r.inner_fabric_code, otherFabric: r.other_fabric, sizeRange: r.size_range,
     requirements: r.requirements, sideFinishing: r.side_finishing, sleeveOpenFinishing: r.sleeve_open_finishing,
-    armHoleFinishing: r.arm_hole_finishing, bottomFinishing: r.bottom_finishing,
+    armHoleFinishing: r.arm_hole_finishing, bottomFinishing: r.bottom_finishing, photoUrl: r.photo_url,
   };
 }
 function modelToDb(f) {
@@ -249,8 +260,8 @@ function GlobalStyle() {
 
 function Shell({ session, subpage, setSubpage, onLogout, children }) {
   const adminTabs = [
-    ["records", "ALL RECORDS"], ["branches", "ADD/REMOVE BRANCH"], ["salespersons", "ADD/REMOVE SALES PERSON"],
-    ["models", "ADD/REMOVE MODEL"], ["viewmodels", "VIEW MODELS"],
+    ["records", "ALL RECORDS"], ["requirements", "ALL REQUIREMENTS"], ["branches", "ADD/REMOVE BRANCH"],
+    ["salespersons", "ADD/REMOVE SALES PERSON"], ["models", "ADD/REMOVE MODEL"], ["viewmodels", "VIEW MODELS"],
   ];
   return (
     <div style={{ minHeight: "100vh", background: "#fff", color: "#1A1A1A", fontFamily: F.body }}>
@@ -274,7 +285,6 @@ function Shell({ session, subpage, setSubpage, onLogout, children }) {
             <>
               <span>|</span>
               <a className="link" onClick={() => setSubpage("customers")}>CUSTOMERS</a>
-              <a className="link" onClick={() => setSubpage("requirements")}>REQUIREMENTS</a>
             </>
           )}
           <span>|</span>
@@ -360,6 +370,17 @@ function RecordsToolbar({ query, setQuery, statusFilter, setStatusFilter }) {
         <option value="all">All statuses</option>
         {Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
       </select>
+    </div>
+  );
+}
+
+function SalesTabs({ subpage, setSubpage }) {
+  const tabs = [["records", "ALL RECORDS"], ["requirements", "ALL REQUIREMENTS"]];
+  return (
+    <div className="no-print" style={{ display: "flex", gap: 22, marginBottom: 20, borderBottom: "1px solid #E5E5E5", paddingBottom: 10, justifyContent: "center" }}>
+      {tabs.map(([key, label]) => (
+        <button key={key} onClick={() => setSubpage(key)} style={{ background: "transparent", border: "none", fontSize: 12.5, fontWeight: subpage === key ? 700 : 500, letterSpacing: "0.04em", textDecoration: subpage === key ? "underline" : "none", color: "#1A1A1A" }}>{label}</button>
+      ))}
     </div>
   );
 }
@@ -461,7 +482,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       let jobOrderId = null;
       if (createOrders) {
         const now = new Date().toISOString();
-        const fitNote = `Selected size: ${it.size}.${notes ? " Notes: " + notes : ""} Adjustments: ${MEASURE_FIELDS.map(([k, l]) => `${l} ${it.deltas[k] > 0 ? "+" : ""}${it.deltas[k] ?? "—"}`).join(", ")}`;
+        const fitNote = `Selected size: ${it.size}.${notes ? " Notes: " + notes : ""} Adjustments: ${FITTING_FIELDS.map(([k, l]) => `${l} ${it.deltas[k] > 0 ? "+" : ""}${it.deltas[k] ?? "—"}`).join(", ")}`;
         const { data: order } = await supabase.from("job_orders").insert({
           name: customer.name, mobile: customer.mobile, order_type: "New", model: it.model, item: ITEM_TYPES[0],
           prepared_by: session.name, branch: session.branch, measurements, comments: fitNote, status: "job_created",
@@ -512,12 +533,18 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     return <CustomersPage profiles={profiles} orders={orders} />;
   }
   if (subpage === "requirements") {
-    return <RequirementsPage items={requirementItems} profiles={profiles} onCreateOrder={handleCreateOrderFromRow} />;
+    return (
+      <div>
+        <SalesTabs subpage={subpage} setSubpage={setSubpage} />
+        <RequirementsPage items={requirementItems} profiles={profiles} onCreateOrder={handleCreateOrderFromRow} />
+      </div>
+    );
   }
 
   return (
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL RECORDS</h2>
+      <SalesTabs subpage={subpage} setSubpage={setSubpage} />
       <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />
       <div className="no-print" style={{ textAlign: "right", marginBottom: 10 }}>
         <button onClick={() => setSubpage("requirement")} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em", marginRight: 8 }}>+ NEW REQUIREMENT</button>
@@ -581,7 +608,9 @@ function JobOrderForm({ config, session, onCancel, onSubmit }) {
 
       {model && (
         <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 20, border: "1px solid #C9CDD3", padding: 18, marginBottom: 18 }}>
-          <div style={{ background: "#F2F2F2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#8a8a8a", textAlign: "center", padding: 10 }}>Product photo<br />on file for {model.modelNo}</div>
+          <div style={{ background: "#F2F2F2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#8a8a8a", textAlign: "center", padding: 10, overflow: "hidden" }}>
+            {model.photoUrl ? <img src={model.photoUrl} alt={model.modelNo} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <>Product photo<br />on file for {model.modelNo}</>}
+          </div>
           <div>
             <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>DEFAULT PRODUCT DETAILS</div>
             {MODEL_FIELDS.map(([k, l]) => <div key={k} style={{ fontSize: 13, marginBottom: 3 }}><strong>{l.toUpperCase()}:</strong> {model[k] || "—"}</div>)}
@@ -636,11 +665,31 @@ function SignaturePad({ canvasRef, onDrawn }) {
   );
 }
 
+function EditableCell({ value, onCommit }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(value ?? "");
+  useEffect(() => { setVal(value ?? ""); }, [value]);
+  if (!editing) {
+    return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        {value == null ? "—" : value}
+        <button type="button" onClick={() => setEditing(true)} title="Edit" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#8a8a8a", padding: 0 }}>✎</button>
+      </span>
+    );
+  }
+  return (
+    <input autoFocus style={{ width: 64, border: "1px solid #C9CDD3", borderRadius: 3, padding: "3px 5px", fontSize: 12.5 }}
+      value={val} onChange={(e) => setVal(e.target.value)}
+      onBlur={() => { setEditing(false); onCommit(val === "" ? null : parseFloat(val)); }}
+      onKeyDown={(e) => { if (e.key === "Enter") { setEditing(false); onCommit(val === "" ? null : parseFloat(val)); } }} />
+  );
+}
+
 function RequirementForm({ config, session, onCancel, onSave }) {
   const [customer, setCustomer] = useState({ name: "", mobile: "" });
-  const [measurements, setMeasurements] = useState(Object.fromEntries(MEASURE_FIELDS.map(([k]) => [k, ""])));
+  const [measurements, setMeasurements] = useState(Object.fromEntries(FITTING_FIELDS.map(([k]) => [k, ""])));
   const [items, setItems] = useState([]);
-  const [pickModel, setPickModel] = useState(config.models[0]?.modelNo || "");
+  const [pickModel, setPickModel] = useState("");
   const [notes, setNotes] = useState("");
   const [signed, setSigned] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -657,7 +706,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     const { data } = await supabase.from("customer_profiles").select("*").eq("mobile", loadMobile.trim()).order("created_at", { ascending: false }).limit(1);
     if (data && data[0]) {
       setCustomer({ name: data[0].name, mobile: data[0].mobile });
-      setMeasurements({ ...Object.fromEntries(MEASURE_FIELDS.map(([k]) => [k, ""])), ...(data[0].measurements || {}) });
+      setMeasurements({ ...Object.fromEntries(FITTING_FIELDS.map(([k]) => [k, ""])), ...(data[0].measurements || {}) });
       setLoadMsg(`Loaded measurements from ${fmtDate(data[0].created_at)}.`);
     } else {
       setLoadMsg("No existing profile found for that number.");
@@ -669,23 +718,26 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     if (!model) return;
     const { data: sizes } = await supabase.from("model_sizes").select("*").eq("model_id", model.id);
     if (!sizes || sizes.length === 0) {
-      setItems((it) => [...it, { model: pickModel, sizes: [], error: "No size chart saved for this model yet — add one in Admin > Add/Remove Model." }]);
+      setItems((it) => [...it, { model: pickModel, photoUrl: model.photoUrl, sizes: [], error: "No size chart saved for this model yet — add one in Admin > Add/Remove Model." }]);
       return;
     }
     const best = nearestSize(measurements, sizes);
     if (!best) {
-      setItems((it) => [...it, { model: pickModel, sizes, error: "Enter shoulder / chest / waist / hips first to compute a match." }]);
+      setItems((it) => [...it, { model: pickModel, photoUrl: model.photoUrl, sizes, error: "Enter shoulder / chest / waist / hips first to compute a match." }]);
       return;
     }
-    setItems((it) => [...it, { model: pickModel, sizes, size: best.size_label, auto: best.size_label, deltas: computeDeltas(measurements, best.measurements) }]);
+    setItems((it) => [...it, { model: pickModel, photoUrl: model.photoUrl, sizes, size: best.size_label, auto: best.size_label, deltas: computeDeltas(FITTING_FIELDS, measurements, best.measurements) }]);
   };
   const changeItemSize = (idx, sizeLabel) => {
     setItems((prev) => prev.map((it, i) => {
       if (i !== idx) return it;
       const sizeObj = it.sizes.find((s) => s.size_label === sizeLabel);
       if (!sizeObj) return it;
-      return { ...it, size: sizeLabel, deltas: computeDeltas(measurements, sizeObj.measurements) };
+      return { ...it, size: sizeLabel, deltas: computeDeltas(FITTING_FIELDS, measurements, sizeObj.measurements) };
     }));
+  };
+  const setItemDelta = (idx, key, newDelta) => {
+    setItems((prev) => prev.map((it, i) => i !== idx ? it : { ...it, deltas: { ...it.deltas, [key]: newDelta } }));
   };
   const removeItem = (idx) => setItems((it) => it.filter((_, i) => i !== idx));
   const customerValid = customer.name.trim() && customer.mobile.trim();
@@ -726,9 +778,13 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         <Field label="Mobile No"><input style={inputStyle} value={customer.mobile} onChange={setC("mobile")} /></Field>
       </div>
 
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>CUSTOMER FITTING MEASUREMENTS</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 12 }}>
-        {MEASURE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={measurements[k]} onChange={setM(k)} /></Field>)}
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>CUSTOMER FITTING MEASUREMENTS — GENERAL</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 16 }}>
+        {FITTING_FIELDS_GENERAL.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={measurements[k]} onChange={setM(k)} /></Field>)}
+      </div>
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>FOR TROUSER</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
+        {FITTING_FIELDS_TROUSER.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={measurements[k]} onChange={setM(k)} /></Field>)}
       </div>
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "20px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>ITEMS</div>
@@ -736,16 +792,30 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         <div>
           <div style={label13}>Model</div>
           <select style={{ ...inputStyle, width: 200 }} value={pickModel} onChange={(e) => setPickModel(e.target.value)}>
+            <option value="">Select a model…</option>
             {config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}</option>)}
           </select>
         </div>
-        <button onClick={addItem} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>+ Add Item</button>
+        <button onClick={addItem} disabled={!pickModel} style={{ background: pickModel ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>+ Add Item</button>
       </div>
+
+      {pickModel && (() => {
+        const m = config.models.find((mm) => mm.modelNo === pickModel);
+        return m ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16, border: "1px solid #E5E5E5", padding: 10 }}>
+            {m.photoUrl ? <img src={m.photoUrl} alt={m.modelNo} style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 3 }} /> : <div style={{ width: 70, height: 70, background: "#F2F2F2", borderRadius: 3 }} />}
+            <div style={{ fontSize: 13 }}><strong>{m.modelNo}</strong><br />{m.possibleCuts}</div>
+          </div>
+        ) : null;
+      })()}
 
       {items.map((it, idx) => (
         <div key={idx} style={{ border: "1px solid #C9CDD3", padding: 14, marginBottom: 12 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
-            <strong>{it.model}</strong>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {it.photoUrl && <img src={it.photoUrl} alt={it.model} style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 3 }} />}
+              <strong>{it.model}</strong>
+            </div>
             {!it.error && (
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ fontSize: 12, color: "#8a8a8a" }}>Size:</span>
@@ -758,16 +828,25 @@ function RequirementForm({ config, session, onCancel, onSave }) {
           </div>
           {it.error ? <div style={{ color: "#C1302B", fontSize: 13 }}>{it.error}</div> : (
             <table>
-              <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer</th><th>Difference</th></tr></thead>
+              <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer</th><th>Difference</th><th>Suggestion</th></tr></thead>
               <tbody>
-                {MEASURE_FIELDS.map(([k, l]) => (
-                  <tr key={k} style={{ fontSize: 13 }}>
-                    <td>{l}</td><td>{measurements[k] || "—"}</td>
-                    <td style={{ color: it.deltas[k] > 0 ? "#2F8F46" : it.deltas[k] < 0 ? "#C1302B" : "#1A1A1A", fontWeight: 600 }}>
-                      {it.deltas[k] == null ? "—" : (it.deltas[k] > 0 ? "+" : "") + it.deltas[k]}
-                    </td>
-                  </tr>
-                ))}
+                {FITTING_FIELDS.map(([k, l]) => {
+                  const customerVal = parseFloat(measurements[k]);
+                  const diff = it.deltas[k];
+                  const suggestion = (diff != null && !isNaN(customerVal)) ? +(customerVal + diff).toFixed(1) : null;
+                  return (
+                    <tr key={k} style={{ fontSize: 13 }}>
+                      <td>{l}</td>
+                      <td>{measurements[k] || "—"}</td>
+                      <td style={{ color: diff > 0 ? "#2F8F46" : diff < 0 ? "#C1302B" : "#1A1A1A", fontWeight: 600 }}>
+                        <EditableCell value={diff} onCommit={(newDiff) => setItemDelta(idx, k, newDiff)} />
+                      </td>
+                      <td style={{ fontWeight: 700 }}>
+                        <EditableCell value={suggestion} onCommit={(newSugg) => setItemDelta(idx, k, newSugg == null || isNaN(customerVal) ? null : +(newSugg - customerVal).toFixed(1))} />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -797,7 +876,7 @@ function RequirementsPage({ items, profiles, onCreateOrder }) {
   const rows = items.map((it) => ({ ...it, profile: profiles.find((p) => p.id === it.profileId) })).filter((r) => r.profile);
   return (
     <div>
-      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>CUSTOMER REQUIREMENTS</h2>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL REQUIREMENTS</h2>
       {rows.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No requirements saved yet.</div> : (
         <table>
           <thead><tr style={{ borderBottom: "2px solid #1A1A1A", fontSize: 12.5, textAlign: "left" }}>
@@ -871,7 +950,7 @@ function CustomerDetail({ profile, orders, onClose }) {
 
         <div style={{ fontWeight: 700, fontSize: 12.5, margin: "18px 0 6px" }}>FITTING MEASUREMENTS</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, fontSize: 13, marginBottom: 16 }}>
-          {MEASURE_FIELDS.map(([k, l]) => <div key={k}>{l}: {profile.measurements?.[k] || "—"}</div>)}
+          {FITTING_FIELDS.map(([k, l]) => <div key={k}>{l}: {profile.measurements?.[k] || "—"}</div>)}
         </div>
 
         <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>ALL ORDERS FOR THIS PHONE NUMBER</div>
@@ -1043,7 +1122,9 @@ function ModelBrowser({ models }) {
       <div style={{ display: "grid", gap: 16 }}>
         {models.map((m) => (
           <div key={m.id} style={{ border: "1px solid #C9CDD3", padding: 16, display: "grid", gridTemplateColumns: "160px 1fr", gap: 18 }}>
-            <div style={{ background: "#F2F2F2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#8a8a8a", textAlign: "center" }}>Product photo<br />{m.modelNo}</div>
+            <div style={{ background: "#F2F2F2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#8a8a8a", textAlign: "center", overflow: "hidden" }}>
+              {m.photoUrl ? <img src={m.photoUrl} alt={m.modelNo} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <>Product photo<br />{m.modelNo}</>}
+            </div>
             <div>
               <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>{m.modelNo}</div>
               {MODEL_FIELDS.slice(1).map(([k, l]) => <div key={k} style={{ fontSize: 13, marginBottom: 3 }}><strong>{l}:</strong> {m[k] || "—"}</div>)}
@@ -1114,7 +1195,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       let jobOrderId = null;
       if (createOrders) {
         const now = new Date().toISOString();
-        const fitNote = `Selected size: ${it.size}.${notes ? " Notes: " + notes : ""} Adjustments: ${MEASURE_FIELDS.map(([k, l]) => `${l} ${it.deltas[k] > 0 ? "+" : ""}${it.deltas[k] ?? "—"}`).join(", ")}`;
+        const fitNote = `Selected size: ${it.size}.${notes ? " Notes: " + notes : ""} Adjustments: ${FITTING_FIELDS.map(([k, l]) => `${l} ${it.deltas[k] > 0 ? "+" : ""}${it.deltas[k] ?? "—"}`).join(", ")}`;
         const { data: order } = await supabase.from("job_orders").insert({
           name: customer.name, mobile: customer.mobile, order_type: "New", model: it.model, item: ITEM_TYPES[0],
           prepared_by: session.name, branch: session.branch, measurements, comments: fitNote, status: "job_created",
@@ -1215,7 +1296,7 @@ function ManageList({ title, items, fields, onAdd, onRemove }) {
 
 function ModelSizes({ model, refresh, flash }) {
   const [sizes, setSizes] = useState([]);
-  const [form, setForm] = useState({ size_label: "Small", measurements: Object.fromEntries(MEASURE_FIELDS.map(([k]) => [k, ""])) });
+  const [form, setForm] = useState({ size_label: "Small", measurements: Object.fromEntries(FITTING_FIELDS.map(([k]) => [k, ""])) });
 
   const load = () => supabase.from("model_sizes").select("*").eq("model_id", model.id).then(({ data }) => setSizes(data || []));
   useEffect(() => { load(); }, [model.id]); // eslint-disable-line
@@ -1226,7 +1307,7 @@ function ModelSizes({ model, refresh, flash }) {
   const add = async () => {
     const { error } = await supabase.from("model_sizes").insert({ model_id: model.id, size_label: form.size_label, measurements: form.measurements });
     if (error) { flash("Error: " + error.message); return; }
-    setForm({ size_label: "Small", measurements: Object.fromEntries(MEASURE_FIELDS.map(([k]) => [k, ""])) });
+    setForm({ size_label: "Small", measurements: Object.fromEntries(FITTING_FIELDS.map(([k]) => [k, ""])) });
     load(); flash("Size added");
   };
   const remove = async (id) => { await supabase.from("model_sizes").delete().eq("id", id); load(); };
@@ -1236,7 +1317,7 @@ function ModelSizes({ model, refresh, flash }) {
       <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>SIZE MEASUREMENTS FOR {model.modelNo}</div>
       {sizes.map((s) => (
         <div key={s.id} style={{ fontSize: 12.5, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
-          <span><strong>{s.size_label}:</strong> {MEASURE_FIELDS.map(([k, l]) => `${l} ${s.measurements[k] || "—"}`).join(", ")}</span>
+          <span><strong>{s.size_label}:</strong> {FITTING_FIELDS.map(([k, l]) => `${l} ${s.measurements[k] || "—"}`).join(", ")}</span>
           <a className="link" style={{ color: "#C1302B" }} onClick={() => remove(s.id)}>Remove</a>
         </div>
       ))}
@@ -1247,7 +1328,7 @@ function ModelSizes({ model, refresh, flash }) {
             {["Small", "Medium", "Large", "X-Large"].map((s) => <option key={s}>{s}</option>)}
           </select>
         </div>
-        {MEASURE_FIELDS.map(([k, l]) => (
+        {FITTING_FIELDS.map(([k, l]) => (
           <div key={k} style={{ width: 70 }}>
             <div style={{ ...label13, fontSize: 9.5 }}>{l}</div>
             <input style={{ ...inputStyle, padding: "6px 6px" }} value={form.measurements[k]} onChange={setMeasure(k)} />
@@ -1262,12 +1343,21 @@ function ModelSizes({ model, refresh, flash }) {
 function ManageModels({ config, refresh, flash }) {
   const blank = Object.fromEntries(MODEL_FIELDS.map(([k]) => [k, ""]));
   const [form, setForm] = useState(blank);
+  const [photoFile, setPhotoFile] = useState(null);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const add = async () => {
     if (!form.modelNo.trim()) return;
-    const { error } = await supabase.from("models").insert(modelToDb(form));
+    const { data: inserted, error } = await supabase.from("models").insert(modelToDb(form)).select().single();
     if (error) { flash("Error: " + error.message); return; }
-    setForm(blank); await refresh(); flash("Model added");
+    if (photoFile) {
+      const path = `model-photos/${Date.now()}-${photoFile.name}`;
+      const { error: upErr } = await supabase.storage.from("attachments").upload(path, photoFile);
+      if (!upErr) {
+        const { data } = supabase.storage.from("attachments").getPublicUrl(path);
+        await supabase.from("models").update({ photo_url: data.publicUrl }).eq("id", inserted.id);
+      }
+    }
+    setForm(blank); setPhotoFile(null); await refresh(); flash("Model added");
   };
   const remove = async (id) => { await supabase.from("models").delete().eq("id", id); await refresh(); };
 
@@ -1276,13 +1366,17 @@ function ManageModels({ config, refresh, flash }) {
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 20, letterSpacing: "0.05em", marginBottom: 20 }}>ADD / REMOVE MODEL</h2>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
         {MODEL_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form[k]} onChange={set(k)} /></Field>)}
+        <Field label="Product Photo"><input type="file" accept="image/*" onChange={(e) => setPhotoFile(e.target.files?.[0] || null)} style={inputStyle} /></Field>
       </div>
       <button onClick={add} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, marginBottom: 24 }}>Add Model</button>
       <div style={{ display: "grid", gap: 10 }}>
         {config.models.map((m) => (
           <div key={m.id} style={{ border: "1px solid #E5E5E5", padding: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div><strong>{m.modelNo}</strong> — {m.mainFabricCode} — {m.sizeRange}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                {m.photoUrl && <img src={m.photoUrl} alt={m.modelNo} style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 3 }} />}
+                <div><strong>{m.modelNo}</strong> — {m.mainFabricCode} — {m.sizeRange}</div>
+              </div>
               <a className="link" style={{ color: "#C1302B" }} onClick={() => remove(m.id)}>Remove</a>
             </div>
             <ModelSizes model={m} refresh={refresh} flash={flash} />
