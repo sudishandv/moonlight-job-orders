@@ -1595,48 +1595,110 @@ function ManageList({ title, items, fields, onAdd, onRemove }) {
   );
 }
 
+const CORE_DEFAULT_ROWS = ["shoulder", "chest", "waist", "hips", "sleeveLength", "length"];
+
+function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRemoveSize }) {
+  const [extraRows, setExtraRows] = useState([]);
+  const [addingKey, setAddingKey] = useState("");
+  const [newSizeLabel, setNewSizeLabel] = useState("");
+
+  const dataKeys = FITTING_FIELDS.filter(([k]) => sizes.some((s) => s.measurements[k])).map(([k]) => k);
+  const rowKeys = Array.from(new Set([...CORE_DEFAULT_ROWS, ...extraRows, ...dataKeys]));
+  const rows = FITTING_FIELDS.filter(([k]) => rowKeys.includes(k));
+  const unusedFields = FITTING_FIELDS.filter(([k]) => !rowKeys.includes(k));
+  const availableSizeLabels = ["Small", "Medium", "Large", "X-Large"].filter((l) => !sizes.some((s) => s.size_label === l));
+
+  return (
+    <div>
+      {sizes.length === 0 ? (
+        <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 10 }}>Add a size column (S/M/L/XL) below to start entering measurements.</div>
+      ) : (
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+          <thead>
+            <tr style={{ background: "#F7F7F5" }}>
+              <th style={{ textAlign: "left", padding: "8px 10px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Measurement</th>
+              {sizes.map((s) => (
+                <th key={s.size_label} style={{ padding: "8px 10px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #1A1A1A", textAlign: "center" }}>
+                  {s.size_label}
+                  {onRemoveSize && <a className="link" style={{ fontSize: 10, color: "#C1302B", marginLeft: 6 }} onClick={() => onRemoveSize(s.size_label)}>×</a>}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([k, l]) => (
+              <tr key={k} style={{ borderBottom: "1px solid #E5E5E5" }}>
+                <td style={{ padding: "7px 10px", fontSize: 13 }}>{l}</td>
+                {sizes.map((s) => (
+                  <td key={s.size_label} style={{ padding: "5px 8px", textAlign: "center" }}>
+                    <input
+                      value={s.measurements[k] || ""}
+                      onChange={(e) => onChangeCell(s.size_label, k, e.target.value)}
+                      onBlur={() => onCellBlur && onCellBlur(s.size_label, k)}
+                      style={{ width: 52, textAlign: "center", border: "1px solid #C9CDD3", borderRadius: 3, padding: "4px 2px", fontSize: 12.5 }}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {unusedFields.length > 0 && (
+          <>
+            <select value={addingKey} onChange={(e) => setAddingKey(e.target.value)} style={{ ...inputStyle, width: 170 }}>
+              <option value="">+ Add measurement row…</option>
+              {unusedFields.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+            <button type="button" disabled={!addingKey} onClick={() => { setExtraRows((r) => [...r, addingKey]); setAddingKey(""); }}
+              style={{ background: addingKey ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add Row</button>
+          </>
+        )}
+        {onAddSize && availableSizeLabels.length > 0 && (
+          <>
+            <select value={newSizeLabel} onChange={(e) => setNewSizeLabel(e.target.value)} style={{ ...inputStyle, width: 140 }}>
+              <option value="">+ Add size column…</option>
+              {availableSizeLabels.map((l) => <option key={l} value={l}>{l}</option>)}
+            </select>
+            <button type="button" disabled={!newSizeLabel} onClick={() => { onAddSize(newSizeLabel); setNewSizeLabel(""); }}
+              style={{ background: newSizeLabel ? "#1A1A1A" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add Size</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ModelSizes({ model, refresh, flash }) {
   const [sizes, setSizes] = useState([]);
-  const [form, setForm] = useState({ size_label: "Small", measurements: Object.fromEntries(FITTING_FIELDS.map(([k]) => [k, ""])) });
-
   const load = () => supabase.from("model_sizes").select("*").eq("model_id", model.id).then(({ data }) => setSizes(data || []));
   useEffect(() => { load(); }, [model.id]); // eslint-disable-line
 
-  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
-  const setMeasure = (k) => (e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }));
-
-  const add = async () => {
-    const { error } = await supabase.from("model_sizes").insert({ model_id: model.id, size_label: form.size_label, measurements: form.measurements });
+  const changeCell = (sizeLabel, key, value) => {
+    setSizes((prev) => prev.map((s) => s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
+  };
+  const persistCell = async (sizeLabel) => {
+    const row = sizes.find((s) => s.size_label === sizeLabel);
+    if (!row) return;
+    await supabase.from("model_sizes").update({ measurements: row.measurements }).eq("id", row.id);
+  };
+  const addSize = async (label) => {
+    const { error } = await supabase.from("model_sizes").insert({ model_id: model.id, size_label: label, measurements: {} });
     if (error) { flash("Error: " + error.message); return; }
-    setForm({ size_label: "Small", measurements: Object.fromEntries(FITTING_FIELDS.map(([k]) => [k, ""])) });
     load(); flash("Size added");
   };
-  const remove = async (id) => { await supabase.from("model_sizes").delete().eq("id", id); load(); };
+  const removeSize = async (label) => {
+    const row = sizes.find((s) => s.size_label === label);
+    if (row) await supabase.from("model_sizes").delete().eq("id", row.id);
+    load();
+  };
 
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
       <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>SIZE MEASUREMENTS FOR {model.modelNo}</div>
-      {sizes.map((s) => (
-        <div key={s.id} style={{ fontSize: 12.5, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
-          <span><strong>{s.size_label}:</strong> {FITTING_FIELDS.map(([k, l]) => `${l} ${s.measurements[k] || "—"}`).join(", ")}</span>
-          <a className="link" style={{ color: "#C1302B" }} onClick={() => remove(s.id)}>Remove</a>
-        </div>
-      ))}
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
-        <div>
-          <div style={label13}>Size Label</div>
-          <select style={{ ...inputStyle, width: 110 }} value={form.size_label} onChange={set("size_label")}>
-            {["Small", "Medium", "Large", "X-Large"].map((s) => <option key={s}>{s}</option>)}
-          </select>
-        </div>
-        {FITTING_FIELDS.map(([k, l]) => (
-          <div key={k} style={{ width: 70 }}>
-            <div style={{ ...label13, fontSize: 9.5 }}>{l}</div>
-            <input style={{ ...inputStyle, padding: "6px 6px" }} value={form.measurements[k]} onChange={setMeasure(k)} />
-          </div>
-        ))}
-        <button onClick={add} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, height: 34 }}>Add Size</button>
-      </div>
+      <SizeMeasurementGrid sizes={sizes} onChangeCell={changeCell} onCellBlur={persistCell} onAddSize={addSize} onRemoveSize={removeSize} />
     </div>
   );
 }
@@ -1646,16 +1708,71 @@ function ManageModels({ config, refresh, flash, session }) {
   const [form, setForm] = useState(blank);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
-  const add = async () => {
+  // Pending (not-yet-saved) photos, colors, and sizes for the model being created
+  const [photoFiles, setPhotoFiles] = useState({});
+  const setPhotoFile = (view) => (e) => setPhotoFiles((f) => ({ ...f, [view]: e.target.files?.[0] || null }));
+
+  const [pendingColors, setPendingColors] = useState([]);
+  const [newColorName, setNewColorName] = useState("");
+  const [newColorFile, setNewColorFile] = useState(null);
+  const addPendingColor = () => {
+    if (!newColorName.trim()) return;
+    setPendingColors((c) => [...c, { name: newColorName, file: newColorFile }]);
+    setNewColorName(""); setNewColorFile(null);
+  };
+  const removePendingColor = (i) => setPendingColors((c) => c.filter((_, idx) => idx !== i));
+
+  const [pendingSizes, setPendingSizes] = useState([]);
+  const changePendingCell = (sizeLabel, key, value) => setPendingSizes((prev) => prev.map((s) => s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
+  const addPendingSize = (label) => setPendingSizes((prev) => [...prev, { size_label: label, measurements: {} }]);
+  const removePendingSize = (label) => setPendingSizes((prev) => prev.filter((s) => s.size_label !== label));
+
+  const [creating, setCreating] = useState(false);
+
+  const create = async () => {
     if (!form.modelNo.trim()) return;
+    setCreating(true);
     const payload = { ...modelToDb(form) };
     STYLE_FIELDS.forEach(([k]) => { payload[k.replace(/[A-Z]/g, (m) => "_" + m.toLowerCase())] = form[k]; });
     payload.description = form.description;
     payload.created_by = session.name;
-    const { error } = await supabase.from("models").insert(payload);
-    if (error) { flash("Error: " + error.message); return; }
-    setForm(blank); await refresh(); flash("Model added");
+    const { data: inserted, error } = await supabase.from("models").insert(payload).select().single();
+    if (error) { flash("Error: " + error.message); setCreating(false); return; }
+
+    let frontUrl = null;
+    for (const view of PHOTO_VIEWS) {
+      const file = photoFiles[view];
+      if (!file) continue;
+      const path = `model-photos/${inserted.id}-${view}-${Date.now()}-${file.name}`;
+      const { error: upErr } = await supabase.storage.from("attachments").upload(path, file);
+      if (!upErr) {
+        const { data } = supabase.storage.from("attachments").getPublicUrl(path);
+        await supabase.from("model_images").insert({ model_id: inserted.id, view_label: view, url: data.publicUrl });
+        if (view === "Front") frontUrl = data.publicUrl;
+      }
+    }
+    if (frontUrl) await supabase.from("models").update({ photo_url: frontUrl }).eq("id", inserted.id);
+
+    for (const c of pendingColors) {
+      let swatchUrl = null;
+      if (c.file) {
+        const path = `model-colors/${inserted.id}-${Date.now()}-${c.file.name}`;
+        const { error: upErr } = await supabase.storage.from("attachments").upload(path, c.file);
+        if (!upErr) { const { data } = supabase.storage.from("attachments").getPublicUrl(path); swatchUrl = data.publicUrl; }
+      }
+      await supabase.from("model_colors").insert({ model_id: inserted.id, color_name: c.name, swatch_url: swatchUrl });
+    }
+
+    for (const s of pendingSizes) {
+      await supabase.from("model_sizes").insert({ model_id: inserted.id, size_label: s.size_label, measurements: s.measurements });
+    }
+
+    setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingSizes([]);
+    setCreating(false);
+    await refresh();
+    flash("Model created" + (pendingColors.length || pendingSizes.length || Object.keys(photoFiles).length ? " with photos, colors, and sizes" : ""));
   };
+
   const remove = async (id) => { await supabase.from("models").delete().eq("id", id); await refresh(); };
 
   return (
@@ -1674,7 +1791,45 @@ function ManageModels({ config, refresh, flash, session }) {
         {MODEL_FIELDS.slice(1).map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form[k]} onChange={set(k)} /></Field>)}
       </div>
 
-      <button onClick={add} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, marginBottom: 28 }}>Add Model</button>
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>PHOTOS</div>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 8 }}>
+        {PHOTO_VIEWS.map((view) => (
+          <div key={view} style={{ textAlign: "center" }}>
+            <div style={{ width: 80, height: 80, background: "#F2F2F2", borderRadius: 3, overflow: "hidden", marginBottom: 4, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {photoFiles[view] ? <img src={URL.createObjectURL(photoFiles[view])} alt={view} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 11, color: "#8a8a8a" }}>No photo</span>}
+            </div>
+            <div style={{ fontSize: 11, marginBottom: 4 }}>{view}</div>
+            <input type="file" accept="image/*" style={{ fontSize: 10, width: 90 }} onChange={setPhotoFile(view)} />
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>COLOR VARIATIONS</div>
+      {pendingColors.length > 0 && (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+          {pendingColors.map((c, i) => (
+            <div key={i} style={{ textAlign: "center" }}>
+              <div style={{ width: 50, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5" }}>
+                {c.file && <img src={URL.createObjectURL(c.file)} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+              </div>
+              <div style={{ fontSize: 10.5, marginTop: 2 }}>{c.name}</div>
+              <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingColor(i)}>Remove</a>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+        <input placeholder="Color name" value={newColorName} onChange={(e) => setNewColorName(e.target.value)} style={{ ...inputStyle, width: 140 }} />
+        <input type="file" accept="image/*" onChange={(e) => setNewColorFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
+        <button type="button" onClick={addPendingColor} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Color</button>
+      </div>
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>SIZE MEASUREMENTS</div>
+      <SizeMeasurementGrid sizes={pendingSizes} onChangeCell={changePendingCell} onAddSize={addPendingSize} onRemoveSize={removePendingSize} />
+
+      <button disabled={creating} onClick={create} style={{ background: creating ? "#C9CDD3" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontSize: 13, fontWeight: 700, marginTop: 14, marginBottom: 28 }}>
+        {creating ? "Creating…" : "Create Model"}
+      </button>
 
       <div style={{ display: "grid", gap: 24 }}>
         {config.models.map((m) => (
