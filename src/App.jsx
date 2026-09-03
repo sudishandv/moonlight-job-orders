@@ -34,6 +34,14 @@ const MODEL_FIELDS = [
   ["bottomFinishing", "Bottom / Length Finishing"],
 ];
 
+const POSSIBLE_CUTS_OPTIONS = ["A-line", "Flare", "Flare with panel", "Kimono", "Flare Kimono", "Drop Shoulder Kimono", "Dolman", "Butterfly", "A-line Suit", "Flare Suit", "Jacket"];
+const SIZE_RANGE_OPTIONS = ["X-Small", "Small", "Medium", "Large", "X-Large", "XX-Large"];
+const REQUIREMENTS_OPTIONS = ["Side Pocket", "Front Pocket", "Side Slit", "Sleeve Slit", "Back Slit", "Inside Rope", "Back Box", "Open Front", "Closed Front"];
+const SIDE_FINISH_OPTIONS = ["Single Overlock", "Overlock and spread", "French Seam / Lootpot", "Single Bias Bound Seam / Single Jizz", "Spread Bias Bound Seam / Single Jizz", "Turn and Straight Stitch", "Flat-felled Seams / Lungi Shilayi", "Picot Finish", "Stitch and Spread"];
+const SLEEVE_OPEN_FINISH_OPTIONS = ["The Folded Edge", "Dori Finish / Rope Stitch Finish", "Hemming with Lining Fabric", "Single Cuff", "Double Cuff"];
+const ARM_HOLE_FINISH_OPTIONS = ["Overlock Finish", "Bias Bound Seam Finish / Jizz", "French Seam Finish / Lootpot", "Bias Binding (for sleeveless)"];
+const BOTTOM_FINISH_OPTIONS = ["Dori Finish / Rope Stitch Finish", "The Folded Edge", "Fold and Hem", "Rolled Edge", "The Picot Edge", "Piping Finish", "Overlock-Folded Edge", "Bias Tape Finish", "The Laced Edge", "The Fringed Edge"];
+
 const STYLE_FIELDS = [
   ["collectionName", "Collection Name"], ["styleName", "Style Name"], ["category", "Category"],
   ["productType", "Product Type"], ["season", "Season"],
@@ -404,6 +412,46 @@ function StatusTag({ status }) {
 
 const inputStyle = { width: "100%", border: "1px solid #C9CDD3", borderRadius: 3, padding: "8px 9px", fontSize: 14, fontFamily: F.body };
 const label13 = { fontSize: 11.5, fontWeight: 600, color: "#5a5a5a", marginBottom: 4, letterSpacing: "0.02em", textTransform: "uppercase" };
+const cardStyle = { background: "#fff", border: "1px solid #E5E5E5", borderRadius: 8, padding: "18px 20px" };
+
+function TagField({ value, onChange, options }) {
+  const tags = value ? value.split(",").map((t) => t.trim()).filter(Boolean) : [];
+  const [customInput, setCustomInput] = useState("");
+
+  const addTag = (tag) => {
+    const t = (tag || "").trim();
+    if (!t || tags.includes(t)) return;
+    onChange([...tags, t].join(", "));
+  };
+  const removeTag = (tag) => onChange(tags.filter((t) => t !== tag).join(", "));
+
+  return (
+    <div>
+      {tags.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+          {tags.map((t, i) => (
+            <span key={`${t}-${i}`} style={{ background: "#EEF0F2", border: "1px solid #C9CDD3", borderRadius: 12, padding: "3px 10px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              {t}
+              <span onClick={() => removeTag(t)} style={{ cursor: "pointer", color: "#C1302B", fontWeight: 700 }}>×</span>
+            </span>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {options && options.length > 0 && (
+          <select value="" onChange={(e) => addTag(e.target.value)} style={{ ...inputStyle, width: 180 }}>
+            <option value="">Select…</option>
+            {options.filter((o) => !tags.includes(o)).map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        )}
+        <input placeholder="Type a custom tag and press Enter…" value={customInput} onChange={(e) => setCustomInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(customInput); setCustomInput(""); } }}
+          style={{ ...inputStyle, width: 200 }} />
+        <button type="button" onClick={() => { addTag(customInput); setCustomInput(""); }} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700 }}>+ Add</button>
+      </div>
+    </div>
+  );
+}
 
 function Field({ label, children }) {
   return <label style={{ display: "block", marginBottom: 12 }}><div style={label13}>{label}</div>{children}</label>;
@@ -765,7 +813,18 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
           <ModelThumb model={model} size="100%" style={{ borderRadius: 0 }} />
           <div>
             <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>DEFAULT PRODUCT DETAILS</div>
-            {MODEL_FIELDS.map(([k, l]) => <div key={k} style={{ fontSize: 13, marginBottom: 3 }}><strong>{l.toUpperCase()}:</strong> {model[k] || "—"}</div>)}
+            {MODEL_FIELDS.map(([k, l]) => (
+              <div key={k} style={{ fontSize: 13, marginBottom: 6 }}>
+                <strong>{l.toUpperCase()}:</strong>{" "}
+                {model[k] ? (
+                  <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 4, marginTop: 3 }}>
+                    {model[k].split(",").map((t) => t.trim()).filter(Boolean).map((t, i) => (
+                      <span key={`${t}-${i}`} style={{ background: "#EEF0F2", border: "1px solid #C9CDD3", borderRadius: 10, padding: "1px 8px", fontSize: 11.5 }}>{t}</span>
+                    ))}
+                  </span>
+                ) : "—"}
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -837,56 +896,56 @@ function drawShapeStamp(ctx, type) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
   const cx = W / 2, cy = H / 2;
   if (type === "rectangle") {
-    ctx.rect(cx - 100, cy - 80, 200, 160);
+    ctx.rect(cx - 170, cy - 136, 340, 272);
   } else if (type === "aline") {
-    ctx.moveTo(cx - 60, cy - 100);
-    ctx.lineTo(cx + 60, cy - 100);
-    ctx.lineTo(cx + 100, cy + 100);
-    ctx.lineTo(cx - 100, cy + 100);
+    ctx.moveTo(cx - 102, cy - 170);
+    ctx.lineTo(cx + 102, cy - 170);
+    ctx.lineTo(cx + 170, cy + 170);
+    ctx.lineTo(cx - 170, cy + 170);
     ctx.closePath();
   } else if (type === "sleeve") {
-    ctx.moveTo(cx - 80, cy + 90);
-    ctx.quadraticCurveTo(cx - 90, cy, cx - 40, cy - 90);
-    ctx.quadraticCurveTo(cx, cy - 120, cx + 40, cy - 90);
-    ctx.quadraticCurveTo(cx + 90, cy, cx + 80, cy + 90);
+    ctx.moveTo(cx - 136, cy + 153);
+    ctx.quadraticCurveTo(cx - 153, cy, cx - 68, cy - 153);
+    ctx.quadraticCurveTo(cx, cy - 204, cx + 68, cy - 153);
+    ctx.quadraticCurveTo(cx + 153, cy, cx + 136, cy + 153);
     ctx.closePath();
   } else if (type === "collar") {
-    ctx.moveTo(cx - 110, cy + 20);
-    ctx.quadraticCurveTo(cx, cy - 60, cx + 110, cy + 20);
-    ctx.quadraticCurveTo(cx, cy + 10, cx - 110, cy + 20);
+    ctx.moveTo(cx - 187, cy + 34);
+    ctx.quadraticCurveTo(cx, cy - 102, cx + 187, cy + 34);
+    ctx.quadraticCurveTo(cx, cy + 17, cx - 187, cy + 34);
     ctx.closePath();
   } else if (type === "trouserleg") {
-    ctx.moveTo(cx - 70, cy - 110);
-    ctx.lineTo(cx + 70, cy - 110);
-    ctx.lineTo(cx + 40, cy + 110);
-    ctx.lineTo(cx - 40, cy + 110);
+    ctx.moveTo(cx - 119, cy - 187);
+    ctx.lineTo(cx + 119, cy - 187);
+    ctx.lineTo(cx + 68, cy + 187);
+    ctx.lineTo(cx - 68, cy + 187);
     ctx.closePath();
   } else if (type === "circle") {
-    ctx.arc(cx, cy, 90, 0, Math.PI * 2);
+    ctx.arc(cx, cy, 153, 0, Math.PI * 2);
   } else if (type === "yoke") {
-    ctx.moveTo(cx - 120, cy - 40);
-    ctx.quadraticCurveTo(cx, cy - 90, cx + 120, cy - 40);
-    ctx.lineTo(cx + 120, cy - 10);
-    ctx.quadraticCurveTo(cx, cy - 60, cx - 120, cy - 10);
+    ctx.moveTo(cx - 204, cy - 68);
+    ctx.quadraticCurveTo(cx, cy - 153, cx + 204, cy - 68);
+    ctx.lineTo(cx + 204, cy - 17);
+    ctx.quadraticCurveTo(cx, cy - 102, cx - 204, cy - 17);
     ctx.closePath();
   } else if (type === "pocket") {
-    ctx.moveTo(cx - 60, cy - 40);
-    ctx.quadraticCurveTo(cx, cy - 60, cx + 60, cy - 40);
-    ctx.lineTo(cx + 60, cy + 50);
-    ctx.quadraticCurveTo(cx, cy + 65, cx - 60, cy + 50);
+    ctx.moveTo(cx - 102, cy - 68);
+    ctx.quadraticCurveTo(cx, cy - 102, cx + 102, cy - 68);
+    ctx.lineTo(cx + 102, cy + 85);
+    ctx.quadraticCurveTo(cx, cy + 111, cx - 102, cy + 85);
     ctx.closePath();
   } else if (type === "cuff") {
-    ctx.rect(cx - 90, cy - 25, 180, 50);
+    ctx.rect(cx - 153, cy - 43, 306, 85);
   } else if (type === "waistband") {
-    ctx.rect(cx - 140, cy - 15, 280, 30);
+    ctx.rect(cx - 238, cy - 26, 476, 51);
   } else if (type === "gusset") {
-    ctx.moveTo(cx, cy - 110);
-    ctx.lineTo(cx + 90, cy + 110);
-    ctx.quadraticCurveTo(cx, cy + 90, cx - 90, cy + 110);
+    ctx.moveTo(cx, cy - 187);
+    ctx.lineTo(cx + 153, cy + 187);
+    ctx.quadraticCurveTo(cx, cy + 153, cx - 153, cy + 187);
     ctx.closePath();
   } else if (type === "halfcircle") {
-    ctx.moveTo(cx - 130, cy);
-    ctx.arc(cx, cy, 130, Math.PI, 2 * Math.PI);
+    ctx.moveTo(cx - 221, cy);
+    ctx.arc(cx, cy, 221, Math.PI, 2 * Math.PI);
     ctx.closePath();
   }
   ctx.stroke();
@@ -991,8 +1050,8 @@ function DrawingPad({ canvasRef, onDrawn }) {
         </button>
       </div>
 
-      <canvas ref={canvasRef} width={420} height={280}
-        style={{ border: "1px solid #C9CDD3", borderRadius: 3, touchAction: "none", width: "100%", maxWidth: 420, background: "#fff" }}
+      <canvas ref={canvasRef} width={800} height={520}
+        style={{ border: "1px solid #C9CDD3", borderRadius: 3, touchAction: "none", width: "100%", maxWidth: 800, background: "#fff" }}
         onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerLeave={end} />
 
       <div style={{ display: "flex", gap: 8, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -1544,7 +1603,7 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
     await refresh(); flash(STATUS[to].label);
   };
 
-  if (subpage === "items") return <ModelBrowser models={config.models} canEdit={false} />;
+  if (subpage === "items") return <ModelBrowser models={config.models} canEdit={false} session={session} />;
   if (subpage === "requirements") {
     return <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={false} canCreateOrder={false} />;
   }
@@ -1559,13 +1618,14 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
   );
 }
 
-function ModelDetailPage({ model, canEdit, refresh, flash, onBack }) {
+function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
   const [images, setImages] = useState([]);
   const [colors, setColors] = useState([]);
   const [sizes, setSizes] = useState([]);
   const [fabrics, setFabrics] = useState([]);
   const [trims, setTrims] = useState([]);
   const [patterns, setPatterns] = useState([]);
+  const [docs, setDocs] = useState([]);
   const [lightbox, setLightbox] = useState(null);
 
   useEffect(() => {
@@ -1575,6 +1635,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack }) {
     supabase.from("model_fabrics").select("*").eq("model_id", model.id).then(({ data }) => setFabrics(data || []));
     supabase.from("model_trims").select("*").eq("model_id", model.id).then(({ data }) => setTrims(data || []));
     supabase.from("model_patterns").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setPatterns(data || []));
+    supabase.from("model_documents").select("*").eq("model_id", model.id).then(({ data }) => setDocs(data || []));
   }, [model.id]);
 
   const removeModel = async () => {
@@ -1584,86 +1645,88 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack }) {
   };
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto" }}>
+    <div style={{ maxWidth: 1400, margin: "0 auto" }}>
       <div className="no-print" style={{ marginBottom: 14 }}>
         <a className="link" onClick={onBack}>← Back to Models</a>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
         <div>
-          <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 22 }}>{model.modelNo}{model.styleName ? ` — ${model.styleName}` : ""}</div>
+          <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 24 }}>{model.modelNo}{model.styleName ? ` — ${model.styleName}` : ""}</div>
           <div style={{ fontSize: 13, color: "#8a8a8a" }}>{[model.collectionName, model.category, model.productType, model.season].filter(Boolean).join(" · ")}</div>
         </div>
         {canEdit && <a className="link" style={{ color: "#C1302B" }} onClick={removeModel}>Remove Model</a>}
       </div>
-      {model.description && <div style={{ fontSize: 13.5, color: "#4A5468", margin: "10px 0 18px" }}>{model.description}</div>}
+      {model.description && <div style={{ fontSize: 13.5, color: "#4A5468", margin: "10px 0 20px" }}>{model.description}</div>}
 
-      {canEdit ? <ModelImages model={model} refresh={refresh} flash={flash} /> : images.length > 0 && (
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>PHOTOS</div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {images.map((img) => (
-              <div key={img.id} style={{ textAlign: "center" }}>
-                <img src={img.url} alt={img.view_label} onClick={() => setLightbox(img.url)} style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 3, cursor: "zoom-in" }} />
-                <div style={{ fontSize: 10.5, marginTop: 2 }}>{img.view_label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {canEdit ? <ModelColors model={model} refresh={refresh} flash={flash} /> : colors.length > 0 && (
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>COLOR VARIATIONS</div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {colors.map((c) => (
-              <div key={c.id} style={{ textAlign: "center" }}>
-                <div onClick={() => c.swatch_url && setLightbox(c.swatch_url)} style={{ width: 44, height: 44, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", cursor: c.swatch_url ? "zoom-in" : "default" }}>
-                  {c.swatch_url && <img src={c.swatch_url} alt={c.color_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 16 }}>
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>PHOTOS</div>
+          {canEdit ? <ModelImages model={model} refresh={refresh} flash={flash} /> : images.length > 0 ? (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {images.map((img) => (
+                <div key={img.id} style={{ textAlign: "center" }}>
+                  <img src={img.url} alt={img.view_label} onClick={() => setLightbox(img.url)} style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 3, cursor: "zoom-in" }} />
+                  <div style={{ fontSize: 10.5, marginTop: 2 }}>{img.view_label}</div>
                 </div>
-                <div style={{ fontSize: 10, marginTop: 2 }}>{c.color_name}</div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No photos.</div>}
         </div>
-      )}
 
-      {canEdit ? <ModelFabrics model={model} refresh={refresh} flash={flash} /> : fabrics.length > 0 && (
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>FABRIC SWATCHES</div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {fabrics.map((f) => (
-              <div key={f.id} style={{ textAlign: "center", width: 90 }}>
-                <div onClick={() => f.swatch_url && setLightbox(f.swatch_url)} style={{ width: 70, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: f.swatch_url ? "zoom-in" : "default" }}>
-                  {f.swatch_url && <img src={f.swatch_url} alt={f.fabric_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>COLOR VARIATIONS</div>
+          {canEdit ? <ModelColors model={model} refresh={refresh} flash={flash} /> : colors.length > 0 ? (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {colors.map((c) => (
+                <div key={c.id} style={{ textAlign: "center" }}>
+                  <div onClick={() => c.swatch_url && setLightbox(c.swatch_url)} style={{ width: 44, height: 44, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", cursor: c.swatch_url ? "zoom-in" : "default" }}>
+                    {c.swatch_url && <img src={c.swatch_url} alt={c.color_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                  </div>
+                  <div style={{ fontSize: 10, marginTop: 2 }}>{c.color_name}</div>
                 </div>
-                <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{f.fabric_role}</div>
-                <div style={{ fontSize: 10, color: "#8a8a8a" }}>{f.fabric_name}{f.fabric_code ? ` · ${f.fabric_code}` : ""}</div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No colors.</div>}
         </div>
-      )}
 
-      {canEdit ? <ModelTrims model={model} refresh={refresh} flash={flash} /> : trims.length > 0 && (
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>TRIMS & ACCESSORIES</div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {trims.map((t) => (
-              <div key={t.id} style={{ textAlign: "center", width: 80 }}>
-                <div onClick={() => t.image_url && setLightbox(t.image_url)} style={{ width: 60, height: 60, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: t.image_url ? "zoom-in" : "default" }}>
-                  {t.image_url && <img src={t.image_url} alt={t.item_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>FABRIC SWATCHES</div>
+          {canEdit ? <ModelFabrics model={model} refresh={refresh} flash={flash} /> : fabrics.length > 0 ? (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {fabrics.map((f) => (
+                <div key={f.id} style={{ textAlign: "center", width: 90 }}>
+                  <div onClick={() => f.swatch_url && setLightbox(f.swatch_url)} style={{ width: 70, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: f.swatch_url ? "zoom-in" : "default" }}>
+                    {f.swatch_url && <img src={f.swatch_url} alt={f.fabric_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                  </div>
+                  <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{f.fabric_role}</div>
+                  <div style={{ fontSize: 10, color: "#8a8a8a" }}>{f.fabric_name}{f.fabric_code ? ` · ${f.fabric_code}` : ""}</div>
                 </div>
-                <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{t.item_name}</div>
-                <div style={{ fontSize: 10, color: "#8a8a8a" }}>{t.item_code}</div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No fabrics.</div>}
         </div>
-      )}
 
-      {canEdit ? <ModelPatterns model={model} refresh={refresh} flash={flash} /> : patterns.length > 0 && (
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>PATTERN & CUTTING SUMMARY</div>
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>TRIMS & ACCESSORIES</div>
+          {canEdit ? <ModelTrims model={model} refresh={refresh} flash={flash} /> : trims.length > 0 ? (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {trims.map((t) => (
+                <div key={t.id} style={{ textAlign: "center", width: 80 }}>
+                  <div onClick={() => t.image_url && setLightbox(t.image_url)} style={{ width: 60, height: 60, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: t.image_url ? "zoom-in" : "default" }}>
+                    {t.image_url && <img src={t.image_url} alt={t.item_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                  </div>
+                  <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{t.item_name}</div>
+                  <div style={{ fontSize: 10, color: "#8a8a8a" }}>{t.item_code}</div>
+                </div>
+              ))}
+            </div>
+          ) : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No trims.</div>}
+        </div>
+      </div>
+
+      <div style={{ ...cardStyle, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>PATTERN & CUTTING SUMMARY</div>
+        {canEdit ? <ModelPatterns model={model} refresh={refresh} flash={flash} /> : patterns.length > 0 ? (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "#F7F7F5" }}>
@@ -1688,16 +1751,41 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack }) {
               ))}
             </tbody>
           </table>
+        ) : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No pattern pieces.</div>}
+      </div>
+
+      {(canEdit || docs.length > 0) && (
+        <div style={{ ...cardStyle, marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>SKETCHES & REFERENCE DOCUMENTS</div>
+          {canEdit ? <ModelDocuments model={model} session={session} refresh={refresh} flash={flash} /> : (
+            <div style={{ display: "grid", gap: 6 }}>
+              {docs.map((d) => (
+                <div key={d.id} style={{ fontSize: 12.5 }}><a href={d.file_url} target="_blank" rel="noreferrer" className="link">{d.file_name}</a></div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      <div style={{ marginTop: 18 }}>
-        <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>KEY DETAILS / MANUFACTURING SPECS</div>
-        {MODEL_FIELDS.slice(1).map(([k, l]) => <div key={k} style={{ fontSize: 13, marginBottom: 3 }}><strong>{l}:</strong> {model[k] || "—"}</div>)}
+      <div style={cardStyle}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>KEY DETAILS / MANUFACTURING SPECS</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+          {MODEL_FIELDS.slice(1).map(([k, l]) => (
+            <div key={k}>
+              <div style={label13}>{l}</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {(model[k] || "").split(",").map((t) => t.trim()).filter(Boolean).map((t, i) => (
+                  <span key={`${t}-${i}`} style={{ background: "#EEF0F2", border: "1px solid #C9CDD3", borderRadius: 12, padding: "2px 9px", fontSize: 11.5 }}>{t}</span>
+                ))}
+                {!model[k] && <span style={{ fontSize: 13, color: "#8a8a8a" }}>—</span>}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
-      <div style={{ marginTop: 18 }}>
-        <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>SIZE MEASUREMENTS</div>
+      <div style={{ marginTop: 20 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>SIZE MEASUREMENTS</div>
         {canEdit ? <ModelSizes model={model} refresh={refresh} flash={flash} /> : <SizeMeasurementGrid sizes={sizes} readOnly />}
       </div>
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
@@ -1705,7 +1793,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack }) {
   );
 }
 
-function ModelBrowser({ models, canEdit, refresh, flash }) {
+function ModelBrowser({ models, canEdit, refresh, flash, session }) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(null);
 
@@ -1718,7 +1806,7 @@ function ModelBrowser({ models, canEdit, refresh, flash }) {
 
   if (selectedId) {
     const current = models.find((m) => m.id === selectedId);
-    if (current) return <ModelDetailPage model={current} canEdit={canEdit} refresh={refresh} flash={flash} onBack={() => setSelectedId(null)} />;
+    if (current) return <ModelDetailPage model={current} canEdit={canEdit} refresh={refresh} flash={flash} session={session} onBack={() => setSelectedId(null)} />;
   }
 
   return (
@@ -1933,7 +2021,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     onRemove={async (id) => { await supabase.from("salespersons").delete().eq("id", id); await refresh(); }} />;
 
   if (subpage === "models") return <ManageModels config={config} refresh={refresh} flash={flash} session={session} />;
-  if (subpage === "viewmodels") return <ModelBrowser models={config.models} canEdit={true} refresh={refresh} flash={flash} />;
+  if (subpage === "viewmodels") return <ModelBrowser models={config.models} canEdit={true} refresh={refresh} flash={flash} session={session} />;
   if (subpage === "new") {
     return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
   }
@@ -2278,8 +2366,6 @@ function ManageModels({ config, refresh, flash, session }) {
 
   const remove = async (id) => { await supabase.from("models").delete().eq("id", id); await refresh(); };
 
-  const cardStyle = { background: "#fff", border: "1px solid #E5E5E5", borderRadius: 8, padding: "18px 20px" };
-
   return (
     <div style={{ maxWidth: 1400, margin: "0 auto" }}>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ADD / REMOVE MODEL</h2>
@@ -2296,8 +2382,17 @@ function ManageModels({ config, refresh, flash, session }) {
 
         <div style={cardStyle}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>KEY DETAILS / MANUFACTURING SPECS</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-            {MODEL_FIELDS.slice(1).map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form[k]} onChange={set(k)} /></Field>)}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 12 }}>
+            <Field label="Possible Cuts"><TagField value={form.possibleCuts} onChange={(v) => setForm((f) => ({ ...f, possibleCuts: v }))} options={POSSIBLE_CUTS_OPTIONS} /></Field>
+            <Field label="Main Fabric Code"><TagField value={form.mainFabricCode} onChange={(v) => setForm((f) => ({ ...f, mainFabricCode: v }))} /></Field>
+            <Field label="Inner Fabric Code"><TagField value={form.innerFabricCode} onChange={(v) => setForm((f) => ({ ...f, innerFabricCode: v }))} /></Field>
+            <Field label="Other Fabric"><TagField value={form.otherFabric} onChange={(v) => setForm((f) => ({ ...f, otherFabric: v }))} /></Field>
+            <Field label="Size Range"><TagField value={form.sizeRange} onChange={(v) => setForm((f) => ({ ...f, sizeRange: v }))} options={SIZE_RANGE_OPTIONS} /></Field>
+            <Field label="Requirements (if any)"><TagField value={form.requirements} onChange={(v) => setForm((f) => ({ ...f, requirements: v }))} options={REQUIREMENTS_OPTIONS} /></Field>
+            <Field label="Side Finishing"><TagField value={form.sideFinishing} onChange={(v) => setForm((f) => ({ ...f, sideFinishing: v }))} options={SIDE_FINISH_OPTIONS} /></Field>
+            <Field label="Sleeve Open Finishing"><TagField value={form.sleeveOpenFinishing} onChange={(v) => setForm((f) => ({ ...f, sleeveOpenFinishing: v }))} options={SLEEVE_OPEN_FINISH_OPTIONS} /></Field>
+            <Field label="Arm Hole Finishing"><TagField value={form.armHoleFinishing} onChange={(v) => setForm((f) => ({ ...f, armHoleFinishing: v }))} options={ARM_HOLE_FINISH_OPTIONS} /></Field>
+            <Field label="Bottom / Length Finishing"><TagField value={form.bottomFinishing} onChange={(v) => setForm((f) => ({ ...f, bottomFinishing: v }))} options={BOTTOM_FINISH_OPTIONS} /></Field>
           </div>
         </div>
       </div>
@@ -2340,8 +2435,8 @@ function ManageModels({ config, refresh, flash, session }) {
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>COLOR VARIATIONS</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {pendingColors.map((c, i) => (
-              <div key={i} style={{ textAlign: "center" }}>
-                <div onClick={() => c.file && setLightbox(URL.createObjectURL(c.file))} style={{ width: 50, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", cursor: c.file ? "zoom-in" : "default" }}>
+              <div key={i} style={{ textAlign: "center", width: 110 }}>
+                <div onClick={() => c.file && setLightbox(URL.createObjectURL(c.file))} style={{ width: 110, height: 110, borderRadius: 6, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", cursor: c.file ? "zoom-in" : "default" }}>
                   {c.file && <img src={URL.createObjectURL(c.file)} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 </div>
                 <div style={{ fontSize: 10.5, marginTop: 2 }}>{c.name}</div>
@@ -2349,7 +2444,7 @@ function ManageModels({ config, refresh, flash, session }) {
               </div>
             ))}
             <div style={{ textAlign: "center", width: 110 }}>
-              <div style={{ width: 110, height: 90, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+              <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
                 <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
               </div>
               <input placeholder="Color name" value={newColorName} onChange={(e) => setNewColorName(e.target.value)} style={{ ...inputStyle, fontSize: 11, padding: "5px 6px", marginBottom: 4, textAlign: "center" }} />
@@ -2363,8 +2458,8 @@ function ManageModels({ config, refresh, flash, session }) {
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>FABRIC SWATCHES</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {pendingFabrics.map((f, i) => (
-              <div key={i} style={{ textAlign: "center", width: 90 }}>
-                <div onClick={() => f.file && setLightbox(URL.createObjectURL(f.file))} style={{ width: 70, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: f.file ? "zoom-in" : "default" }}>
+              <div key={i} style={{ textAlign: "center", width: 110 }}>
+                <div onClick={() => f.file && setLightbox(URL.createObjectURL(f.file))} style={{ width: 110, height: 110, borderRadius: 6, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: f.file ? "zoom-in" : "default" }}>
                   {f.file && <img src={URL.createObjectURL(f.file)} alt={f.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 </div>
                 <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{f.role}</div>
@@ -2372,8 +2467,8 @@ function ManageModels({ config, refresh, flash, session }) {
                 <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingFabric(i)}>Remove</a>
               </div>
             ))}
-            <div style={{ textAlign: "center", width: 120 }}>
-              <div style={{ width: 120, height: 70, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+            <div style={{ textAlign: "center", width: 110 }}>
+              <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
                 <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
               </div>
               <select value={newFabricRole} onChange={(e) => setNewFabricRole(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }}>
@@ -2391,8 +2486,8 @@ function ManageModels({ config, refresh, flash, session }) {
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>TRIMS & ACCESSORIES</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {pendingTrims.map((t, i) => (
-              <div key={i} style={{ textAlign: "center", width: 80 }}>
-                <div onClick={() => t.file && setLightbox(URL.createObjectURL(t.file))} style={{ width: 60, height: 60, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: t.file ? "zoom-in" : "default" }}>
+              <div key={i} style={{ textAlign: "center", width: 110 }}>
+                <div onClick={() => t.file && setLightbox(URL.createObjectURL(t.file))} style={{ width: 110, height: 110, borderRadius: 6, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: t.file ? "zoom-in" : "default" }}>
                   {t.file && <img src={URL.createObjectURL(t.file)} alt={t.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 </div>
                 <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{t.name}</div>
@@ -2401,7 +2496,7 @@ function ManageModels({ config, refresh, flash, session }) {
               </div>
             ))}
             <div style={{ textAlign: "center", width: 110 }}>
-              <div style={{ width: 110, height: 80, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+              <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
                 <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
               </div>
               <input placeholder="Item name" value={newTrimName} onChange={(e) => setNewTrimName(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
@@ -2469,9 +2564,12 @@ function ManageModels({ config, refresh, flash, session }) {
         <SizeMeasurementGrid sizes={pendingSizes} onChangeCell={changePendingCell} onAddSize={addPendingSize} onRemoveSize={removePendingSize} />
       </div>
 
-      <button disabled={creating} onClick={create} style={{ width: "100%", background: creating ? "#C9CDD3" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 6, padding: "14px", fontSize: 14, fontWeight: 700, marginBottom: 28 }}>
+      <button disabled={creating} onClick={create} style={{ width: "100%", background: creating ? "#C9CDD3" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 6, padding: "14px", fontSize: 14, fontWeight: 700, marginBottom: 10 }}>
         {creating ? "Creating…" : "Create Model"}
       </button>
+      <div style={{ textAlign: "center", fontSize: 12, color: "#8a8a8a", marginBottom: 28 }}>
+        Sketches and reference documents can be added once the model is created — open it from View Models.
+      </div>
     </div>
   );
 }
@@ -2504,8 +2602,7 @@ function ModelImages({ model, refresh, flash }) {
   const extraImages = images.filter((i) => !PHOTO_VIEWS.includes(i.view_label));
 
   return (
-    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
-      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>PHOTOS</div>
+    <div>
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
         {PHOTO_VIEWS.map((view) => {
           const img = images.find((i) => i.view_label === view);
@@ -2565,12 +2662,11 @@ function ModelColors({ model, refresh, flash }) {
   const remove = async (id) => { await supabase.from("model_colors").delete().eq("id", id); await load(); };
 
   return (
-    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
-      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>COLOR VARIATIONS</div>
+    <div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         {colors.map((c) => (
-          <div key={c.id} style={{ textAlign: "center", position: "relative" }}>
-            <div onClick={() => c.swatch_url && setLightbox(c.swatch_url)} style={{ width: 50, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", cursor: c.swatch_url ? "zoom-in" : "default" }}>
+          <div key={c.id} style={{ textAlign: "center", width: 110, position: "relative" }}>
+            <div onClick={() => c.swatch_url && setLightbox(c.swatch_url)} style={{ width: 110, height: 110, borderRadius: 6, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", cursor: c.swatch_url ? "zoom-in" : "default" }}>
               {c.swatch_url && <img src={c.swatch_url} alt={c.color_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
             </div>
             <div style={{ fontSize: 10.5, marginTop: 2 }}>{c.color_name}</div>
@@ -2578,7 +2674,7 @@ function ModelColors({ model, refresh, flash }) {
           </div>
         ))}
         <div style={{ textAlign: "center", width: 110 }}>
-          <div style={{ width: 110, height: 90, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+          <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
             <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
           </div>
           <input placeholder="Color name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, fontSize: 11, padding: "5px 6px", marginBottom: 4, textAlign: "center" }} />
@@ -2616,12 +2712,11 @@ function ModelFabrics({ model, refresh, flash }) {
   const remove = async (id) => { await supabase.from("model_fabrics").delete().eq("id", id); await load(); };
 
   return (
-    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
-      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>FABRIC SWATCHES</div>
+    <div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         {fabrics.map((f) => (
-          <div key={f.id} style={{ textAlign: "center", width: 90 }}>
-            <div onClick={() => f.swatch_url && setLightbox(f.swatch_url)} style={{ width: 70, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: f.swatch_url ? "zoom-in" : "default" }}>
+          <div key={f.id} style={{ textAlign: "center", width: 110 }}>
+            <div onClick={() => f.swatch_url && setLightbox(f.swatch_url)} style={{ width: 110, height: 110, borderRadius: 6, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: f.swatch_url ? "zoom-in" : "default" }}>
               {f.swatch_url && <img src={f.swatch_url} alt={f.fabric_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
             </div>
             <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{f.fabric_role}</div>
@@ -2629,8 +2724,8 @@ function ModelFabrics({ model, refresh, flash }) {
             <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => remove(f.id)}>Remove</a>
           </div>
         ))}
-        <div style={{ textAlign: "center", width: 120 }}>
-          <div style={{ width: 120, height: 70, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+        <div style={{ textAlign: "center", width: 110 }}>
+          <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
             <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
           </div>
           <select value={role} onChange={(e) => setRole(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }}>
@@ -2671,12 +2766,11 @@ function ModelTrims({ model, refresh, flash }) {
   const remove = async (id) => { await supabase.from("model_trims").delete().eq("id", id); await load(); };
 
   return (
-    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
-      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>TRIMS & ACCESSORIES</div>
+    <div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         {trims.map((t) => (
-          <div key={t.id} style={{ textAlign: "center", width: 80 }}>
-            <div onClick={() => t.image_url && setLightbox(t.image_url)} style={{ width: 60, height: 60, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: t.image_url ? "zoom-in" : "default" }}>
+          <div key={t.id} style={{ textAlign: "center", width: 110 }}>
+            <div onClick={() => t.image_url && setLightbox(t.image_url)} style={{ width: 110, height: 110, borderRadius: 6, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: t.image_url ? "zoom-in" : "default" }}>
               {t.image_url && <img src={t.image_url} alt={t.item_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
             </div>
             <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{t.item_name}</div>
@@ -2685,7 +2779,7 @@ function ModelTrims({ model, refresh, flash }) {
           </div>
         ))}
         <div style={{ textAlign: "center", width: 110 }}>
-          <div style={{ width: 110, height: 80, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+          <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
             <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
           </div>
           <input placeholder="Item name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
@@ -2736,8 +2830,7 @@ function ModelPatterns({ model, refresh, flash }) {
   const remove = async (id) => { await supabase.from("model_patterns").delete().eq("id", id); await load(); };
 
   return (
-    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
-      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>PATTERN & CUTTING SUMMARY</div>
+    <div>
       {patterns.length > 0 && (
         <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
           <thead>
@@ -2788,6 +2881,40 @@ function ModelPatterns({ model, refresh, flash }) {
         <button type="button" onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 6, padding: "8px 18px", fontSize: 12, fontWeight: 700 }}>+ Add Piece</button>
       </div>
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
+    </div>
+  );
+}
+
+function ModelDocuments({ model, session, refresh, flash }) {
+  const [docs, setDocs] = useState([]);
+  const load = () => supabase.from("model_documents").select("*").eq("model_id", model.id).order("created_at", { ascending: false }).then(({ data }) => setDocs(data || []));
+  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+
+  const upload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const path = `model-documents/${model.id}-${Date.now()}-${file.name}`;
+    const { error } = await supabase.storage.from("attachments").upload(path, file);
+    if (!error) {
+      const { data } = supabase.storage.from("attachments").getPublicUrl(path);
+      await supabase.from("model_documents").insert({ model_id: model.id, file_name: file.name, file_url: data.publicUrl, file_type: file.type, uploaded_by: session.name });
+      load(); flash("File added");
+    }
+  };
+  const remove = async (id) => { await supabase.from("model_documents").delete().eq("id", id); load(); };
+
+  return (
+    <div>
+      <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+        {docs.map((d) => (
+          <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, border: "1px solid #E5E5E5", padding: "6px 10px", borderRadius: 4 }}>
+            <a href={d.file_url} target="_blank" rel="noreferrer" className="link">{d.file_name}</a>
+            <span style={{ color: "#8a8a8a", fontSize: 11 }}>{d.uploaded_by} · {fmtDate(d.created_at)}</span>
+            <a className="link" style={{ color: "#C1302B" }} onClick={() => remove(d.id)}>Remove</a>
+          </div>
+        ))}
+      </div>
+      <FileButton label="Upload Sketch or Document" accept="image/*,.pdf,.doc,.docx" onChange={upload} />
     </div>
   );
 }
