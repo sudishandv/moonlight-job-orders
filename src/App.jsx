@@ -1314,7 +1314,7 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
     await refresh(); flash(STATUS[to].label);
   };
 
-  if (subpage === "items") return <ModelBrowser models={config.models} />;
+  if (subpage === "items") return <ModelBrowser models={config.models} canEdit={false} />;
   if (subpage === "requirements") {
     return <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={false} canCreateOrder={false} />;
   }
@@ -1329,13 +1329,115 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
   );
 }
 
-function ModelBrowser({ models }) {
+function ModelDetailPage({ model, canEdit, refresh, flash, onBack }) {
+  const [images, setImages] = useState([]);
+  const [colors, setColors] = useState([]);
+  const [sizes, setSizes] = useState([]);
+
+  useEffect(() => {
+    supabase.from("model_images").select("*").eq("model_id", model.id).then(({ data }) => setImages(data || []));
+    supabase.from("model_colors").select("*").eq("model_id", model.id).then(({ data }) => setColors(data || []));
+    supabase.from("model_sizes").select("*").eq("model_id", model.id).then(({ data }) => setSizes(data || []));
+  }, [model.id]);
+
+  const removeModel = async () => {
+    await supabase.from("models").delete().eq("id", model.id);
+    await refresh();
+    onBack();
+  };
+
+  return (
+    <div style={{ maxWidth: 900, margin: "0 auto" }}>
+      <div className="no-print" style={{ marginBottom: 14 }}>
+        <a className="link" onClick={onBack}>← Back to Models</a>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+        <div>
+          <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 22 }}>{model.modelNo}{model.styleName ? ` — ${model.styleName}` : ""}</div>
+          <div style={{ fontSize: 13, color: "#8a8a8a" }}>{[model.collectionName, model.category, model.productType, model.season].filter(Boolean).join(" · ")}</div>
+        </div>
+        {canEdit && <a className="link" style={{ color: "#C1302B" }} onClick={removeModel}>Remove Model</a>}
+      </div>
+      {model.description && <div style={{ fontSize: 13.5, color: "#4A5468", margin: "10px 0 18px" }}>{model.description}</div>}
+
+      {canEdit ? <ModelImages model={model} refresh={refresh} flash={flash} /> : images.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>PHOTOS</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {images.map((img) => (
+              <div key={img.id} style={{ textAlign: "center" }}>
+                <img src={img.url} alt={img.view_label} style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 3 }} />
+                <div style={{ fontSize: 10.5, marginTop: 2 }}>{img.view_label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {canEdit ? <ModelColors model={model} refresh={refresh} flash={flash} /> : colors.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>COLOR VARIATIONS</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {colors.map((c) => (
+              <div key={c.id} style={{ textAlign: "center" }}>
+                <div style={{ width: 44, height: 44, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5" }}>
+                  {c.swatch_url && <img src={c.swatch_url} alt={c.color_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                </div>
+                <div style={{ fontSize: 10, marginTop: 2 }}>{c.color_name}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: 18 }}>
+        <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>KEY DETAILS / MANUFACTURING SPECS</div>
+        {MODEL_FIELDS.slice(1).map(([k, l]) => <div key={k} style={{ fontSize: 13, marginBottom: 3 }}><strong>{l}:</strong> {model[k] || "—"}</div>)}
+      </div>
+
+      <div style={{ marginTop: 18 }}>
+        <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>SIZE MEASUREMENTS</div>
+        {canEdit ? <ModelSizes model={model} refresh={refresh} flash={flash} /> : <SizeMeasurementGrid sizes={sizes} readOnly />}
+      </div>
+    </div>
+  );
+}
+
+function ModelBrowser({ models, canEdit, refresh, flash }) {
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
+
+  const filtered = models.filter((m) => {
+    if (!query.trim()) return true;
+    const q = query.toLowerCase();
+    return [m.modelNo, m.styleName, m.collectionName, m.category, m.productType, m.season, m.description]
+      .filter(Boolean).some((f) => f.toLowerCase().includes(q));
+  });
+
+  if (selectedId) {
+    const current = models.find((m) => m.id === selectedId);
+    if (current) return <ModelDetailPage model={current} canEdit={canEdit} refresh={refresh} flash={flash} onBack={() => setSelectedId(null)} />;
+  }
+
   return (
     <div>
-      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ITEM DETAILS</h2>
-      <div style={{ display: "grid", gap: 16 }}>
-        {models.map((m) => <ModelBrowserCard key={m.id} model={m} />)}
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>VIEW MODELS</h2>
+      <div className="no-print" style={{ textAlign: "center", marginBottom: 18 }}>
+        <input placeholder="Search model number, category, style, keyword…" value={query} onChange={(e) => setQuery(e.target.value)} style={{ ...inputStyle, width: 340, display: "inline-block" }} />
       </div>
+      {filtered.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No models match your search.</div> : (
+        <div style={{ display: "grid", gap: 10 }}>
+          {filtered.map((m) => (
+            <div key={m.id} onClick={() => setSelectedId(m.id)} style={{ border: "1px solid #E5E5E5", padding: 14, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
+              {m.photoUrl ? <img src={m.photoUrl} alt={m.modelNo} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 3 }} /> : <div style={{ width: 56, height: 56, background: "#F2F2F2", borderRadius: 3 }} />}
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{m.modelNo}{m.styleName ? ` — ${m.styleName}` : ""}</div>
+                <div style={{ fontSize: 12, color: "#8a8a8a" }}>{[m.collectionName, m.category, m.productType, m.season].filter(Boolean).join(" · ") || "No details yet"}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1527,7 +1629,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     onRemove={async (id) => { await supabase.from("salespersons").delete().eq("id", id); await refresh(); }} />;
 
   if (subpage === "models") return <ManageModels config={config} refresh={refresh} flash={flash} session={session} />;
-  if (subpage === "viewmodels") return <ModelBrowser models={config.models} />;
+  if (subpage === "viewmodels") return <ModelBrowser models={config.models} canEdit={true} refresh={refresh} flash={flash} />;
   if (subpage === "new") {
     return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
   }
@@ -1597,7 +1699,7 @@ function ManageList({ title, items, fields, onAdd, onRemove }) {
 
 const CORE_DEFAULT_ROWS = ["shoulder", "chest", "waist", "hips", "sleeveLength", "length"];
 
-function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRemoveSize }) {
+function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRemoveSize, readOnly }) {
   const [extraRows, setExtraRows] = useState([]);
   const [addingKey, setAddingKey] = useState("");
   const [newSizeLabel, setNewSizeLabel] = useState("");
@@ -1630,13 +1732,15 @@ function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRem
               <tr key={k} style={{ borderBottom: "1px solid #E5E5E5" }}>
                 <td style={{ padding: "7px 10px", fontSize: 13 }}>{l}</td>
                 {sizes.map((s) => (
-                  <td key={s.size_label} style={{ padding: "5px 8px", textAlign: "center" }}>
-                    <input
-                      value={s.measurements[k] || ""}
-                      onChange={(e) => onChangeCell(s.size_label, k, e.target.value)}
-                      onBlur={() => onCellBlur && onCellBlur(s.size_label, k)}
-                      style={{ width: 52, textAlign: "center", border: "1px solid #C9CDD3", borderRadius: 3, padding: "4px 2px", fontSize: 12.5 }}
-                    />
+                  <td key={s.size_label} style={{ padding: "5px 8px", textAlign: "center", fontSize: 13 }}>
+                    {readOnly ? (s.measurements[k] || "—") : (
+                      <input
+                        value={s.measurements[k] || ""}
+                        onChange={(e) => onChangeCell(s.size_label, k, e.target.value)}
+                        onBlur={() => onCellBlur && onCellBlur(s.size_label, k)}
+                        style={{ width: 52, textAlign: "center", border: "1px solid #C9CDD3", borderRadius: 3, padding: "4px 2px", fontSize: 12.5 }}
+                      />
+                    )}
                   </td>
                 ))}
               </tr>
@@ -1645,7 +1749,7 @@ function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRem
         </table>
       )}
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      {!readOnly && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {unusedFields.length > 0 && (
           <>
             <select value={addingKey} onChange={(e) => setAddingKey(e.target.value)} style={{ ...inputStyle, width: 170 }}>
@@ -1666,7 +1770,7 @@ function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRem
               style={{ background: newSizeLabel ? "#1A1A1A" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add Size</button>
           </>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -1830,27 +1934,6 @@ function ManageModels({ config, refresh, flash, session }) {
       <button disabled={creating} onClick={create} style={{ background: creating ? "#C9CDD3" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontSize: 13, fontWeight: 700, marginTop: 14, marginBottom: 28 }}>
         {creating ? "Creating…" : "Create Model"}
       </button>
-
-      <div style={{ display: "grid", gap: 24 }}>
-        {config.models.map((m) => (
-          <div key={m.id} style={{ border: "1px solid #E5E5E5", padding: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                {m.photoUrl && <img src={m.photoUrl} alt={m.modelNo} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 3 }} />}
-                <div>
-                  <strong style={{ fontSize: 15 }}>{m.modelNo}</strong>{m.styleName ? ` — ${m.styleName}` : ""}
-                  <div style={{ fontSize: 12, color: "#8a8a8a" }}>{[m.collectionName, m.category, m.season].filter(Boolean).join(" · ")}</div>
-                </div>
-              </div>
-              <a className="link" style={{ color: "#C1302B" }} onClick={() => remove(m.id)}>Remove Model</a>
-            </div>
-            {m.description && <div style={{ fontSize: 13, color: "#4A5468", marginBottom: 12 }}>{m.description}</div>}
-            <ModelImages model={m} refresh={refresh} flash={flash} />
-            <ModelColors model={m} refresh={refresh} flash={flash} />
-            <ModelSizes model={m} refresh={refresh} flash={flash} />
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
