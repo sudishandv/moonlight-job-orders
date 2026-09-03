@@ -1333,11 +1333,15 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack }) {
   const [images, setImages] = useState([]);
   const [colors, setColors] = useState([]);
   const [sizes, setSizes] = useState([]);
+  const [fabrics, setFabrics] = useState([]);
+  const [trims, setTrims] = useState([]);
 
   useEffect(() => {
     supabase.from("model_images").select("*").eq("model_id", model.id).then(({ data }) => setImages(data || []));
     supabase.from("model_colors").select("*").eq("model_id", model.id).then(({ data }) => setColors(data || []));
     supabase.from("model_sizes").select("*").eq("model_id", model.id).then(({ data }) => setSizes(data || []));
+    supabase.from("model_fabrics").select("*").eq("model_id", model.id).then(({ data }) => setFabrics(data || []));
+    supabase.from("model_trims").select("*").eq("model_id", model.id).then(({ data }) => setTrims(data || []));
   }, [model.id]);
 
   const removeModel = async () => {
@@ -1384,6 +1388,40 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack }) {
                   {c.swatch_url && <img src={c.swatch_url} alt={c.color_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 </div>
                 <div style={{ fontSize: 10, marginTop: 2 }}>{c.color_name}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {canEdit ? <ModelFabrics model={model} refresh={refresh} flash={flash} /> : fabrics.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>FABRIC SWATCHES</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {fabrics.map((f) => (
+              <div key={f.id} style={{ textAlign: "center", width: 90 }}>
+                <div style={{ width: 70, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto" }}>
+                  {f.swatch_url && <img src={f.swatch_url} alt={f.fabric_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                </div>
+                <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{f.fabric_role}</div>
+                <div style={{ fontSize: 10, color: "#8a8a8a" }}>{f.fabric_name}{f.fabric_code ? ` · ${f.fabric_code}` : ""}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {canEdit ? <ModelTrims model={model} refresh={refresh} flash={flash} /> : trims.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>TRIMS & ACCESSORIES</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {trims.map((t) => (
+              <div key={t.id} style={{ textAlign: "center", width: 80 }}>
+                <div style={{ width: 60, height: 60, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto" }}>
+                  {t.image_url && <img src={t.image_url} alt={t.item_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                </div>
+                <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{t.item_name}</div>
+                <div style={{ fontSize: 10, color: "#8a8a8a" }}>{t.item_code}</div>
               </div>
             ))}
           </div>
@@ -1826,6 +1864,29 @@ function ManageModels({ config, refresh, flash, session }) {
   };
   const removePendingColor = (i) => setPendingColors((c) => c.filter((_, idx) => idx !== i));
 
+  const [pendingFabrics, setPendingFabrics] = useState([]);
+  const [newFabricRole, setNewFabricRole] = useState("Main Fabric");
+  const [newFabricName, setNewFabricName] = useState("");
+  const [newFabricCode, setNewFabricCode] = useState("");
+  const [newFabricFile, setNewFabricFile] = useState(null);
+  const addPendingFabric = () => {
+    if (!newFabricName.trim()) return;
+    setPendingFabrics((f) => [...f, { role: newFabricRole, name: newFabricName, code: newFabricCode, file: newFabricFile }]);
+    setNewFabricName(""); setNewFabricCode(""); setNewFabricFile(null);
+  };
+  const removePendingFabric = (i) => setPendingFabrics((f) => f.filter((_, idx) => idx !== i));
+
+  const [pendingTrims, setPendingTrims] = useState([]);
+  const [newTrimName, setNewTrimName] = useState("");
+  const [newTrimCode, setNewTrimCode] = useState("");
+  const [newTrimFile, setNewTrimFile] = useState(null);
+  const addPendingTrim = () => {
+    if (!newTrimName.trim()) return;
+    setPendingTrims((t) => [...t, { name: newTrimName, code: newTrimCode, file: newTrimFile }]);
+    setNewTrimName(""); setNewTrimCode(""); setNewTrimFile(null);
+  };
+  const removePendingTrim = (i) => setPendingTrims((t) => t.filter((_, idx) => idx !== i));
+
   const [pendingSizes, setPendingSizes] = useState([]);
   const changePendingCell = (sizeLabel, key, value) => setPendingSizes((prev) => prev.map((s) => s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
   const addPendingSize = (label) => setPendingSizes((prev) => [...prev, { size_label: label, measurements: {} }]);
@@ -1867,11 +1928,30 @@ function ManageModels({ config, refresh, flash, session }) {
       await supabase.from("model_colors").insert({ model_id: inserted.id, color_name: c.name, swatch_url: swatchUrl });
     }
 
+    for (const f of pendingFabrics) {
+      let swatchUrl = null;
+      if (f.file) {
+        const path = `model-fabrics/${inserted.id}-${Date.now()}-${f.file.name}`;
+        const { error: upErr } = await supabase.storage.from("attachments").upload(path, f.file);
+        if (!upErr) { const { data } = supabase.storage.from("attachments").getPublicUrl(path); swatchUrl = data.publicUrl; }
+      }
+      await supabase.from("model_fabrics").insert({ model_id: inserted.id, fabric_role: f.role, fabric_name: f.name, fabric_code: f.code, swatch_url: swatchUrl });
+    }
+    for (const t of pendingTrims) {
+      let imageUrl = null;
+      if (t.file) {
+        const path = `model-trims/${inserted.id}-${Date.now()}-${t.file.name}`;
+        const { error: upErr } = await supabase.storage.from("attachments").upload(path, t.file);
+        if (!upErr) { const { data } = supabase.storage.from("attachments").getPublicUrl(path); imageUrl = data.publicUrl; }
+      }
+      await supabase.from("model_trims").insert({ model_id: inserted.id, item_name: t.name, item_code: t.code, image_url: imageUrl });
+    }
+
     for (const s of pendingSizes) {
       await supabase.from("model_sizes").insert({ model_id: inserted.id, size_label: s.size_label, measurements: s.measurements });
     }
 
-    setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingSizes([]);
+    setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingFabrics([]); setPendingTrims([]); setPendingSizes([]);
     setCreating(false);
     await refresh();
     flash("Model created" + (pendingColors.length || pendingSizes.length || Object.keys(photoFiles).length ? " with photos, colors, and sizes" : ""));
@@ -1926,6 +2006,53 @@ function ManageModels({ config, refresh, flash, session }) {
         <input placeholder="Color name" value={newColorName} onChange={(e) => setNewColorName(e.target.value)} style={{ ...inputStyle, width: 140 }} />
         <input type="file" accept="image/*" onChange={(e) => setNewColorFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
         <button type="button" onClick={addPendingColor} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Color</button>
+      </div>
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>FABRIC SWATCHES</div>
+      {pendingFabrics.length > 0 && (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+          {pendingFabrics.map((f, i) => (
+            <div key={i} style={{ textAlign: "center", width: 90 }}>
+              <div style={{ width: 70, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto" }}>
+                {f.file && <img src={URL.createObjectURL(f.file)} alt={f.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+              </div>
+              <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{f.role}</div>
+              <div style={{ fontSize: 10, color: "#8a8a8a" }}>{f.name}{f.code ? ` · ${f.code}` : ""}</div>
+              <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingFabric(i)}>Remove</a>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+        <select value={newFabricRole} onChange={(e) => setNewFabricRole(e.target.value)} style={{ ...inputStyle, width: 120 }}>
+          {["Main Fabric", "Lining", "Other"].map((r) => <option key={r}>{r}</option>)}
+        </select>
+        <input placeholder="Fabric name" value={newFabricName} onChange={(e) => setNewFabricName(e.target.value)} style={{ ...inputStyle, width: 130 }} />
+        <input placeholder="Code" value={newFabricCode} onChange={(e) => setNewFabricCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
+        <input type="file" accept="image/*" onChange={(e) => setNewFabricFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
+        <button type="button" onClick={addPendingFabric} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Fabric</button>
+      </div>
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>TRIMS & ACCESSORIES</div>
+      {pendingTrims.length > 0 && (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+          {pendingTrims.map((t, i) => (
+            <div key={i} style={{ textAlign: "center", width: 80 }}>
+              <div style={{ width: 60, height: 60, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto" }}>
+                {t.file && <img src={URL.createObjectURL(t.file)} alt={t.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+              </div>
+              <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{t.name}</div>
+              <div style={{ fontSize: 10, color: "#8a8a8a" }}>{t.code}</div>
+              <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingTrim(i)}>Remove</a>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+        <input placeholder="Item name (e.g. Button)" value={newTrimName} onChange={(e) => setNewTrimName(e.target.value)} style={{ ...inputStyle, width: 150 }} />
+        <input placeholder="Code" value={newTrimCode} onChange={(e) => setNewTrimCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
+        <input type="file" accept="image/*" onChange={(e) => setNewTrimFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
+        <button type="button" onClick={addPendingTrim} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Item</button>
       </div>
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>SIZE MEASUREMENTS</div>
@@ -2022,6 +2149,104 @@ function ModelColors({ model, refresh, flash }) {
         <input placeholder="Color name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, width: 140 }} />
         <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
         <button onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Color</button>
+      </div>
+    </div>
+  );
+}
+
+function ModelFabrics({ model, refresh, flash }) {
+  const [fabrics, setFabrics] = useState([]);
+  const [role, setRole] = useState("Main Fabric");
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [file, setFile] = useState(null);
+
+  const load = () => supabase.from("model_fabrics").select("*").eq("model_id", model.id).then(({ data }) => setFabrics(data || []));
+  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+
+  const add = async () => {
+    if (!name.trim()) return;
+    let swatchUrl = null;
+    if (file) {
+      const path = `model-fabrics/${model.id}-${Date.now()}-${file.name}`;
+      const { error } = await supabase.storage.from("attachments").upload(path, file);
+      if (!error) { const { data } = supabase.storage.from("attachments").getPublicUrl(path); swatchUrl = data.publicUrl; }
+    }
+    await supabase.from("model_fabrics").insert({ model_id: model.id, fabric_role: role, fabric_name: name, fabric_code: code, swatch_url: swatchUrl });
+    setName(""); setCode(""); setFile(null); await load(); flash("Fabric added");
+  };
+  const remove = async (id) => { await supabase.from("model_fabrics").delete().eq("id", id); await load(); };
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>FABRIC SWATCHES</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+        {fabrics.map((f) => (
+          <div key={f.id} style={{ textAlign: "center", width: 90 }}>
+            <div style={{ width: 70, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto" }}>
+              {f.swatch_url && <img src={f.swatch_url} alt={f.fabric_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+            </div>
+            <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{f.fabric_role}</div>
+            <div style={{ fontSize: 10, color: "#8a8a8a" }}>{f.fabric_name}{f.fabric_code ? ` · ${f.fabric_code}` : ""}</div>
+            <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => remove(f.id)}>Remove</a>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <select value={role} onChange={(e) => setRole(e.target.value)} style={{ ...inputStyle, width: 120 }}>
+          {["Main Fabric", "Lining", "Other"].map((r) => <option key={r}>{r}</option>)}
+        </select>
+        <input placeholder="Fabric name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, width: 130 }} />
+        <input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
+        <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
+        <button type="button" onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Fabric</button>
+      </div>
+    </div>
+  );
+}
+
+function ModelTrims({ model, refresh, flash }) {
+  const [trims, setTrims] = useState([]);
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [file, setFile] = useState(null);
+
+  const load = () => supabase.from("model_trims").select("*").eq("model_id", model.id).then(({ data }) => setTrims(data || []));
+  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+
+  const add = async () => {
+    if (!name.trim()) return;
+    let imageUrl = null;
+    if (file) {
+      const path = `model-trims/${model.id}-${Date.now()}-${file.name}`;
+      const { error } = await supabase.storage.from("attachments").upload(path, file);
+      if (!error) { const { data } = supabase.storage.from("attachments").getPublicUrl(path); imageUrl = data.publicUrl; }
+    }
+    await supabase.from("model_trims").insert({ model_id: model.id, item_name: name, item_code: code, image_url: imageUrl });
+    setName(""); setCode(""); setFile(null); await load(); flash("Trim/accessory added");
+  };
+  const remove = async (id) => { await supabase.from("model_trims").delete().eq("id", id); await load(); };
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>TRIMS & ACCESSORIES</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+        {trims.map((t) => (
+          <div key={t.id} style={{ textAlign: "center", width: 80 }}>
+            <div style={{ width: 60, height: 60, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto" }}>
+              {t.image_url && <img src={t.image_url} alt={t.item_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+            </div>
+            <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{t.item_name}</div>
+            <div style={{ fontSize: 10, color: "#8a8a8a" }}>{t.item_code}</div>
+            <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => remove(t.id)}>Remove</a>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input placeholder="Item name (e.g. Button)" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, width: 150 }} />
+        <input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
+        <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
+        <button type="button" onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Item</button>
       </div>
     </div>
   );
