@@ -151,6 +151,26 @@ function FileButton({ onChange, label, accept }) {
   );
 }
 
+function ModelThumb({ model, size, style }) {
+  const [url, setUrl] = useState(model?.photoUrl || null);
+  useEffect(() => {
+    if (model?.photoUrl) { setUrl(model.photoUrl); return; }
+    if (!model?.id) { setUrl(null); return; }
+    supabase.from("model_images").select("*").eq("model_id", model.id).then(({ data }) => {
+      if (!data || data.length === 0) { setUrl(null); return; }
+      const front = data.find((d) => d.view_label === "Front");
+      setUrl((front || data[0]).url);
+    });
+  }, [model?.id, model?.photoUrl]);
+
+  const s = size || 70;
+  return (
+    <div style={{ width: s, height: s, background: "#F2F2F2", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, ...style }}>
+      {url ? <img src={url} alt={model?.modelNo || ""} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 10, color: "#8a8a8a" }}>No photo</span>}
+    </div>
+  );
+}
+
 /* ---------------- db <-> app field mapping ---------------- */
 
 function dbToOrder(r) {
@@ -742,9 +762,7 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
 
       {model && (
         <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 20, border: "1px solid #C9CDD3", padding: 18, marginBottom: 18 }}>
-          <div style={{ background: "#F2F2F2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#8a8a8a", textAlign: "center", padding: 10, overflow: "hidden" }}>
-            {model.photoUrl ? <img src={model.photoUrl} alt={model.modelNo} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <>Product photo<br />on file for {model.modelNo}</>}
-          </div>
+          <ModelThumb model={model} size="100%" style={{ borderRadius: 0 }} />
           <div>
             <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>DEFAULT PRODUCT DETAILS</div>
             {MODEL_FIELDS.map(([k, l]) => <div key={k} style={{ fontSize: 13, marginBottom: 3 }}><strong>{l.toUpperCase()}:</strong> {model[k] || "—"}</div>)}
@@ -1158,7 +1176,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         const m = config.models.find((mm) => mm.modelNo === pickModel);
         return m ? (
           <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16, border: "1px solid #E5E5E5", padding: 10 }}>
-            {m.photoUrl ? <img src={m.photoUrl} alt={m.modelNo} style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 3 }} /> : <div style={{ width: 70, height: 70, background: "#F2F2F2", borderRadius: 3 }} />}
+            <ModelThumb model={m} size={70} style={{ borderRadius: 3 }} />
             <div style={{ fontSize: 13 }}><strong>{m.modelNo}</strong><br />{m.possibleCuts}</div>
           </div>
         ) : null;
@@ -1713,7 +1731,7 @@ function ModelBrowser({ models, canEdit, refresh, flash }) {
         <div style={{ display: "grid", gap: 10 }}>
           {filtered.map((m) => (
             <div key={m.id} onClick={() => setSelectedId(m.id)} style={{ border: "1px solid #E5E5E5", padding: 14, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
-              {m.photoUrl ? <img src={m.photoUrl} alt={m.modelNo} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 3 }} /> : <div style={{ width: 56, height: 56, background: "#F2F2F2", borderRadius: 3 }} />}
+              <ModelThumb model={m} size={56} style={{ borderRadius: 3 }} />
               <div>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>{m.modelNo}{m.styleName ? ` — ${m.styleName}` : ""}</div>
                 <div style={{ fontSize: 12, color: "#8a8a8a" }}>{[m.collectionName, m.category, m.productType, m.season].filter(Boolean).join(" · ") || "No details yet"}</div>
@@ -2320,74 +2338,77 @@ function ManageModels({ config, refresh, flash, session }) {
 
         <div style={{ ...cardStyle, alignContent: "flex-start" }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>COLOR VARIATIONS</div>
-          {pendingColors.length > 0 && (
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-              {pendingColors.map((c, i) => (
-                <div key={i} style={{ textAlign: "center" }}>
-                  <div onClick={() => c.file && setLightbox(URL.createObjectURL(c.file))} style={{ width: 50, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", cursor: c.file ? "zoom-in" : "default" }}>
-                    {c.file && <img src={URL.createObjectURL(c.file)} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
-                  </div>
-                  <div style={{ fontSize: 10.5, marginTop: 2 }}>{c.name}</div>
-                  <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingColor(i)}>Remove</a>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {pendingColors.map((c, i) => (
+              <div key={i} style={{ textAlign: "center" }}>
+                <div onClick={() => c.file && setLightbox(URL.createObjectURL(c.file))} style={{ width: 50, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", cursor: c.file ? "zoom-in" : "default" }}>
+                  {c.file && <img src={URL.createObjectURL(c.file)} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 </div>
-              ))}
+                <div style={{ fontSize: 10.5, marginTop: 2 }}>{c.name}</div>
+                <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingColor(i)}>Remove</a>
+              </div>
+            ))}
+            <div style={{ textAlign: "center", width: 110 }}>
+              <div style={{ width: 110, height: 90, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+                <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
+              </div>
+              <input placeholder="Color name" value={newColorName} onChange={(e) => setNewColorName(e.target.value)} style={{ ...inputStyle, fontSize: 11, padding: "5px 6px", marginBottom: 4, textAlign: "center" }} />
+              <FileButton label="Photo" onChange={(e) => setNewColorFile(e.target.files?.[0] || null)} />
+              <button type="button" onClick={addPendingColor} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
             </div>
-          )}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-            <input placeholder="Color name" value={newColorName} onChange={(e) => setNewColorName(e.target.value)} style={{ ...inputStyle, width: 140 }} />
-            <FileButton onChange={(e) => setNewColorFile(e.target.files?.[0] || null)} />
-            <button type="button" onClick={addPendingColor} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", fontSize: 12, fontWeight: 700 }}>+ Add Color</button>
           </div>
         </div>
 
         <div style={{ ...cardStyle, alignContent: "flex-start" }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>FABRIC SWATCHES</div>
-          {pendingFabrics.length > 0 && (
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-              {pendingFabrics.map((f, i) => (
-                <div key={i} style={{ textAlign: "center", width: 90 }}>
-                  <div onClick={() => f.file && setLightbox(URL.createObjectURL(f.file))} style={{ width: 70, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: f.file ? "zoom-in" : "default" }}>
-                    {f.file && <img src={URL.createObjectURL(f.file)} alt={f.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
-                  </div>
-                  <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{f.role}</div>
-                  <div style={{ fontSize: 10, color: "#8a8a8a" }}>{f.name}{f.code ? ` · ${f.code}` : ""}</div>
-                  <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingFabric(i)}>Remove</a>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {pendingFabrics.map((f, i) => (
+              <div key={i} style={{ textAlign: "center", width: 90 }}>
+                <div onClick={() => f.file && setLightbox(URL.createObjectURL(f.file))} style={{ width: 70, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: f.file ? "zoom-in" : "default" }}>
+                  {f.file && <img src={URL.createObjectURL(f.file)} alt={f.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 </div>
-              ))}
+                <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{f.role}</div>
+                <div style={{ fontSize: 10, color: "#8a8a8a" }}>{f.name}{f.code ? ` · ${f.code}` : ""}</div>
+                <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingFabric(i)}>Remove</a>
+              </div>
+            ))}
+            <div style={{ textAlign: "center", width: 120 }}>
+              <div style={{ width: 120, height: 70, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+                <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
+              </div>
+              <select value={newFabricRole} onChange={(e) => setNewFabricRole(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }}>
+                {["Main Fabric", "Lining", "Other"].map((r) => <option key={r}>{r}</option>)}
+              </select>
+              <input placeholder="Fabric name" value={newFabricName} onChange={(e) => setNewFabricName(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
+              <input placeholder="Code" value={newFabricCode} onChange={(e) => setNewFabricCode(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
+              <FileButton label="Photo" onChange={(e) => setNewFabricFile(e.target.files?.[0] || null)} />
+              <button type="button" onClick={addPendingFabric} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
             </div>
-          )}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-            <select value={newFabricRole} onChange={(e) => setNewFabricRole(e.target.value)} style={{ ...inputStyle, width: 120 }}>
-              {["Main Fabric", "Lining", "Other"].map((r) => <option key={r}>{r}</option>)}
-            </select>
-            <input placeholder="Fabric name" value={newFabricName} onChange={(e) => setNewFabricName(e.target.value)} style={{ ...inputStyle, width: 130 }} />
-            <input placeholder="Code" value={newFabricCode} onChange={(e) => setNewFabricCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
-            <FileButton onChange={(e) => setNewFabricFile(e.target.files?.[0] || null)} />
-            <button type="button" onClick={addPendingFabric} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", fontSize: 12, fontWeight: 700 }}>+ Add Fabric</button>
           </div>
         </div>
 
         <div style={{ ...cardStyle, alignContent: "flex-start" }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>TRIMS & ACCESSORIES</div>
-          {pendingTrims.length > 0 && (
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-              {pendingTrims.map((t, i) => (
-                <div key={i} style={{ textAlign: "center", width: 80 }}>
-                  <div onClick={() => t.file && setLightbox(URL.createObjectURL(t.file))} style={{ width: 60, height: 60, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: t.file ? "zoom-in" : "default" }}>
-                    {t.file && <img src={URL.createObjectURL(t.file)} alt={t.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
-                  </div>
-                  <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{t.name}</div>
-                  <div style={{ fontSize: 10, color: "#8a8a8a" }}>{t.code}</div>
-                  <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingTrim(i)}>Remove</a>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {pendingTrims.map((t, i) => (
+              <div key={i} style={{ textAlign: "center", width: 80 }}>
+                <div onClick={() => t.file && setLightbox(URL.createObjectURL(t.file))} style={{ width: 60, height: 60, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: t.file ? "zoom-in" : "default" }}>
+                  {t.file && <img src={URL.createObjectURL(t.file)} alt={t.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 </div>
-              ))}
+                <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{t.name}</div>
+                <div style={{ fontSize: 10, color: "#8a8a8a" }}>{t.code}</div>
+                <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingTrim(i)}>Remove</a>
+              </div>
+            ))}
+            <div style={{ textAlign: "center", width: 110 }}>
+              <div style={{ width: 110, height: 80, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+                <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
+              </div>
+              <input placeholder="Item name" value={newTrimName} onChange={(e) => setNewTrimName(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
+              <input placeholder="Code" value={newTrimCode} onChange={(e) => setNewTrimCode(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
+              <FileButton label="Photo" onChange={(e) => setNewTrimFile(e.target.files?.[0] || null)} />
+              <button type="button" onClick={addPendingTrim} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
             </div>
-          )}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-            <input placeholder="Item name (e.g. Button)" value={newTrimName} onChange={(e) => setNewTrimName(e.target.value)} style={{ ...inputStyle, width: 150 }} />
-            <input placeholder="Code" value={newTrimCode} onChange={(e) => setNewTrimCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
-            <FileButton onChange={(e) => setNewTrimFile(e.target.files?.[0] || null)} />
-            <button type="button" onClick={addPendingTrim} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", fontSize: 12, fontWeight: 700 }}>+ Add Item</button>
           </div>
         </div>
       </div>
@@ -2546,7 +2567,7 @@ function ModelColors({ model, refresh, flash }) {
   return (
     <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
       <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>COLOR VARIATIONS</div>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         {colors.map((c) => (
           <div key={c.id} style={{ textAlign: "center", position: "relative" }}>
             <div onClick={() => c.swatch_url && setLightbox(c.swatch_url)} style={{ width: 50, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", cursor: c.swatch_url ? "zoom-in" : "default" }}>
@@ -2556,11 +2577,14 @@ function ModelColors({ model, refresh, flash }) {
             <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => remove(c.id)}>Remove</a>
           </div>
         ))}
-      </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <input placeholder="Color name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, width: 140 }} />
-        <FileButton onChange={(e) => setFile(e.target.files?.[0] || null)} />
-        <button onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", fontSize: 12, fontWeight: 700 }}>+ Add Color</button>
+        <div style={{ textAlign: "center", width: 110 }}>
+          <div style={{ width: 110, height: 90, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+            <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
+          </div>
+          <input placeholder="Color name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, fontSize: 11, padding: "5px 6px", marginBottom: 4, textAlign: "center" }} />
+          <FileButton label="Photo" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          <button type="button" onClick={add} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
+        </div>
       </div>
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
     </div>
@@ -2594,7 +2618,7 @@ function ModelFabrics({ model, refresh, flash }) {
   return (
     <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
       <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>FABRIC SWATCHES</div>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         {fabrics.map((f) => (
           <div key={f.id} style={{ textAlign: "center", width: 90 }}>
             <div onClick={() => f.swatch_url && setLightbox(f.swatch_url)} style={{ width: 70, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: f.swatch_url ? "zoom-in" : "default" }}>
@@ -2605,15 +2629,18 @@ function ModelFabrics({ model, refresh, flash }) {
             <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => remove(f.id)}>Remove</a>
           </div>
         ))}
-      </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <select value={role} onChange={(e) => setRole(e.target.value)} style={{ ...inputStyle, width: 120 }}>
-          {["Main Fabric", "Lining", "Other"].map((r) => <option key={r}>{r}</option>)}
-        </select>
-        <input placeholder="Fabric name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, width: 130 }} />
-        <input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
-        <FileButton onChange={(e) => setFile(e.target.files?.[0] || null)} />
-        <button type="button" onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", fontSize: 12, fontWeight: 700 }}>+ Add Fabric</button>
+        <div style={{ textAlign: "center", width: 120 }}>
+          <div style={{ width: 120, height: 70, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+            <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
+          </div>
+          <select value={role} onChange={(e) => setRole(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }}>
+            {["Main Fabric", "Lining", "Other"].map((r) => <option key={r}>{r}</option>)}
+          </select>
+          <input placeholder="Fabric name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
+          <input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
+          <FileButton label="Photo" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          <button type="button" onClick={add} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
+        </div>
       </div>
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
     </div>
@@ -2646,7 +2673,7 @@ function ModelTrims({ model, refresh, flash }) {
   return (
     <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
       <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>TRIMS & ACCESSORIES</div>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         {trims.map((t) => (
           <div key={t.id} style={{ textAlign: "center", width: 80 }}>
             <div onClick={() => t.image_url && setLightbox(t.image_url)} style={{ width: 60, height: 60, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto", cursor: t.image_url ? "zoom-in" : "default" }}>
@@ -2657,12 +2684,15 @@ function ModelTrims({ model, refresh, flash }) {
             <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => remove(t.id)}>Remove</a>
           </div>
         ))}
-      </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <input placeholder="Item name (e.g. Button)" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, width: 150 }} />
-        <input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
-        <FileButton onChange={(e) => setFile(e.target.files?.[0] || null)} />
-        <button type="button" onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", fontSize: 12, fontWeight: 700 }}>+ Add Item</button>
+        <div style={{ textAlign: "center", width: 110 }}>
+          <div style={{ width: 110, height: 80, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+            <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
+          </div>
+          <input placeholder="Item name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
+          <input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
+          <FileButton label="Photo" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          <button type="button" onClick={add} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
+        </div>
       </div>
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
     </div>
