@@ -2214,155 +2214,177 @@ function ManageModels({ config, refresh, flash, session }) {
 
   const remove = async (id) => { await supabase.from("models").delete().eq("id", id); await refresh(); };
 
+  const cardStyle = { background: "#fff", border: "1px solid #E5E5E5", borderRadius: 8, padding: "18px 20px" };
+
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto" }}>
-      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 20, letterSpacing: "0.05em", marginBottom: 20 }}>ADD / REMOVE MODEL</h2>
+    <div style={{ maxWidth: 1400, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ADD / REMOVE MODEL</h2>
 
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>STYLE OVERVIEW</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-        <Field label="Style No (Model No)"><input style={inputStyle} value={form.modelNo} onChange={set("modelNo")} /></Field>
-        {STYLE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form[k]} onChange={set(k)} /></Field>)}
-      </div>
-      <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.description} onChange={set("description")} /></Field>
-
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px" }}>KEY DETAILS / MANUFACTURING SPECS</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-        {MODEL_FIELDS.slice(1).map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form[k]} onChange={set(k)} /></Field>)}
-      </div>
-
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>PHOTOS</div>
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 8 }}>
-        {PHOTO_VIEWS.map((view) => (
-          <div key={view} style={{ textAlign: "center" }}>
-            <div style={{ width: 80, height: 80, background: "#F2F2F2", borderRadius: 3, overflow: "hidden", marginBottom: 4, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              {photoFiles[view] ? <img src={URL.createObjectURL(photoFiles[view])} alt={view} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 11, color: "#8a8a8a" }}>No photo</span>}
-            </div>
-            <div style={{ fontSize: 11, marginBottom: 4 }}>{view}</div>
-            <input type="file" accept="image/*" style={{ fontSize: 10, width: 90 }} onChange={setPhotoFile(view)} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 16, marginBottom: 16 }}>
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>STYLE OVERVIEW</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+            <Field label="Style No (Model No)"><input style={inputStyle} value={form.modelNo} onChange={set("modelNo")} /></Field>
+            {STYLE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form[k]} onChange={set(k)} /></Field>)}
           </div>
-        ))}
-      </div>
-
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>COLOR VARIATIONS</div>
-      {pendingColors.length > 0 && (
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-          {pendingColors.map((c, i) => (
-            <div key={i} style={{ textAlign: "center" }}>
-              <div style={{ width: 50, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5" }}>
-                {c.file && <img src={URL.createObjectURL(c.file)} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
-              </div>
-              <div style={{ fontSize: 10.5, marginTop: 2 }}>{c.name}</div>
-              <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingColor(i)}>Remove</a>
-            </div>
-          ))}
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.description} onChange={set("description")} /></Field>
         </div>
-      )}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-        <input placeholder="Color name" value={newColorName} onChange={(e) => setNewColorName(e.target.value)} style={{ ...inputStyle, width: 140 }} />
-        <input type="file" accept="image/*" onChange={(e) => setNewColorFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
-        <button type="button" onClick={addPendingColor} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Color</button>
-      </div>
 
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>FABRIC SWATCHES</div>
-      {pendingFabrics.length > 0 && (
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-          {pendingFabrics.map((f, i) => (
-            <div key={i} style={{ textAlign: "center", width: 90 }}>
-              <div style={{ width: 70, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto" }}>
-                {f.file && <img src={URL.createObjectURL(f.file)} alt={f.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
-              </div>
-              <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{f.role}</div>
-              <div style={{ fontSize: 10, color: "#8a8a8a" }}>{f.name}{f.code ? ` · ${f.code}` : ""}</div>
-              <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingFabric(i)}>Remove</a>
-            </div>
-          ))}
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>KEY DETAILS / MANUFACTURING SPECS</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+            {MODEL_FIELDS.slice(1).map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form[k]} onChange={set(k)} /></Field>)}
+          </div>
         </div>
-      )}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-        <select value={newFabricRole} onChange={(e) => setNewFabricRole(e.target.value)} style={{ ...inputStyle, width: 120 }}>
-          {["Main Fabric", "Lining", "Other"].map((r) => <option key={r}>{r}</option>)}
-        </select>
-        <input placeholder="Fabric name" value={newFabricName} onChange={(e) => setNewFabricName(e.target.value)} style={{ ...inputStyle, width: 130 }} />
-        <input placeholder="Code" value={newFabricCode} onChange={(e) => setNewFabricCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
-        <input type="file" accept="image/*" onChange={(e) => setNewFabricFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
-        <button type="button" onClick={addPendingFabric} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Fabric</button>
       </div>
 
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>TRIMS & ACCESSORIES</div>
-      {pendingTrims.length > 0 && (
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-          {pendingTrims.map((t, i) => (
-            <div key={i} style={{ textAlign: "center", width: 80 }}>
-              <div style={{ width: 60, height: 60, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto" }}>
-                {t.file && <img src={URL.createObjectURL(t.file)} alt={t.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 16 }}>
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>PHOTOS</div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 8 }}>
+            {PHOTO_VIEWS.map((view) => (
+              <div key={view} style={{ textAlign: "center" }}>
+                <div style={{ width: 80, height: 80, background: "#F2F2F2", borderRadius: 3, overflow: "hidden", marginBottom: 4, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {photoFiles[view] ? <img src={URL.createObjectURL(photoFiles[view])} alt={view} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 11, color: "#8a8a8a" }}>No photo</span>}
+                </div>
+                <div style={{ fontSize: 11, marginBottom: 4 }}>{view}</div>
+                <input type="file" accept="image/*" style={{ fontSize: 10, width: 90 }} onChange={setPhotoFile(view)} />
               </div>
-              <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{t.name}</div>
-              <div style={{ fontSize: 10, color: "#8a8a8a" }}>{t.code}</div>
-              <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingTrim(i)}>Remove</a>
-            </div>
-          ))}
-        </div>
-      )}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-        <input placeholder="Item name (e.g. Button)" value={newTrimName} onChange={(e) => setNewTrimName(e.target.value)} style={{ ...inputStyle, width: 150 }} />
-        <input placeholder="Code" value={newTrimCode} onChange={(e) => setNewTrimCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
-        <input type="file" accept="image/*" onChange={(e) => setNewTrimFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
-        <button type="button" onClick={addPendingTrim} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Item</button>
-      </div>
-
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>PATTERN & CUTTING SUMMARY</div>
-      {pendingPatterns.length > 0 && (
-        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
-          <thead>
-            <tr style={{ background: "#F7F7F5" }}>
-              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Pattern No</th>
-              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Piece Name</th>
-              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Material</th>
-              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Cut Qty</th>
-              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Cutting Instruction</th>
-              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Diagram</th>
-              <th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {pendingPatterns.map((p, i) => (
-              <tr key={i} style={{ borderBottom: "1px solid #E5E5E5" }}>
-                <td style={{ padding: "6px 8px", fontSize: 12.5 }} className="mono">{p.pattern_no || "—"}</td>
-                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.piece_name}</td>
-                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.material || "—"}</td>
-                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.cut_qty || "—"}</td>
-                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.cutting_instruction || "—"}</td>
-                <td style={{ padding: "6px 8px" }}>{p.diagramFile ? <img src={URL.createObjectURL(p.diagramFile)} alt="diagram" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 3, border: "1px solid #E5E5E5" }} /> : "—"}</td>
-                <td style={{ padding: "6px 8px" }}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => removePendingPattern(i)}>Remove</a></td>
-              </tr>
             ))}
-          </tbody>
-        </table>
-      )}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-        <input placeholder="Pattern No (e.g. P01)" value={newPattern.pattern_no} onChange={setNewPatternField("pattern_no")} style={{ ...inputStyle, width: 110 }} />
-        <input placeholder="Piece Name (e.g. Front)" value={newPattern.piece_name} onChange={setNewPatternField("piece_name")} style={{ ...inputStyle, width: 130 }} />
-        <input placeholder="Material" value={newPattern.material} onChange={setNewPatternField("material")} style={{ ...inputStyle, width: 110 }} />
-        <input placeholder="Cut Qty" value={newPattern.cut_qty} onChange={setNewPatternField("cut_qty")} style={{ ...inputStyle, width: 70 }} />
-        <input placeholder="Cutting Instruction" value={newPattern.cutting_instruction} onChange={setNewPatternField("cutting_instruction")} style={{ ...inputStyle, width: 160 }} />
-        <div style={{ width: "100%" }}>
-          <div style={{ display: "flex", gap: 14, marginBottom: 6 }}>
-            <label style={{ fontSize: 12 }}><input type="radio" checked={newPatternDiagramMode === "upload"} onChange={() => setNewPatternDiagramMode("upload")} /> Upload image</label>
-            <label style={{ fontSize: 12 }}><input type="radio" checked={newPatternDiagramMode === "draw"} onChange={() => setNewPatternDiagramMode("draw")} /> Draw diagram</label>
           </div>
-          {newPatternDiagramMode === "upload" ? (
-            <input type="file" accept="image/*" onChange={(e) => setNewPatternDiagram(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
-          ) : (
-            <DrawingPad canvasRef={newPatternCanvasRef} onDrawn={setNewPatternHasDrawing} />
-          )}
         </div>
-        <button type="button" onClick={addPendingPattern} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Piece</button>
+
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>COLOR VARIATIONS</div>
+          {pendingColors.length > 0 && (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+              {pendingColors.map((c, i) => (
+                <div key={i} style={{ textAlign: "center" }}>
+                  <div style={{ width: 50, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5" }}>
+                    {c.file && <img src={URL.createObjectURL(c.file)} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                  </div>
+                  <div style={{ fontSize: 10.5, marginTop: 2 }}>{c.name}</div>
+                  <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingColor(i)}>Remove</a>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+            <input placeholder="Color name" value={newColorName} onChange={(e) => setNewColorName(e.target.value)} style={{ ...inputStyle, width: 140 }} />
+            <input type="file" accept="image/*" onChange={(e) => setNewColorFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
+            <button type="button" onClick={addPendingColor} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Color</button>
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>FABRIC SWATCHES</div>
+          {pendingFabrics.length > 0 && (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+              {pendingFabrics.map((f, i) => (
+                <div key={i} style={{ textAlign: "center", width: 90 }}>
+                  <div style={{ width: 70, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto" }}>
+                    {f.file && <img src={URL.createObjectURL(f.file)} alt={f.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                  </div>
+                  <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{f.role}</div>
+                  <div style={{ fontSize: 10, color: "#8a8a8a" }}>{f.name}{f.code ? ` · ${f.code}` : ""}</div>
+                  <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingFabric(i)}>Remove</a>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+            <select value={newFabricRole} onChange={(e) => setNewFabricRole(e.target.value)} style={{ ...inputStyle, width: 120 }}>
+              {["Main Fabric", "Lining", "Other"].map((r) => <option key={r}>{r}</option>)}
+            </select>
+            <input placeholder="Fabric name" value={newFabricName} onChange={(e) => setNewFabricName(e.target.value)} style={{ ...inputStyle, width: 130 }} />
+            <input placeholder="Code" value={newFabricCode} onChange={(e) => setNewFabricCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
+            <input type="file" accept="image/*" onChange={(e) => setNewFabricFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
+            <button type="button" onClick={addPendingFabric} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Fabric</button>
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>TRIMS & ACCESSORIES</div>
+          {pendingTrims.length > 0 && (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+              {pendingTrims.map((t, i) => (
+                <div key={i} style={{ textAlign: "center", width: 80 }}>
+                  <div style={{ width: 60, height: 60, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5", margin: "0 auto" }}>
+                    {t.file && <img src={URL.createObjectURL(t.file)} alt={t.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                  </div>
+                  <div style={{ fontSize: 10.5, marginTop: 3, fontWeight: 600 }}>{t.name}</div>
+                  <div style={{ fontSize: 10, color: "#8a8a8a" }}>{t.code}</div>
+                  <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => removePendingTrim(i)}>Remove</a>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+            <input placeholder="Item name (e.g. Button)" value={newTrimName} onChange={(e) => setNewTrimName(e.target.value)} style={{ ...inputStyle, width: 150 }} />
+            <input placeholder="Code" value={newTrimCode} onChange={(e) => setNewTrimCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
+            <input type="file" accept="image/*" onChange={(e) => setNewTrimFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
+            <button type="button" onClick={addPendingTrim} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Item</button>
+          </div>
+        </div>
       </div>
 
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>SIZE MEASUREMENTS</div>
-      <SizeMeasurementGrid sizes={pendingSizes} onChangeCell={changePendingCell} onAddSize={addPendingSize} onRemoveSize={removePendingSize} />
+      <div style={{ ...cardStyle, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>PATTERN & CUTTING SUMMARY</div>
+        {pendingPatterns.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+            <thead>
+              <tr style={{ background: "#F7F7F5" }}>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Pattern No</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Piece Name</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Material</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Cut Qty</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Cutting Instruction</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Diagram</th>
+                <th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {pendingPatterns.map((p, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid #E5E5E5" }}>
+                  <td style={{ padding: "6px 8px", fontSize: 12.5 }} className="mono">{p.pattern_no || "—"}</td>
+                  <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.piece_name}</td>
+                  <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.material || "—"}</td>
+                  <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.cut_qty || "—"}</td>
+                  <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.cutting_instruction || "—"}</td>
+                  <td style={{ padding: "6px 8px" }}>{p.diagramFile ? <img src={URL.createObjectURL(p.diagramFile)} alt="diagram" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 3, border: "1px solid #E5E5E5" }} /> : "—"}</td>
+                  <td style={{ padding: "6px 8px" }}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => removePendingPattern(i)}>Remove</a></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+          <input placeholder="Pattern No (e.g. P01)" value={newPattern.pattern_no} onChange={setNewPatternField("pattern_no")} style={{ ...inputStyle, width: 110 }} />
+          <input placeholder="Piece Name (e.g. Front)" value={newPattern.piece_name} onChange={setNewPatternField("piece_name")} style={{ ...inputStyle, width: 130 }} />
+          <input placeholder="Material" value={newPattern.material} onChange={setNewPatternField("material")} style={{ ...inputStyle, width: 110 }} />
+          <input placeholder="Cut Qty" value={newPattern.cut_qty} onChange={setNewPatternField("cut_qty")} style={{ ...inputStyle, width: 70 }} />
+          <input placeholder="Cutting Instruction" value={newPattern.cutting_instruction} onChange={setNewPatternField("cutting_instruction")} style={{ ...inputStyle, width: 160 }} />
+          <div style={{ width: "100%" }}>
+            <div style={{ display: "flex", gap: 14, marginBottom: 6 }}>
+              <label style={{ fontSize: 12 }}><input type="radio" checked={newPatternDiagramMode === "upload"} onChange={() => setNewPatternDiagramMode("upload")} /> Upload image</label>
+              <label style={{ fontSize: 12 }}><input type="radio" checked={newPatternDiagramMode === "draw"} onChange={() => setNewPatternDiagramMode("draw")} /> Draw diagram</label>
+            </div>
+            {newPatternDiagramMode === "upload" ? (
+              <input type="file" accept="image/*" onChange={(e) => setNewPatternDiagram(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
+            ) : (
+              <DrawingPad canvasRef={newPatternCanvasRef} onDrawn={setNewPatternHasDrawing} />
+            )}
+          </div>
+          <button type="button" onClick={addPendingPattern} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Piece</button>
+        </div>
+      </div>
 
-      <button disabled={creating} onClick={create} style={{ background: creating ? "#C9CDD3" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontSize: 13, fontWeight: 700, marginTop: 14, marginBottom: 28 }}>
+      <div style={{ ...cardStyle, marginBottom: 20 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>SIZE MEASUREMENTS</div>
+        <SizeMeasurementGrid sizes={pendingSizes} onChangeCell={changePendingCell} onAddSize={addPendingSize} onRemoveSize={removePendingSize} />
+      </div>
+
+      <button disabled={creating} onClick={create} style={{ width: "100%", background: creating ? "#C9CDD3" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 6, padding: "14px", fontSize: 14, fontWeight: 700, marginBottom: 28 }}>
         {creating ? "Creating…" : "Create Model"}
       </button>
     </div>
