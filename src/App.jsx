@@ -34,6 +34,12 @@ const MODEL_FIELDS = [
   ["bottomFinishing", "Bottom / Length Finishing"],
 ];
 
+const STYLE_FIELDS = [
+  ["collectionName", "Collection Name"], ["styleName", "Style Name"], ["category", "Category"],
+  ["productType", "Product Type"], ["season", "Season"],
+];
+const PHOTO_VIEWS = ["Front", "Back", "Side", "Detail"];
+
 const FITTING_FIELDS_GENERAL = [
   ["neckSize", "Neck Size"], ["shoulder", "Shoulder"], ["chest", "Chest"], ["waist", "Waist"], ["hips", "Hips"],
   ["sleeveLength", "Sleeve Length"], ["aroundArmhole", "Around Armhole"], ["bicep", "Bicep"], ["wrist", "Wrist"],
@@ -152,6 +158,8 @@ function dbToModel(r) {
     innerFabricCode: r.inner_fabric_code, otherFabric: r.other_fabric, sizeRange: r.size_range,
     requirements: r.requirements, sideFinishing: r.side_finishing, sleeveOpenFinishing: r.sleeve_open_finishing,
     armHoleFinishing: r.arm_hole_finishing, bottomFinishing: r.bottom_finishing, photoUrl: r.photo_url,
+    collectionName: r.collection_name, styleName: r.style_name, category: r.category,
+    productType: r.product_type, season: r.season, description: r.description, createdBy: r.created_by,
   };
 }
 function modelToDb(f) {
@@ -1326,18 +1334,50 @@ function ModelBrowser({ models }) {
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ITEM DETAILS</h2>
       <div style={{ display: "grid", gap: 16 }}>
-        {models.map((m) => (
-          <div key={m.id} style={{ border: "1px solid #C9CDD3", padding: 16, display: "grid", gridTemplateColumns: "160px 1fr", gap: 18 }}>
-            <div style={{ background: "#F2F2F2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#8a8a8a", textAlign: "center", overflow: "hidden" }}>
-              {m.photoUrl ? <img src={m.photoUrl} alt={m.modelNo} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <>Product photo<br />{m.modelNo}</>}
-            </div>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>{m.modelNo}</div>
-              {MODEL_FIELDS.slice(1).map(([k, l]) => <div key={k} style={{ fontSize: 13, marginBottom: 3 }}><strong>{l}:</strong> {m[k] || "—"}</div>)}
-            </div>
-          </div>
-        ))}
+        {models.map((m) => <ModelBrowserCard key={m.id} model={m} />)}
       </div>
+    </div>
+  );
+}
+
+function ModelBrowserCard({ model }) {
+  const [images, setImages] = useState([]);
+  const [colors, setColors] = useState([]);
+  useEffect(() => {
+    supabase.from("model_images").select("*").eq("model_id", model.id).then(({ data }) => setImages(data || []));
+    supabase.from("model_colors").select("*").eq("model_id", model.id).then(({ data }) => setColors(data || []));
+  }, [model.id]);
+
+  return (
+    <div style={{ border: "1px solid #C9CDD3", padding: 16 }}>
+      <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>{model.modelNo}{model.styleName ? ` — ${model.styleName}` : ""}</div>
+      <div style={{ fontSize: 12, color: "#8a8a8a", marginBottom: 10 }}>{[model.collectionName, model.category, model.season].filter(Boolean).join(" · ")}</div>
+      {model.description && <div style={{ fontSize: 13, marginBottom: 12 }}>{model.description}</div>}
+
+      {images.length > 0 && (
+        <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+          {images.map((img) => (
+            <div key={img.id} style={{ textAlign: "center" }}>
+              <img src={img.url} alt={img.view_label} style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 3 }} />
+              <div style={{ fontSize: 10.5, marginTop: 2 }}>{img.view_label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {colors.length > 0 && (
+        <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+          {colors.map((c) => (
+            <div key={c.id} style={{ textAlign: "center" }}>
+              <div style={{ width: 40, height: 40, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5" }}>
+                {c.swatch_url && <img src={c.swatch_url} alt={c.color_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+              </div>
+              <div style={{ fontSize: 10, marginTop: 2 }}>{c.color_name}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {MODEL_FIELDS.slice(1).map(([k, l]) => <div key={k} style={{ fontSize: 13, marginBottom: 3 }}><strong>{l}:</strong> {model[k] || "—"}</div>)}
     </div>
   );
 }
@@ -1486,7 +1526,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     onAdd={async (item) => { const { error } = await supabase.from("salespersons").insert(item); if (error) flash("Error: " + error.message); else { await refresh(); flash("Added"); } }}
     onRemove={async (id) => { await supabase.from("salespersons").delete().eq("id", id); await refresh(); }} />;
 
-  if (subpage === "models") return <ManageModels config={config} refresh={refresh} flash={flash} />;
+  if (subpage === "models") return <ManageModels config={config} refresh={refresh} flash={flash} session={session} />;
   if (subpage === "viewmodels") return <ModelBrowser models={config.models} />;
   if (subpage === "new") {
     return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
@@ -1601,48 +1641,149 @@ function ModelSizes({ model, refresh, flash }) {
   );
 }
 
-function ManageModels({ config, refresh, flash }) {
-  const blank = Object.fromEntries(MODEL_FIELDS.map(([k]) => [k, ""]));
+function ManageModels({ config, refresh, flash, session }) {
+  const blank = { ...Object.fromEntries(MODEL_FIELDS.map(([k]) => [k, ""])), ...Object.fromEntries(STYLE_FIELDS.map(([k]) => [k, ""])), description: "" };
   const [form, setForm] = useState(blank);
-  const [photoFile, setPhotoFile] = useState(null);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
   const add = async () => {
     if (!form.modelNo.trim()) return;
-    const { data: inserted, error } = await supabase.from("models").insert(modelToDb(form)).select().single();
+    const payload = { ...modelToDb(form) };
+    STYLE_FIELDS.forEach(([k]) => { payload[k.replace(/[A-Z]/g, (m) => "_" + m.toLowerCase())] = form[k]; });
+    payload.description = form.description;
+    payload.created_by = session.name;
+    const { error } = await supabase.from("models").insert(payload);
     if (error) { flash("Error: " + error.message); return; }
-    if (photoFile) {
-      const path = `model-photos/${Date.now()}-${photoFile.name}`;
-      const { error: upErr } = await supabase.storage.from("attachments").upload(path, photoFile);
-      if (!upErr) {
-        const { data } = supabase.storage.from("attachments").getPublicUrl(path);
-        await supabase.from("models").update({ photo_url: data.publicUrl }).eq("id", inserted.id);
-      }
-    }
-    setForm(blank); setPhotoFile(null); await refresh(); flash("Model added");
+    setForm(blank); await refresh(); flash("Model added");
   };
   const remove = async (id) => { await supabase.from("models").delete().eq("id", id); await refresh(); };
 
   return (
-    <div style={{ maxWidth: 760, margin: "0 auto" }}>
+    <div style={{ maxWidth: 900, margin: "0 auto" }}>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 20, letterSpacing: "0.05em", marginBottom: 20 }}>ADD / REMOVE MODEL</h2>
+
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>STYLE OVERVIEW</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-        {MODEL_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form[k]} onChange={set(k)} /></Field>)}
-        <Field label="Product Photo"><input type="file" accept="image/*" onChange={(e) => setPhotoFile(e.target.files?.[0] || null)} style={inputStyle} /></Field>
+        <Field label="Style No (Model No)"><input style={inputStyle} value={form.modelNo} onChange={set("modelNo")} /></Field>
+        {STYLE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form[k]} onChange={set(k)} /></Field>)}
       </div>
-      <button onClick={add} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, marginBottom: 24 }}>Add Model</button>
-      <div style={{ display: "grid", gap: 10 }}>
+      <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.description} onChange={set("description")} /></Field>
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px" }}>KEY DETAILS / MANUFACTURING SPECS</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+        {MODEL_FIELDS.slice(1).map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form[k]} onChange={set(k)} /></Field>)}
+      </div>
+
+      <button onClick={add} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, marginBottom: 28 }}>Add Model</button>
+
+      <div style={{ display: "grid", gap: 24 }}>
         {config.models.map((m) => (
-          <div key={m.id} style={{ border: "1px solid #E5E5E5", padding: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                {m.photoUrl && <img src={m.photoUrl} alt={m.modelNo} style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 3 }} />}
-                <div><strong>{m.modelNo}</strong> — {m.mainFabricCode} — {m.sizeRange}</div>
+          <div key={m.id} style={{ border: "1px solid #E5E5E5", padding: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                {m.photoUrl && <img src={m.photoUrl} alt={m.modelNo} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 3 }} />}
+                <div>
+                  <strong style={{ fontSize: 15 }}>{m.modelNo}</strong>{m.styleName ? ` — ${m.styleName}` : ""}
+                  <div style={{ fontSize: 12, color: "#8a8a8a" }}>{[m.collectionName, m.category, m.season].filter(Boolean).join(" · ")}</div>
+                </div>
               </div>
-              <a className="link" style={{ color: "#C1302B" }} onClick={() => remove(m.id)}>Remove</a>
+              <a className="link" style={{ color: "#C1302B" }} onClick={() => remove(m.id)}>Remove Model</a>
             </div>
+            {m.description && <div style={{ fontSize: 13, color: "#4A5468", marginBottom: 12 }}>{m.description}</div>}
+            <ModelImages model={m} refresh={refresh} flash={flash} />
+            <ModelColors model={m} refresh={refresh} flash={flash} />
             <ModelSizes model={m} refresh={refresh} flash={flash} />
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function ModelImages({ model, refresh, flash }) {
+  const [images, setImages] = useState([]);
+  const [uploading, setUploading] = useState("");
+
+  const load = () => supabase.from("model_images").select("*").eq("model_id", model.id).then(({ data }) => setImages(data || []));
+  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+
+  const upload = async (viewLabel, file) => {
+    if (!file) return;
+    setUploading(viewLabel);
+    const path = `model-photos/${model.id}-${viewLabel}-${Date.now()}-${file.name}`;
+    const { error } = await supabase.storage.from("attachments").upload(path, file);
+    if (!error) {
+      const { data } = supabase.storage.from("attachments").getPublicUrl(path);
+      const existing = images.find((i) => i.view_label === viewLabel);
+      if (existing) await supabase.from("model_images").delete().eq("id", existing.id);
+      await supabase.from("model_images").insert({ model_id: model.id, view_label: viewLabel, url: data.publicUrl });
+      if (viewLabel === "Front") await supabase.from("models").update({ photo_url: data.publicUrl }).eq("id", model.id);
+      await load(); await refresh(); flash(`${viewLabel} photo updated`);
+    }
+    setUploading("");
+  };
+
+  return (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>PHOTOS</div>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+        {PHOTO_VIEWS.map((view) => {
+          const img = images.find((i) => i.view_label === view);
+          return (
+            <div key={view} style={{ textAlign: "center" }}>
+              <div style={{ width: 80, height: 80, background: "#F2F2F2", borderRadius: 3, overflow: "hidden", marginBottom: 4, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {img ? <img src={img.url} alt={view} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 11, color: "#8a8a8a" }}>No photo</span>}
+              </div>
+              <div style={{ fontSize: 11, marginBottom: 4 }}>{view}</div>
+              <input type="file" accept="image/*" style={{ fontSize: 10, width: 90 }} disabled={uploading === view}
+                onChange={(e) => upload(view, e.target.files?.[0])} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ModelColors({ model, refresh, flash }) {
+  const [colors, setColors] = useState([]);
+  const [name, setName] = useState("");
+  const [file, setFile] = useState(null);
+
+  const load = () => supabase.from("model_colors").select("*").eq("model_id", model.id).then(({ data }) => setColors(data || []));
+  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+
+  const add = async () => {
+    if (!name.trim()) return;
+    let swatchUrl = null;
+    if (file) {
+      const path = `model-colors/${model.id}-${Date.now()}-${file.name}`;
+      const { error } = await supabase.storage.from("attachments").upload(path, file);
+      if (!error) { const { data } = supabase.storage.from("attachments").getPublicUrl(path); swatchUrl = data.publicUrl; }
+    }
+    await supabase.from("model_colors").insert({ model_id: model.id, color_name: name, swatch_url: swatchUrl });
+    setName(""); setFile(null); await load(); flash("Color added");
+  };
+  const remove = async (id) => { await supabase.from("model_colors").delete().eq("id", id); await load(); };
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>COLOR VARIATIONS</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+        {colors.map((c) => (
+          <div key={c.id} style={{ textAlign: "center", position: "relative" }}>
+            <div style={{ width: 50, height: 50, borderRadius: 3, overflow: "hidden", background: "#F2F2F2", border: "1px solid #E5E5E5" }}>
+              {c.swatch_url && <img src={c.swatch_url} alt={c.color_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+            </div>
+            <div style={{ fontSize: 10.5, marginTop: 2 }}>{c.color_name}</div>
+            <a className="link" style={{ fontSize: 10, color: "#C1302B" }} onClick={() => remove(c.id)}>Remove</a>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input placeholder="Color name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, width: 140 }} />
+        <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
+        <button onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Color</button>
       </div>
     </div>
   );
