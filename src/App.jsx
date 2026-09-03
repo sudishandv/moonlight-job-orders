@@ -783,8 +783,88 @@ function SignaturePad({ canvasRef, onDrawn }) {
   );
 }
 
+const SHAPES = [
+  ["rectangle", "Panel"], ["aline", "A-Line"], ["sleeve", "Sleeve"],
+  ["collar", "Collar"], ["trouserleg", "Trouser Leg"], ["circle", "Round"],
+  ["yoke", "Yoke"], ["pocket", "Pocket"], ["cuff", "Cuff"],
+  ["waistband", "Waistband"], ["gusset", "Gusset"], ["halfcircle", "Half-Circle"],
+];
+
+function drawShapeStamp(ctx, type) {
+  ctx.save();
+  ctx.strokeStyle = "#1A1A1A";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  const cx = W / 2, cy = H / 2;
+  if (type === "rectangle") {
+    ctx.rect(cx - 100, cy - 80, 200, 160);
+  } else if (type === "aline") {
+    ctx.moveTo(cx - 60, cy - 100);
+    ctx.lineTo(cx + 60, cy - 100);
+    ctx.lineTo(cx + 100, cy + 100);
+    ctx.lineTo(cx - 100, cy + 100);
+    ctx.closePath();
+  } else if (type === "sleeve") {
+    ctx.moveTo(cx - 80, cy + 90);
+    ctx.quadraticCurveTo(cx - 90, cy, cx - 40, cy - 90);
+    ctx.quadraticCurveTo(cx, cy - 120, cx + 40, cy - 90);
+    ctx.quadraticCurveTo(cx + 90, cy, cx + 80, cy + 90);
+    ctx.closePath();
+  } else if (type === "collar") {
+    ctx.moveTo(cx - 110, cy + 20);
+    ctx.quadraticCurveTo(cx, cy - 60, cx + 110, cy + 20);
+    ctx.quadraticCurveTo(cx, cy + 10, cx - 110, cy + 20);
+    ctx.closePath();
+  } else if (type === "trouserleg") {
+    ctx.moveTo(cx - 70, cy - 110);
+    ctx.lineTo(cx + 70, cy - 110);
+    ctx.lineTo(cx + 40, cy + 110);
+    ctx.lineTo(cx - 40, cy + 110);
+    ctx.closePath();
+  } else if (type === "circle") {
+    ctx.arc(cx, cy, 90, 0, Math.PI * 2);
+  } else if (type === "yoke") {
+    ctx.moveTo(cx - 120, cy - 40);
+    ctx.quadraticCurveTo(cx, cy - 90, cx + 120, cy - 40);
+    ctx.lineTo(cx + 120, cy - 10);
+    ctx.quadraticCurveTo(cx, cy - 60, cx - 120, cy - 10);
+    ctx.closePath();
+  } else if (type === "pocket") {
+    ctx.moveTo(cx - 60, cy - 40);
+    ctx.quadraticCurveTo(cx, cy - 60, cx + 60, cy - 40);
+    ctx.lineTo(cx + 60, cy + 50);
+    ctx.quadraticCurveTo(cx, cy + 65, cx - 60, cy + 50);
+    ctx.closePath();
+  } else if (type === "cuff") {
+    ctx.rect(cx - 90, cy - 25, 180, 50);
+  } else if (type === "waistband") {
+    ctx.rect(cx - 140, cy - 15, 280, 30);
+  } else if (type === "gusset") {
+    ctx.moveTo(cx, cy - 110);
+    ctx.lineTo(cx + 90, cy + 110);
+    ctx.quadraticCurveTo(cx, cy + 90, cx - 90, cy + 110);
+    ctx.closePath();
+  } else if (type === "halfcircle") {
+    ctx.moveTo(cx - 130, cy);
+    ctx.arc(cx, cy, 130, Math.PI, 2 * Math.PI);
+    ctx.closePath();
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
 function DrawingPad({ canvasRef, onDrawn }) {
   const drawing = React.useRef(false);
+  const [mode, setMode] = useState("draw");
+  const [customShapes, setCustomShapes] = useState([]);
+  const [savingName, setSavingName] = useState(false);
+  const [shapeName, setShapeName] = useState("");
+  const [selectedShape, setSelectedShape] = useState("");
+
+  const loadCustomShapes = () => supabase.from("custom_shapes").select("*").order("created_at", { ascending: false }).then(({ data }) => setCustomShapes(data || []));
+  useEffect(() => { loadCustomShapes(); }, []);
+
   const getPos = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
     return { x: (e.clientX - rect.left) * (canvasRef.current.width / rect.width), y: (e.clientY - rect.top) * (canvasRef.current.height / rect.height) };
@@ -793,7 +873,15 @@ function DrawingPad({ canvasRef, onDrawn }) {
   const move = (e) => {
     if (!drawing.current) return;
     const ctx = canvasRef.current.getContext("2d"); const p = getPos(e);
-    ctx.lineWidth = 2; ctx.lineCap = "round"; ctx.strokeStyle = "#1A1A1A";
+    if (mode === "erase") {
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.lineWidth = 18;
+    } else {
+      ctx.globalCompositeOperation = "source-over";
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#1A1A1A";
+    }
+    ctx.lineCap = "round";
     ctx.lineTo(p.x, p.y); ctx.stroke();
     onDrawn(true);
   };
@@ -803,12 +891,85 @@ function DrawingPad({ canvasRef, onDrawn }) {
     ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
     onDrawn(false);
   };
+  const stamp = (type) => {
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.globalCompositeOperation = "source-over";
+    drawShapeStamp(ctx, type);
+    onDrawn(true);
+  };
+  const stampCustom = (shape) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const ctx = canvasRef.current.getContext("2d");
+      ctx.globalCompositeOperation = "source-over";
+      const W = canvasRef.current.width, H = canvasRef.current.height;
+      const size = Math.min(W, H) * 0.7;
+      ctx.drawImage(img, (W - size) / 2, (H - size) / 2, size, size);
+      onDrawn(true);
+    };
+    img.src = shape.image_url;
+  };
+
+  const insertSelectedShape = () => {
+    if (!selectedShape) return;
+    const custom = customShapes.find((s) => s.id === selectedShape);
+    if (custom) stampCustom(custom);
+    else stamp(selectedShape);
+  };
+
+  const saveCustomShape = async () => {
+    if (!shapeName.trim()) return;
+    const blob = await new Promise((resolve) => canvasRef.current.toBlob(resolve, "image/png"));
+    if (!blob) return;
+    const path = `custom-shapes/${Date.now()}-${shapeName.replace(/\s+/g, "-")}.png`;
+    const { error } = await supabase.storage.from("attachments").upload(path, blob);
+    if (!error) {
+      const { data } = supabase.storage.from("attachments").getPublicUrl(path);
+      await supabase.from("custom_shapes").insert({ name: shapeName, image_url: data.publicUrl });
+      setShapeName(""); setSavingName(false);
+      loadCustomShapes();
+    }
+  };
+
   return (
     <div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+        <select value={selectedShape} onChange={(e) => setSelectedShape(e.target.value)} style={{ border: "1px solid #C9CDD3", borderRadius: 3, padding: "6px 8px", fontSize: 12, width: 180 }}>
+          <option value="">Select a shape…</option>
+          <optgroup label="Basic Shapes">
+            {SHAPES.map(([type, label]) => <option key={type} value={type}>{label}</option>)}
+          </optgroup>
+          {customShapes.length > 0 && (
+            <optgroup label="Custom Shapes">
+              {customShapes.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </optgroup>
+          )}
+        </select>
+        <button type="button" disabled={!selectedShape} onClick={insertSelectedShape}
+          style={{ background: selectedShape ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+          Insert Shape
+        </button>
+      </div>
+
       <canvas ref={canvasRef} width={420} height={280}
         style={{ border: "1px solid #C9CDD3", borderRadius: 3, touchAction: "none", width: "100%", maxWidth: 420, background: "#fff" }}
         onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerLeave={end} />
-      <button type="button" onClick={clear} style={{ marginTop: 6, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "5px 12px", fontSize: 12 }}>Clear Drawing</button>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <button type="button" onClick={() => setMode("draw")} style={{ background: mode === "draw" ? "#1A1A1A" : "#fff", color: mode === "draw" ? "#fff" : "#1A1A1A", border: "1px solid #C9CDD3", borderRadius: 3, padding: "5px 12px", fontSize: 12 }}>Draw</button>
+        <button type="button" onClick={() => setMode("erase")} style={{ background: mode === "erase" ? "#1A1A1A" : "#fff", color: mode === "erase" ? "#fff" : "#1A1A1A", border: "1px solid #C9CDD3", borderRadius: 3, padding: "5px 12px", fontSize: 12 }}>Erase</button>
+        <button type="button" onClick={clear} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "5px 12px", fontSize: 12 }}>Clear</button>
+        {!savingName ? (
+          <button type="button" onClick={() => setSavingName(true)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "5px 12px", fontSize: 12 }}>+ Save as Custom Shape</button>
+        ) : (
+          <>
+            <input value={shapeName} onChange={(e) => setShapeName(e.target.value)} placeholder="Shape name" style={{ border: "1px solid #C9CDD3", borderRadius: 3, padding: "5px 8px", fontSize: 12, width: 120 }} />
+            <button type="button" onClick={saveCustomShape} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "5px 12px", fontSize: 12 }}>Save</button>
+            <button type="button" onClick={() => { setSavingName(false); setShapeName(""); }} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "5px 12px", fontSize: 12 }}>Cancel</button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
