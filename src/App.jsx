@@ -783,6 +783,36 @@ function SignaturePad({ canvasRef, onDrawn }) {
   );
 }
 
+function DrawingPad({ canvasRef, onDrawn }) {
+  const drawing = React.useRef(false);
+  const getPos = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    return { x: (e.clientX - rect.left) * (canvasRef.current.width / rect.width), y: (e.clientY - rect.top) * (canvasRef.current.height / rect.height) };
+  };
+  const start = (e) => { drawing.current = true; const ctx = canvasRef.current.getContext("2d"); const p = getPos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+  const move = (e) => {
+    if (!drawing.current) return;
+    const ctx = canvasRef.current.getContext("2d"); const p = getPos(e);
+    ctx.lineWidth = 2; ctx.lineCap = "round"; ctx.strokeStyle = "#1A1A1A";
+    ctx.lineTo(p.x, p.y); ctx.stroke();
+    onDrawn(true);
+  };
+  const end = () => { drawing.current = false; };
+  const clear = () => {
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    onDrawn(false);
+  };
+  return (
+    <div>
+      <canvas ref={canvasRef} width={420} height={280}
+        style={{ border: "1px solid #C9CDD3", borderRadius: 3, touchAction: "none", width: "100%", maxWidth: 420, background: "#fff" }}
+        onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerLeave={end} />
+      <button type="button" onClick={clear} style={{ marginTop: 6, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "5px 12px", fontSize: 12 }}>Clear Drawing</button>
+    </div>
+  );
+}
+
 function EditableCell({ value, onCommit }) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(value ?? "");
@@ -1335,6 +1365,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack }) {
   const [sizes, setSizes] = useState([]);
   const [fabrics, setFabrics] = useState([]);
   const [trims, setTrims] = useState([]);
+  const [patterns, setPatterns] = useState([]);
 
   useEffect(() => {
     supabase.from("model_images").select("*").eq("model_id", model.id).then(({ data }) => setImages(data || []));
@@ -1342,6 +1373,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack }) {
     supabase.from("model_sizes").select("*").eq("model_id", model.id).then(({ data }) => setSizes(data || []));
     supabase.from("model_fabrics").select("*").eq("model_id", model.id).then(({ data }) => setFabrics(data || []));
     supabase.from("model_trims").select("*").eq("model_id", model.id).then(({ data }) => setTrims(data || []));
+    supabase.from("model_patterns").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setPatterns(data || []));
   }, [model.id]);
 
   const removeModel = async () => {
@@ -1425,6 +1457,36 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {canEdit ? <ModelPatterns model={model} refresh={refresh} flash={flash} /> : patterns.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>PATTERN & CUTTING SUMMARY</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#F7F7F5" }}>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Pattern No</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Piece Name</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Material</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Cut Qty</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Cutting Instruction</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Diagram</th>
+              </tr>
+            </thead>
+            <tbody>
+              {patterns.map((p) => (
+                <tr key={p.id} style={{ borderBottom: "1px solid #E5E5E5" }}>
+                  <td style={{ padding: "6px 8px", fontSize: 12.5 }} className="mono">{p.pattern_no || "—"}</td>
+                  <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.piece_name}</td>
+                  <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.material || "—"}</td>
+                  <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.cut_qty || "—"}</td>
+                  <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.cutting_instruction || "—"}</td>
+                  <td style={{ padding: "6px 8px" }}>{p.diagram_url ? <a href={p.diagram_url} target="_blank" rel="noreferrer"><img src={p.diagram_url} alt="diagram" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 3, border: "1px solid #E5E5E5" }} /></a> : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -1887,6 +1949,27 @@ function ManageModels({ config, refresh, flash, session }) {
   };
   const removePendingTrim = (i) => setPendingTrims((t) => t.filter((_, idx) => idx !== i));
 
+  const [pendingPatterns, setPendingPatterns] = useState([]);
+  const [newPattern, setNewPattern] = useState({ pattern_no: "", piece_name: "", material: "", cut_qty: "", cutting_instruction: "" });
+  const [newPatternDiagramMode, setNewPatternDiagramMode] = useState("upload");
+  const [newPatternDiagram, setNewPatternDiagram] = useState(null);
+  const [newPatternHasDrawing, setNewPatternHasDrawing] = useState(false);
+  const newPatternCanvasRef = React.useRef(null);
+  const setNewPatternField = (k) => (e) => setNewPattern((p) => ({ ...p, [k]: e.target.value }));
+  const addPendingPattern = async () => {
+    if (!newPattern.piece_name.trim()) return;
+    let diagramFile = newPatternDiagram;
+    if (newPatternDiagramMode === "draw" && newPatternHasDrawing && newPatternCanvasRef.current) {
+      const blob = await new Promise((resolve) => newPatternCanvasRef.current.toBlob(resolve, "image/png"));
+      if (blob) diagramFile = new File([blob], "drawing.png", { type: "image/png" });
+    }
+    setPendingPatterns((p) => [...p, { ...newPattern, diagramFile }]);
+    setNewPattern({ pattern_no: "", piece_name: "", material: "", cut_qty: "", cutting_instruction: "" });
+    setNewPatternDiagram(null); setNewPatternHasDrawing(false);
+    if (newPatternCanvasRef.current) { const ctx = newPatternCanvasRef.current.getContext("2d"); ctx.clearRect(0, 0, newPatternCanvasRef.current.width, newPatternCanvasRef.current.height); }
+  };
+  const removePendingPattern = (i) => setPendingPatterns((p) => p.filter((_, idx) => idx !== i));
+
   const [pendingSizes, setPendingSizes] = useState([]);
   const changePendingCell = (sizeLabel, key, value) => setPendingSizes((prev) => prev.map((s) => s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
   const addPendingSize = (label) => setPendingSizes((prev) => [...prev, { size_label: label, measurements: {} }]);
@@ -1947,11 +2030,22 @@ function ManageModels({ config, refresh, flash, session }) {
       await supabase.from("model_trims").insert({ model_id: inserted.id, item_name: t.name, item_code: t.code, image_url: imageUrl });
     }
 
+    for (const p of pendingPatterns) {
+      const { diagramFile, ...rest } = p;
+      let diagramUrl = null;
+      if (diagramFile) {
+        const path = `model-patterns/${inserted.id}-${Date.now()}-${diagramFile.name}`;
+        const { error: upErr } = await supabase.storage.from("attachments").upload(path, diagramFile);
+        if (!upErr) { const { data } = supabase.storage.from("attachments").getPublicUrl(path); diagramUrl = data.publicUrl; }
+      }
+      await supabase.from("model_patterns").insert({ model_id: inserted.id, ...rest, diagram_url: diagramUrl });
+    }
+
     for (const s of pendingSizes) {
       await supabase.from("model_sizes").insert({ model_id: inserted.id, size_label: s.size_label, measurements: s.measurements });
     }
 
-    setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingFabrics([]); setPendingTrims([]); setPendingSizes([]);
+    setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingFabrics([]); setPendingTrims([]); setPendingPatterns([]); setPendingSizes([]);
     setCreating(false);
     await refresh();
     flash("Model created" + (pendingColors.length || pendingSizes.length || Object.keys(photoFiles).length ? " with photos, colors, and sizes" : ""));
@@ -2053,6 +2147,55 @@ function ManageModels({ config, refresh, flash, session }) {
         <input placeholder="Code" value={newTrimCode} onChange={(e) => setNewTrimCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
         <input type="file" accept="image/*" onChange={(e) => setNewTrimFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
         <button type="button" onClick={addPendingTrim} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Item</button>
+      </div>
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>PATTERN & CUTTING SUMMARY</div>
+      {pendingPatterns.length > 0 && (
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+          <thead>
+            <tr style={{ background: "#F7F7F5" }}>
+              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Pattern No</th>
+              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Piece Name</th>
+              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Material</th>
+              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Cut Qty</th>
+              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Cutting Instruction</th>
+              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Diagram</th>
+              <th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {pendingPatterns.map((p, i) => (
+              <tr key={i} style={{ borderBottom: "1px solid #E5E5E5" }}>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }} className="mono">{p.pattern_no || "—"}</td>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.piece_name}</td>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.material || "—"}</td>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.cut_qty || "—"}</td>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.cutting_instruction || "—"}</td>
+                <td style={{ padding: "6px 8px" }}>{p.diagramFile ? <img src={URL.createObjectURL(p.diagramFile)} alt="diagram" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 3, border: "1px solid #E5E5E5" }} /> : "—"}</td>
+                <td style={{ padding: "6px 8px" }}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => removePendingPattern(i)}>Remove</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+        <input placeholder="Pattern No (e.g. P01)" value={newPattern.pattern_no} onChange={setNewPatternField("pattern_no")} style={{ ...inputStyle, width: 110 }} />
+        <input placeholder="Piece Name (e.g. Front)" value={newPattern.piece_name} onChange={setNewPatternField("piece_name")} style={{ ...inputStyle, width: 130 }} />
+        <input placeholder="Material" value={newPattern.material} onChange={setNewPatternField("material")} style={{ ...inputStyle, width: 110 }} />
+        <input placeholder="Cut Qty" value={newPattern.cut_qty} onChange={setNewPatternField("cut_qty")} style={{ ...inputStyle, width: 70 }} />
+        <input placeholder="Cutting Instruction" value={newPattern.cutting_instruction} onChange={setNewPatternField("cutting_instruction")} style={{ ...inputStyle, width: 160 }} />
+        <div style={{ width: "100%" }}>
+          <div style={{ display: "flex", gap: 14, marginBottom: 6 }}>
+            <label style={{ fontSize: 12 }}><input type="radio" checked={newPatternDiagramMode === "upload"} onChange={() => setNewPatternDiagramMode("upload")} /> Upload image</label>
+            <label style={{ fontSize: 12 }}><input type="radio" checked={newPatternDiagramMode === "draw"} onChange={() => setNewPatternDiagramMode("draw")} /> Draw diagram</label>
+          </div>
+          {newPatternDiagramMode === "upload" ? (
+            <input type="file" accept="image/*" onChange={(e) => setNewPatternDiagram(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
+          ) : (
+            <DrawingPad canvasRef={newPatternCanvasRef} onDrawn={setNewPatternHasDrawing} />
+          )}
+        </div>
+        <button type="button" onClick={addPendingPattern} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Piece</button>
       </div>
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "18px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>SIZE MEASUREMENTS</div>
@@ -2247,6 +2390,97 @@ function ModelTrims({ model, refresh, flash }) {
         <input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} style={{ ...inputStyle, width: 80 }} />
         <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
         <button type="button" onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Item</button>
+      </div>
+    </div>
+  );
+}
+
+function ModelPatterns({ model, refresh, flash }) {
+  const [patterns, setPatterns] = useState([]);
+  const [form, setForm] = useState({ pattern_no: "", piece_name: "", material: "", cut_qty: "", cutting_instruction: "" });
+  const [diagramMode, setDiagramMode] = useState("upload");
+  const [diagramFile, setDiagramFile] = useState(null);
+  const [hasDrawing, setHasDrawing] = useState(false);
+  const drawCanvasRef = React.useRef(null);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const load = () => supabase.from("model_patterns").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setPatterns(data || []));
+  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+
+  const add = async () => {
+    if (!form.piece_name.trim()) return;
+    let diagramUrl = null;
+    if (diagramMode === "draw" && hasDrawing && drawCanvasRef.current) {
+      const blob = await new Promise((resolve) => drawCanvasRef.current.toBlob(resolve, "image/png"));
+      if (blob) {
+        const path = `model-patterns/${model.id}-${Date.now()}-drawing.png`;
+        const { error } = await supabase.storage.from("attachments").upload(path, blob);
+        if (!error) { const { data } = supabase.storage.from("attachments").getPublicUrl(path); diagramUrl = data.publicUrl; }
+      }
+    } else if (diagramFile) {
+      const path = `model-patterns/${model.id}-${Date.now()}-${diagramFile.name}`;
+      const { error } = await supabase.storage.from("attachments").upload(path, diagramFile);
+      if (!error) { const { data } = supabase.storage.from("attachments").getPublicUrl(path); diagramUrl = data.publicUrl; }
+    }
+    await supabase.from("model_patterns").insert({ model_id: model.id, ...form, diagram_url: diagramUrl });
+    setForm({ pattern_no: "", piece_name: "", material: "", cut_qty: "", cutting_instruction: "" });
+    setDiagramFile(null); setHasDrawing(false);
+    if (drawCanvasRef.current) { const ctx = drawCanvasRef.current.getContext("2d"); ctx.clearRect(0, 0, drawCanvasRef.current.width, drawCanvasRef.current.height); }
+    await load(); flash("Pattern piece added");
+  };
+  const remove = async (id) => { await supabase.from("model_patterns").delete().eq("id", id); await load(); };
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>PATTERN & CUTTING SUMMARY</div>
+      {patterns.length > 0 && (
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+          <thead>
+            <tr style={{ background: "#F7F7F5" }}>
+              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Pattern No</th>
+              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Piece Name</th>
+              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Material</th>
+              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Cut Qty</th>
+              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Cutting Instruction</th>
+              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Diagram</th>
+              <th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {patterns.map((p) => (
+              <tr key={p.id} style={{ borderBottom: "1px solid #E5E5E5" }}>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }} className="mono">{p.pattern_no || "—"}</td>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.piece_name}</td>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.material || "—"}</td>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.cut_qty || "—"}</td>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{p.cutting_instruction || "—"}</td>
+                <td style={{ padding: "6px 8px" }}>
+                  {p.diagram_url ? <a href={p.diagram_url} target="_blank" rel="noreferrer"><img src={p.diagram_url} alt="diagram" style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 3, border: "1px solid #E5E5E5" }} /></a> : "—"}
+                </td>
+                <td style={{ padding: "6px 8px" }}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => remove(p.id)}>Remove</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input placeholder="Pattern No (e.g. P01)" value={form.pattern_no} onChange={set("pattern_no")} style={{ ...inputStyle, width: 110 }} />
+        <input placeholder="Piece Name (e.g. Front)" value={form.piece_name} onChange={set("piece_name")} style={{ ...inputStyle, width: 130 }} />
+        <input placeholder="Material" value={form.material} onChange={set("material")} style={{ ...inputStyle, width: 110 }} />
+        <input placeholder="Cut Qty" value={form.cut_qty} onChange={set("cut_qty")} style={{ ...inputStyle, width: 70 }} />
+        <input placeholder="Cutting Instruction" value={form.cutting_instruction} onChange={set("cutting_instruction")} style={{ ...inputStyle, width: 160 }} />
+        <div style={{ width: "100%" }}>
+          <div style={{ display: "flex", gap: 14, marginBottom: 6 }}>
+            <label style={{ fontSize: 12 }}><input type="radio" checked={diagramMode === "upload"} onChange={() => setDiagramMode("upload")} /> Upload image</label>
+            <label style={{ fontSize: 12 }}><input type="radio" checked={diagramMode === "draw"} onChange={() => setDiagramMode("draw")} /> Draw diagram</label>
+          </div>
+          {diagramMode === "upload" ? (
+            <input type="file" accept="image/*" onChange={(e) => setDiagramFile(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
+          ) : (
+            <DrawingPad canvasRef={drawCanvasRef} onDrawn={setHasDrawing} />
+          )}
+        </div>
+        <button type="button" onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>+ Add Piece</button>
       </div>
     </div>
   );
