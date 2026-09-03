@@ -416,17 +416,29 @@ const cardStyle = { background: "#fff", border: "1px solid #E5E5E5", borderRadiu
 
 function TagField({ value, onChange, options }) {
   const tags = value ? value.split(",").map((t) => t.trim()).filter(Boolean) : [];
-  const [customInput, setCustomInput] = useState("");
+  const [input, setInput] = useState("");
+  const [open, setOpen] = useState(false);
+  const wrapperRef = React.useRef(null);
 
   const addTag = (tag) => {
     const t = (tag || "").trim();
-    if (!t || tags.includes(t)) return;
+    if (!t || tags.includes(t)) { setInput(""); setOpen(false); return; }
     onChange([...tags, t].join(", "));
+    setInput("");
+    setOpen(false);
   };
   const removeTag = (tag) => onChange(tags.filter((t) => t !== tag).join(", "));
 
+  const filtered = (options || []).filter((o) => !tags.includes(o) && o.toLowerCase().includes(input.toLowerCase()));
+
+  useEffect(() => {
+    const onClickOutside = (e) => { if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
   return (
-    <div>
+    <div ref={wrapperRef} style={{ position: "relative" }}>
       {tags.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
           {tags.map((t, i) => (
@@ -437,18 +449,29 @@ function TagField({ value, onChange, options }) {
           ))}
         </div>
       )}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {options && options.length > 0 && (
-          <select value="" onChange={(e) => addTag(e.target.value)} style={{ ...inputStyle, width: 180 }}>
-            <option value="">Select…</option>
-            {options.filter((o) => !tags.includes(o)).map((o) => <option key={o} value={o}>{o}</option>)}
-          </select>
-        )}
-        <input placeholder="Type a custom tag and press Enter…" value={customInput} onChange={(e) => setCustomInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(customInput); setCustomInput(""); } }}
-          style={{ ...inputStyle, width: 200 }} />
-        <button type="button" onClick={() => { addTag(customInput); setCustomInput(""); }} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700 }}>+ Add</button>
-      </div>
+      <input
+        value={input}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => { setInput(e.target.value); setOpen(true); }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); addTag(input); }
+          else if (e.key === "Backspace" && !input && tags.length) removeTag(tags[tags.length - 1]);
+        }}
+        placeholder={options && options.length ? "Click to pick, or type your own…" : "Type a tag and press Enter…"}
+        style={inputStyle}
+      />
+      {open && options && filtered.length > 0 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, marginTop: 2, maxHeight: 180, overflowY: "auto", zIndex: 20, boxShadow: "0 4px 12px rgba(0,0,0,0.1)" }}>
+          {filtered.map((o) => (
+            <div key={o} onMouseDown={() => addTag(o)}
+              style={{ padding: "7px 10px", fontSize: 13, cursor: "pointer" }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "#fff")}>
+              {o}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2283,6 +2306,13 @@ function ManageModels({ config, refresh, flash, session }) {
   };
   const removePendingPattern = (i) => setPendingPatterns((p) => p.filter((_, idx) => idx !== i));
 
+  const [pendingDocuments, setPendingDocuments] = useState([]);
+  const addPendingDocument = (e) => {
+    const file = e.target.files?.[0];
+    if (file) setPendingDocuments((d) => [...d, file]);
+  };
+  const removePendingDocument = (i) => setPendingDocuments((d) => d.filter((_, idx) => idx !== i));
+
   const [pendingSizes, setPendingSizes] = useState([]);
   const changePendingCell = (sizeLabel, key, value) => setPendingSizes((prev) => prev.map((s) => s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
   const addPendingSize = (label) => setPendingSizes((prev) => [...prev, { size_label: label, measurements: {} }]);
@@ -2354,11 +2384,20 @@ function ManageModels({ config, refresh, flash, session }) {
       await supabase.from("model_patterns").insert({ model_id: inserted.id, ...rest, diagram_url: diagramUrl });
     }
 
+    for (const file of pendingDocuments) {
+      const path = `model-documents/${inserted.id}-${Date.now()}-${file.name}`;
+      const { error: upErr } = await supabase.storage.from("attachments").upload(path, file);
+      if (!upErr) {
+        const { data } = supabase.storage.from("attachments").getPublicUrl(path);
+        await supabase.from("model_documents").insert({ model_id: inserted.id, file_name: file.name, file_url: data.publicUrl, file_type: file.type, uploaded_by: session.name });
+      }
+    }
+
     for (const s of pendingSizes) {
       await supabase.from("model_sizes").insert({ model_id: inserted.id, size_label: s.size_label, measurements: s.measurements });
     }
 
-    setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingFabrics([]); setPendingTrims([]); setPendingPatterns([]); setPendingSizes([]);
+    setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingFabrics([]); setPendingTrims([]); setPendingPatterns([]); setPendingDocuments([]); setPendingSizes([]);
     setCreating(false);
     await refresh();
     flash("Model created" + (pendingColors.length || pendingSizes.length || Object.keys(photoFiles).length ? " with photos, colors, and sizes" : ""));
@@ -2559,17 +2598,29 @@ function ManageModels({ config, refresh, flash, session }) {
         </div>
       </div>
 
+      <div style={{ ...cardStyle, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>SKETCHES & REFERENCE DOCUMENTS</div>
+        {pendingDocuments.length > 0 && (
+          <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+            {pendingDocuments.map((f, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, border: "1px solid #E5E5E5", padding: "6px 10px", borderRadius: 4 }}>
+                <span>{f.name}</span>
+                <a className="link" style={{ color: "#C1302B" }} onClick={() => removePendingDocument(i)}>Remove</a>
+              </div>
+            ))}
+          </div>
+        )}
+        <FileButton label="Upload Sketch or Document" accept="image/*,.pdf,.doc,.docx" onChange={addPendingDocument} />
+      </div>
+
       <div style={{ ...cardStyle, marginBottom: 20 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>SIZE MEASUREMENTS</div>
         <SizeMeasurementGrid sizes={pendingSizes} onChangeCell={changePendingCell} onAddSize={addPendingSize} onRemoveSize={removePendingSize} />
       </div>
 
-      <button disabled={creating} onClick={create} style={{ width: "100%", background: creating ? "#C9CDD3" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 6, padding: "14px", fontSize: 14, fontWeight: 700, marginBottom: 10 }}>
+      <button disabled={creating} onClick={create} style={{ width: "100%", background: creating ? "#C9CDD3" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 6, padding: "14px", fontSize: 14, fontWeight: 700, marginBottom: 28 }}>
         {creating ? "Creating…" : "Create Model"}
       </button>
-      <div style={{ textAlign: "center", fontSize: 12, color: "#8a8a8a", marginBottom: 28 }}>
-        Sketches and reference documents can be added once the model is created — open it from View Models.
-      </div>
     </div>
   );
 }
