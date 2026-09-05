@@ -3048,13 +3048,39 @@ function ManageModels({ config, refresh, flash, session }) {
   const removePendingDocument = (i) => setPendingDocuments((d) => d.filter((_, idx) => idx !== i));
 
   const [pendingSizes, setPendingSizes] = useState(() =>
-    DEFAULT_TEMPLATE_SIZES.map((label) => ({ size_label: label, measurements: Object.fromEntries(DEFAULT_TEMPLATE_ROWS.map((k) => [k, ""])) }))
+    DEFAULT_TEMPLATE_SIZES.map((label) => ({ size_label: label, measurements: Object.fromEntries(DEFAULT_TEMPLATE_ROWS.map((k) => [k, ""])), cut: null }))
   );
   const [pendingCustomFields, setPendingCustomFields] = useState([]);
   const addPendingCustomField = (field) => setPendingCustomFields((f) => [...f, field]);
   const changePendingCell = (sizeLabel, key, value) => setPendingSizes((prev) => prev.map((s) => s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
   const addPendingSize = (label) => setPendingSizes((prev) => [...prev, { size_label: label, measurements: {} }]);
   const removePendingSize = (label) => setPendingSizes((prev) => prev.filter((s) => s.size_label !== label));
+
+  const [addingCutTable, setAddingCutTable] = useState(false);
+  const [newCutChoice, setNewCutChoice] = useState("");
+  const [duplicateFrom, setDuplicateFrom] = useState("");
+
+  const cutTags = form.possibleCuts ? form.possibleCuts.split(",").map((c) => c.trim()).filter(Boolean) : [];
+  const cutGroups = Array.from(new Set(pendingSizes.map((s) => s.cut || null)));
+  const groupsToShow = cutGroups.length > 0 ? cutGroups : [null];
+  const availableCutsToAdd = cutTags.filter((c) => !cutGroups.includes(c));
+
+  const changePendingCellForCut = (cut, sizeLabel, key, value) =>
+    setPendingSizes((prev) => prev.map((s) => (s.cut || null) === (cut || null) && s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
+  const addPendingSizeForCut = (cut, label) => setPendingSizes((prev) => [...prev, { size_label: label, measurements: {}, cut: cut || null }]);
+  const removePendingSizeForCut = (cut, label) => setPendingSizes((prev) => prev.filter((s) => !((s.cut || null) === (cut || null) && s.size_label === label)));
+
+  const addCutTable = () => {
+    if (!newCutChoice) return;
+    if (duplicateFrom) {
+      const sourceCut = duplicateFrom === "__none__" ? null : duplicateFrom;
+      const sourceRows = pendingSizes.filter((s) => (s.cut || null) === sourceCut);
+      setPendingSizes((prev) => [...prev, ...sourceRows.map((r) => ({ size_label: r.size_label, measurements: { ...r.measurements }, cut: newCutChoice }))]);
+    } else {
+      setPendingSizes((prev) => [...prev, ...DEFAULT_TEMPLATE_SIZES.map((label) => ({ size_label: label, measurements: Object.fromEntries(DEFAULT_TEMPLATE_ROWS.map((k) => [k, ""])), cut: newCutChoice }))]);
+    }
+    setAddingCutTable(false); setNewCutChoice(""); setDuplicateFrom("");
+  };
 
   const [creating, setCreating] = useState(false);
 
@@ -3135,12 +3161,13 @@ function ManageModels({ config, refresh, flash, session }) {
     }
 
     for (const s of pendingSizes) {
-      await supabase.from("model_sizes").insert({ model_id: inserted.id, size_label: s.size_label, measurements: s.measurements });
+      await supabase.from("model_sizes").insert({ model_id: inserted.id, size_label: s.size_label, measurements: s.measurements, cut: s.cut || null });
     }
 
     setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingFabrics([]); setPendingTrims([]); setPendingPatterns([]); setPendingDocuments([]);
-    setPendingSizes(DEFAULT_TEMPLATE_SIZES.map((label) => ({ size_label: label, measurements: Object.fromEntries(DEFAULT_TEMPLATE_ROWS.map((k) => [k, ""])) })));
+    setPendingSizes(DEFAULT_TEMPLATE_SIZES.map((label) => ({ size_label: label, measurements: Object.fromEntries(DEFAULT_TEMPLATE_ROWS.map((k) => [k, ""])), cut: null })));
     setPendingCustomFields([]);
+    setAddingCutTable(false); setNewCutChoice(""); setDuplicateFrom("");
     setCreating(false);
     await refresh();
     flash("Model created" + (pendingColors.length || pendingSizes.length || Object.keys(photoFiles).length ? " with photos, colors, and sizes" : ""));
@@ -3383,8 +3410,44 @@ function ManageModels({ config, refresh, flash, session }) {
 
       <div style={{ ...cardStyle, marginBottom: 20 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>SIZE MEASUREMENTS</div>
-        <SizeMeasurementGrid sizes={pendingSizes} onChangeCell={changePendingCell} onAddSize={addPendingSize} onRemoveSize={removePendingSize}
-          customFields={pendingCustomFields} onAddCustomField={addPendingCustomField} initialRows={DEFAULT_TEMPLATE_ROWS} />
+        {groupsToShow.map((cut) => (
+          <div key={cut || "general"} style={{ marginBottom: 20 }}>
+            {cutTags.length > 1 && <div style={{ fontSize: 12, fontWeight: 700, color: "#3B6FA0", marginBottom: 6 }}>{cut || "General"}</div>}
+            <SizeMeasurementGrid
+              sizes={pendingSizes.filter((s) => (s.cut || null) === cut)}
+              onChangeCell={(sizeLabel, key, value) => changePendingCellForCut(cut, sizeLabel, key, value)}
+              onAddSize={(label) => addPendingSizeForCut(cut, label)}
+              onRemoveSize={(label) => removePendingSizeForCut(cut, label)}
+              customFields={pendingCustomFields}
+              onAddCustomField={addPendingCustomField}
+              initialRows={cut === (groupsToShow[0] || null) ? DEFAULT_TEMPLATE_ROWS : []}
+            />
+          </div>
+        ))}
+
+        {cutTags.length > 1 && (
+          addingCutTable ? (
+            <div style={{ border: "1px solid #C9CDD3", borderRadius: 6, padding: 12, marginTop: 10 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>ADD SIZE TABLE FOR ANOTHER CUT</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                <select value={newCutChoice} onChange={(e) => setNewCutChoice(e.target.value)} style={{ ...inputStyle, width: 160 }}>
+                  <option value="">Select cut…</option>
+                  {availableCutsToAdd.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <select value={duplicateFrom} onChange={(e) => setDuplicateFrom(e.target.value)} style={{ ...inputStyle, width: 240 }}>
+                  <option value="">Start blank (Small–X-Large template)</option>
+                  {groupsToShow.map((c) => <option key={c || "general"} value={c || "__none__"}>Duplicate values from {c || "General"}</option>)}
+                </select>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={addCutTable} disabled={!newCutChoice} style={{ background: newCutChoice ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>Add Table</button>
+                <button onClick={() => setAddingCutTable(false)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "7px 14px", fontSize: 12 }}>Cancel</button>
+              </div>
+            </div>
+          ) : availableCutsToAdd.length > 0 && (
+            <button onClick={() => setAddingCutTable(true)} style={{ background: "#fff", border: "1px dashed #C9CDD3", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700, marginTop: 10 }}>+ Add Size Table for Another Cut</button>
+          )
+        )}
       </div>
 
       <button disabled={creating} onClick={create} style={{ width: "100%", background: creating ? "#C9CDD3" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 6, padding: "14px", fontSize: 14, fontWeight: 700, marginBottom: 28 }}>
