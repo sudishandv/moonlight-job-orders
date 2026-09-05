@@ -64,6 +64,8 @@ const PHOTO_VIEWS = ["Front", "Back", "Side", "Detail"];
 
 const PROJECT_TYPES = ["Client Commission", "Wholesale Order", "Event / Wedding", "In-house Collection", "Other"];
 const PROJECT_STATUSES = ["Concept", "Design Development", "Sampling", "Client Review", "Approved", "In Production", "Delivered", "Closed"];
+const TASK_STATUSES = ["To Do", "In Progress", "Review", "Done"];
+const TASK_PRIORITIES = ["Low", "Normal", "High"];
 
 function ProjectStatusTag({ status }) {
   const colors = { "Concept": "#8a8a8a", "Design Development": "#3B6FA0", "Sampling": "#D98E2B", "Client Review": "#C1302B", "Approved": "#2F8F46", "In Production": "#2F8F46", "Delivered": "#1A1A1A", "Closed": "#1A1A1A" };
@@ -293,6 +295,7 @@ export default function App() {
   const [projects, setProjects] = useState(null);
   const [projectCollaborators, setProjectCollaborators] = useState(null);
   const [allUsers, setAllUsers] = useState(null);
+  const [projectTasks, setProjectTasks] = useState(null);
   const [subpage, setSubpage] = useState("records");
   const [selectedId, setSelectedId] = useState(null);
   const [toast, setToast] = useState(null);
@@ -312,10 +315,10 @@ export default function App() {
         setProfile(data || null);
         setSubpage(data?.role === "model_manager" ? "models" : "records");
       });
-  }, [session]);
+  }, [session?.user?.id]);
 
   const loadAll = useCallback(async () => {
-    const [{ data: branches }, { data: salespersons }, { data: models }, { data: ords }, { data: profs }, { data: reqItems }, { data: projs }, { data: collabs }, { data: users }] = await Promise.all([
+    const [{ data: branches }, { data: salespersons }, { data: models }, { data: ords }, { data: profs }, { data: reqItems }, { data: projs }, { data: collabs }, { data: users }, { data: tasks }] = await Promise.all([
       supabase.from("branches").select("*").order("name"),
       supabase.from("salespersons").select("*").order("name"),
       supabase.from("models").select("*").order("model_no"),
@@ -325,6 +328,7 @@ export default function App() {
       supabase.from("projects").select("*").order("created_at", { ascending: false }),
       supabase.from("project_collaborators").select("*"),
       supabase.from("profiles").select("*"),
+      supabase.from("project_tasks").select("*"),
     ]);
     setConfig({ branches: branches || [], salespersons: salespersons || [], models: (models || []).map(dbToModel) });
     setOrders((ords || []).map(dbToOrder));
@@ -336,6 +340,7 @@ export default function App() {
     setProjects(projs || []);
     setProjectCollaborators(collabs || []);
     setAllUsers(users || []);
+    setProjectTasks(tasks || []);
   }, []);
 
   useEffect(() => { if (profile) loadAll(); }, [profile, loadAll]);
@@ -343,14 +348,14 @@ export default function App() {
   if (session === undefined) return <Loading text="Loading…" />;
   if (!session) return <LoginScreen onLoggedIn={() => {}} />;
   if (profile === null) return <NoProfileScreen onSignOut={() => supabase.auth.signOut()} />;
-  if (!config || !orders || !profiles || !requirementItems || !projects || !projectCollaborators || !allUsers) return <Loading text="Loading job orders…" />;
+  if (!config || !orders || !profiles || !requirementItems || !projects || !projectCollaborators || !allUsers || !projectTasks) return <Loading text="Loading job orders…" />;
 
   const refresh = loadAll;
 
   return (
     <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()}>
       {subpage === "projects" && (
-        <ProjectsPage projects={projects} collaborators={projectCollaborators} allUsers={allUsers} session={profile} refresh={refresh} flash={flash} />
+        <ProjectsPage projects={projects} collaborators={projectCollaborators} allUsers={allUsers} session={profile} refresh={refresh} flash={flash} tasks={projectTasks} />
       )}
       {subpage !== "projects" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
@@ -1478,7 +1483,7 @@ function RequirementDetail({ row, onClose }) {
   );
 }
 
-function ProjectsPage({ projects, collaborators, allUsers, session, refresh, flash }) {
+function ProjectsPage({ projects, collaborators, allUsers, session, refresh, flash, tasks }) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(null);
   const [creating, setCreating] = useState(false);
@@ -1503,7 +1508,7 @@ function ProjectsPage({ projects, collaborators, allUsers, session, refresh, fla
 
   if (selectedId) {
     const p = projects.find((x) => x.id === selectedId);
-    if (p) return <ProjectDetailPage project={p} collaborators={collabByProject(p.id)} allUsers={allUsers} session={session} refresh={refresh} flash={flash} onBack={() => setSelectedId(null)} />;
+    if (p) return <ProjectDetailPage project={p} collaborators={collabByProject(p.id)} allUsers={allUsers} session={session} refresh={refresh} flash={flash} onBack={() => setSelectedId(null)} tasks={tasks} />;
   }
 
   return (
@@ -1549,7 +1554,136 @@ function ProjectsPage({ projects, collaborators, allUsers, session, refresh, fla
   );
 }
 
-function ProjectDetailPage({ project, collaborators, allUsers, session, refresh, flash, onBack }) {
+function TaskBoard({ project, tasks, collaborators, allUsers, session, refresh, flash }) {
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({ title: "", description: "", assigneeId: "", dueDate: "", priority: "Normal" });
+  const [editingTaskId, setEditingTaskId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+
+  const projectTasks = tasks.filter((t) => t.project_id === project.id);
+  const priorityColor = { Low: "#8a8a8a", Normal: "#3B6FA0", High: "#C1302B" };
+
+  const createTask = async () => {
+    if (!form.title.trim()) return;
+    const { error } = await supabase.from("project_tasks").insert({
+      project_id: project.id, title: form.title, description: form.description,
+      assignee_id: form.assigneeId || null, due_date: form.dueDate || null, priority: form.priority, status: "To Do",
+      created_by: session.name,
+    });
+    if (error) { flash("Error: " + error.message); return; }
+    setCreating(false); setForm({ title: "", description: "", assigneeId: "", dueDate: "", priority: "Normal" });
+    await refresh(); flash("Task added");
+  };
+  const updateTaskStatus = async (taskId, status) => {
+    await supabase.from("project_tasks").update({ status, updated_at: new Date().toISOString() }).eq("id", taskId);
+    await refresh();
+  };
+  const deleteTask = async (taskId) => { await supabase.from("project_tasks").delete().eq("id", taskId); await refresh(); };
+  const startEdit = (t) => {
+    setEditingTaskId(t.id);
+    setEditForm({ title: t.title, description: t.description || "", assigneeId: t.assignee_id || "", dueDate: t.due_date || "", priority: t.priority || "Normal" });
+  };
+  const saveEdit = async () => {
+    await supabase.from("project_tasks").update({
+      title: editForm.title, description: editForm.description, assignee_id: editForm.assigneeId || null,
+      due_date: editForm.dueDate || null, priority: editForm.priority, updated_at: new Date().toISOString(),
+    }).eq("id", editingTaskId);
+    setEditingTaskId(null); await refresh(); flash("Task updated");
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontWeight: 700, fontSize: 14 }}>TASKS</div>
+        <button onClick={() => setCreating(true)} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 12.5, fontWeight: 700 }}>+ Add Task</button>
+      </div>
+
+      {creating && (
+        <div style={{ border: "1px solid #C9CDD3", borderRadius: 6, padding: 14, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+            <Field label="Task Title"><input style={inputStyle} value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} /></Field>
+            <Field label="Assignee">
+              <select style={inputStyle} value={form.assigneeId} onChange={(e) => setForm((f) => ({ ...f, assigneeId: e.target.value }))}>
+                <option value="">Unassigned</option>
+                {collaborators.map((c) => { const u = allUsers.find((x) => x.id === c.user_id); return u ? <option key={u.id} value={u.id}>{u.name}</option> : null; })}
+              </select>
+            </Field>
+            <Field label="Due Date"><input type="date" style={inputStyle} value={form.dueDate} onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))} /></Field>
+            <Field label="Priority">
+              <select style={inputStyle} value={form.priority} onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value }))}>
+                {TASK_PRIORITIES.map((p) => <option key={p}>{p}</option>)}
+              </select>
+            </Field>
+          </div>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} /></Field>
+          <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+            <button onClick={createTask} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px", fontSize: 12.5, fontWeight: 700 }}>Add Task</button>
+            <button onClick={() => setCreating(false)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "8px 16px", fontSize: 12.5, fontWeight: 700 }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {projectTasks.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>No tasks yet.</div> : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+          {TASK_STATUSES.map((status) => (
+            <div key={status}>
+              <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                {status} ({projectTasks.filter((t) => t.status === status).length})
+              </div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {projectTasks.filter((t) => t.status === status).map((t) => {
+                  const assignee = allUsers.find((u) => u.id === t.assignee_id);
+                  const isEditing = editingTaskId === t.id;
+                  return (
+                    <div key={t.id} style={{ border: "1px solid #E5E5E5", borderRadius: 6, padding: 10, background: "#fff" }}>
+                      {isEditing ? (
+                        <div>
+                          <input style={{ ...inputStyle, marginBottom: 6, fontSize: 12.5 }} value={editForm.title} onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))} />
+                          <textarea style={{ ...inputStyle, minHeight: 40, marginBottom: 6, fontSize: 12 }} value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))} />
+                          <select style={{ ...inputStyle, marginBottom: 6, fontSize: 12 }} value={editForm.assigneeId} onChange={(e) => setEditForm((f) => ({ ...f, assigneeId: e.target.value }))}>
+                            <option value="">Unassigned</option>
+                            {collaborators.map((c) => { const u = allUsers.find((x) => x.id === c.user_id); return u ? <option key={u.id} value={u.id}>{u.name}</option> : null; })}
+                          </select>
+                          <input type="date" style={{ ...inputStyle, marginBottom: 6, fontSize: 12 }} value={editForm.dueDate} onChange={(e) => setEditForm((f) => ({ ...f, dueDate: e.target.value }))} />
+                          <select style={{ ...inputStyle, marginBottom: 8, fontSize: 12 }} value={editForm.priority} onChange={(e) => setEditForm((f) => ({ ...f, priority: e.target.value }))}>
+                            {TASK_PRIORITIES.map((p) => <option key={p}>{p}</option>)}
+                          </select>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button onClick={saveEdit} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 3, padding: "5px 10px", fontSize: 11, fontWeight: 700 }}>Save</button>
+                            <button onClick={() => setEditingTaskId(null)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "5px 10px", fontSize: 11 }}>Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t.title}</div>
+                          {t.description && <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 6 }}>{t.description}</div>}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                            <span style={{ fontSize: 11, color: "#5a5a5a" }}>{assignee ? assignee.name : "Unassigned"}</span>
+                            {t.priority && <span style={{ fontSize: 10, fontWeight: 700, color: priorityColor[t.priority] }}>{t.priority.toUpperCase()}</span>}
+                          </div>
+                          {t.due_date && <div style={{ fontSize: 11, color: "#8a8a8a", marginBottom: 6 }}>Due {fmtDate(t.due_date)}</div>}
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                            <select value={t.status} onChange={(e) => updateTaskStatus(t.id, e.target.value)} style={{ fontSize: 11, border: "1px solid #C9CDD3", borderRadius: 3, padding: "3px 4px" }}>
+                              {TASK_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                            </select>
+                            <a className="link" style={{ fontSize: 11 }} onClick={() => startEdit(t)}>Edit</a>
+                            <a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => deleteTask(t.id)}>Delete</a>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectDetailPage({ project, collaborators, allUsers, session, refresh, flash, onBack, tasks }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(null);
   const [newCollabId, setNewCollabId] = useState("");
@@ -1649,8 +1783,7 @@ function ProjectDetailPage({ project, collaborators, allUsers, session, refresh,
       </div>
 
       <div style={{ ...cardStyle, marginTop: 16 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>TASKS</div>
-        <div style={{ fontSize: 13, color: "#8a8a8a" }}>Coming in the next phase — a full task board with assignees, due dates, and status.</div>
+        <TaskBoard project={project} tasks={tasks} collaborators={collaborators} allUsers={allUsers} session={session} refresh={refresh} flash={flash} />
       </div>
 
       <div style={{ ...cardStyle, marginTop: 16 }}>
