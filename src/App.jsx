@@ -76,7 +76,7 @@ const FITTING_FIELDS_GENERAL = [
   ["neckSize", "Neck Size"], ["shoulder", "Shoulder"], ["chest", "Chest"], ["waist", "Waist"], ["hips", "Hips"],
   ["bottom", "Bottom"], ["sleeveLength", "Sleeve Length"], ["sleeveOpen", "Sleeve Open"], ["armhole", "Armhole"], ["aroundArmhole", "Around Armhole"],
   ["bicep", "Bicep"], ["wrist", "Wrist"], ["upperArmLevel", "Upper Arm Level"], ["acrossBackWidth", "Across Back Width"],
-  ["length", "Length – Front"], ["lengthBack", "Length – Back"],
+  ["length", "Length"], ["lengthBack", "Length – Back"],
 ];
 const FITTING_FIELDS_TROUSER = [
   ["trouserWaist", "Waist"], ["trouserHips", "Hips"], ["trouserThigh", "Thigh"],
@@ -2645,7 +2645,7 @@ function ManageList({ title, items, fields, onAdd, onRemove }) {
 
 const CORE_DEFAULT_ROWS = ["shoulder", "chest", "waist", "hips", "sleeveLength", "length"];
 const DEFAULT_TEMPLATE_SIZES = ["Small", "Medium", "Large", "X-Large"];
-const DEFAULT_TEMPLATE_ROWS = ["shoulder", "chest", "sleeveLength", "armhole", "length", "bottom"];
+const DEFAULT_TEMPLATE_ROWS = ["shoulder", "chest", "sleeveLength", "sleeveOpen", "armhole", "length", "bottom"];
 
 function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRemoveSize, onRemoveRow, readOnly, customFields, onAddCustomField, initialRows }) {
   const [extraRows, setExtraRows] = useState(() => initialRows || []);
@@ -2653,6 +2653,8 @@ function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRem
   const [newSizeLabel, setNewSizeLabel] = useState("");
   const [addingCustom, setAddingCustom] = useState(false);
   const [customLabel, setCustomLabel] = useState("");
+  const [addingCustomSize, setAddingCustomSize] = useState(false);
+  const [customSizeLabel, setCustomSizeLabel] = useState("");
 
   const ALL_FIELDS = [...FITTING_FIELDS, ...(customFields || []).map((c) => [c.key, c.label])];
   const dataKeys = ALL_FIELDS.filter(([k]) => sizes.some((s) => s.measurements[k])).map(([k]) => k);
@@ -2682,6 +2684,13 @@ function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRem
     setCustomLabel(""); setAddingCustom(false);
   };
 
+  const addCustomSize = () => {
+    const label = customSizeLabel.trim();
+    if (!label || sizes.some((s) => s.size_label === label)) return;
+    if (onAddSize) onAddSize(label);
+    setCustomSizeLabel(""); setAddingCustomSize(false);
+  };
+
   return (
     <div>
       {sizes.length === 0 ? (
@@ -2691,7 +2700,7 @@ function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRem
           <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 6 }}>No measurement rows yet.</div>
           {!readOnly && (
             <button type="button" onClick={() => setExtraRows(CORE_DEFAULT_ROWS)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "6px 12px", fontSize: 12 }}>
-              + Add common measurements (Shoulder, Chest, Waist, Hips, Sleeve Length, Length – Front)
+              + Add common measurements (Shoulder, Chest, Waist, Hips, Sleeve Length, Length)
             </button>
           )}
         </div>
@@ -2756,6 +2765,17 @@ function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRem
               <button type="button" disabled={!newSizeLabel} onClick={() => { onAddSize(newSizeLabel); setNewSizeLabel(""); }}
                 style={{ background: newSizeLabel ? "#1A1A1A" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add Size</button>
             </>
+          )}
+          {onAddSize && (
+            addingCustomSize ? (
+              <>
+                <input value={customSizeLabel} onChange={(e) => setCustomSizeLabel(e.target.value)} placeholder="e.g. Free Size, 2XL, Kids-6…" style={{ ...inputStyle, width: 170 }} />
+                <button type="button" onClick={addCustomSize} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add</button>
+                <button type="button" onClick={() => { setAddingCustomSize(false); setCustomSizeLabel(""); }} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "7px 12px", fontSize: 12 }}>Cancel</button>
+              </>
+            ) : (
+              <button type="button" onClick={() => setAddingCustomSize(true)} style={{ background: "#fff", border: "1px dashed #C9CDD3", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>+ Custom Size</button>
+            )
           )}
           {addingCustom ? (
             <>
