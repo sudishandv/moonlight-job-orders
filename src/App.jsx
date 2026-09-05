@@ -391,8 +391,7 @@ function GlobalStyle() {
 function Shell({ session, subpage, setSubpage, onLogout, children }) {
   const adminTabs = [
     ["records", "ALL RECORDS"], ["requirements", "ALL REQUIREMENTS"], ["branches", "ADD/REMOVE BRANCH"],
-    ["salespersons", "ADD/REMOVE SALES PERSON"], ["models", "ADD/REMOVE MODEL"], ["viewmodels", "VIEW MODELS"],
-    ["users", "ADD USERS"],
+    ["models", "ADD/REMOVE MODEL"], ["viewmodels", "VIEW MODELS"], ["users", "ADD USERS"],
   ];
   return (
     <div style={{ minHeight: "100vh", background: "#fff", color: "#1A1A1A", fontFamily: F.body }}>
@@ -2178,11 +2177,6 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
   if (subpage === "branches") return <ManageList title="ADD / REMOVE BRANCH" items={config.branches} fields={[["name", "Branch Name"]]}
     onAdd={async (item) => { const { error } = await supabase.from("branches").insert(item); if (error) flash("Error: " + error.message); else { await refresh(); flash("Branch added"); } }}
     onRemove={async (id) => { await supabase.from("branches").delete().eq("id", id); await refresh(); }} />;
-
-  if (subpage === "salespersons") return <ManageList title="ADD / REMOVE SALES PERSON" items={config.salespersons}
-    fields={[["name", "Name"], ["branch", "Branch", config.branches.map((b) => b.name)]]}
-    onAdd={async (item) => { const { error } = await supabase.from("salespersons").insert(item); if (error) flash("Error: " + error.message); else { await refresh(); flash("Added"); } }}
-    onRemove={async (id) => { await supabase.from("salespersons").delete().eq("id", id); await refresh(); }} />;
 
   if (subpage === "models") return <ManageModels config={config} refresh={refresh} flash={flash} session={session} />;
   if (subpage === "viewmodels") return <ModelBrowser models={config.models} canEdit={true} refresh={refresh} flash={flash} session={session} />;
