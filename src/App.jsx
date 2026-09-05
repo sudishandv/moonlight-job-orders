@@ -1220,6 +1220,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const [saving, setSaving] = useState(false);
   const [loadMobile, setLoadMobile] = useState("");
   const [loadMsg, setLoadMsg] = useState("");
+  const [legacyResults, setLegacyResults] = useState([]);
   const sigCanvasRef = React.useRef(null);
 
   const setC = (k) => (e) => setCustomer((c) => ({ ...c, [k]: e.target.value }));
@@ -1228,14 +1229,40 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const loadByMobile = async () => {
     if (!loadMobile.trim()) return;
     setLoadMsg("Searching…");
+    setLegacyResults([]);
     const { data } = await supabase.from("customer_profiles").select("*").eq("mobile", loadMobile.trim()).order("created_at", { ascending: false }).limit(1);
     if (data && data[0]) {
       setCustomer({ name: data[0].name, mobile: data[0].mobile });
       setMeasurements({ ...Object.fromEntries(FITTING_FIELDS.map(([k]) => [k, ""])), ...(data[0].measurements || {}) });
       setLoadMsg(`Loaded measurements from ${fmtDate(data[0].created_at)}.`);
-    } else {
-      setLoadMsg("No existing profile found for that number.");
+      return;
     }
+    const { data: legacy } = await supabase.from("legacy_orders").select("*").eq("mobile", loadMobile.trim()).order("id", { ascending: false }).limit(5);
+    if (legacy && legacy.length > 0) {
+      setLegacyResults(legacy);
+      setLoadMsg("No profile in the new system — found old records below.");
+    } else {
+      setLoadMsg("No existing profile or old records found for that number.");
+    }
+  };
+
+  const loadFromLegacy = (order) => {
+    setCustomer((c) => ({ name: order.name || c.name, mobile: order.mobile }));
+    setMeasurements((m) => ({
+      ...m,
+      shoulder: order.shoulder || m.shoulder,
+      chest: order.chest || m.chest,
+      waist: order.waist || m.waist,
+      hips: order.hips || m.hips,
+      bottom: order.bottom || m.bottom,
+      armhole: order.armhole || m.armhole,
+      sleeveLength: order.sleeve_length || m.sleeveLength,
+      sleeveOpen: order.sleeve_open || m.sleeveOpen,
+      length: order.length_front || m.length,
+      lengthBack: order.length_back || m.lengthBack,
+    }));
+    setLegacyResults([]);
+    setLoadMsg(`Loaded from old record dated ${order.order_date}.`);
   };
 
   const addItem = async () => {
@@ -1295,6 +1322,22 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         </div>
         <button onClick={loadByMobile} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "9px 16px", fontSize: 13, fontWeight: 700 }}>Load Measurements</button>
         {loadMsg && <span style={{ fontSize: 12, color: "#8a8a8a" }}>{loadMsg}</span>}
+        {legacyResults.length > 0 && (
+          <div style={{ border: "1px solid #C9CDD3", borderRadius: 6, padding: 12, marginTop: 10, maxWidth: 640, marginLeft: "auto", marginRight: "auto" }}>
+            <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>OLD SYSTEM RECORDS FOUND (most recent {legacyResults.length})</div>
+            {legacyResults.map((o) => (
+              <div key={o.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #E5E5E5", padding: "8px 0", gap: 10 }}>
+                <div style={{ fontSize: 12, textAlign: "left" }}>
+                  <strong>{o.order_date}</strong> — {o.garment_type || "—"} ({o.model_no || "—"})
+                  <div style={{ color: "#8a8a8a", fontSize: 11 }}>
+                    {["shoulder", "chest", "waist", "hips", "bottom", "armhole", "sleeve_length", "sleeve_open", "length_front", "length_back"].filter((k) => o[k]).map((k) => `${k}: ${o[k]}`).join(", ") || "No usable measurements on this record"}
+                  </div>
+                </div>
+                <button onClick={() => loadFromLegacy(o)} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 12px", fontSize: 11.5, fontWeight: 700, whiteSpace: "nowrap" }}>Load These</button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 6 }}>
