@@ -392,6 +392,7 @@ function Shell({ session, subpage, setSubpage, onLogout, children }) {
   const adminTabs = [
     ["records", "ALL RECORDS"], ["requirements", "ALL REQUIREMENTS"], ["branches", "ADD/REMOVE BRANCH"],
     ["salespersons", "ADD/REMOVE SALES PERSON"], ["models", "ADD/REMOVE MODEL"], ["viewmodels", "VIEW MODELS"],
+    ["users", "ADD USERS"],
   ];
   return (
     <div style={{ minHeight: "100vh", background: "#fff", color: "#1A1A1A", fontFamily: F.body }}>
@@ -2185,6 +2186,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
 
   if (subpage === "models") return <ManageModels config={config} refresh={refresh} flash={flash} session={session} />;
   if (subpage === "viewmodels") return <ModelBrowser models={config.models} canEdit={true} refresh={refresh} flash={flash} session={session} />;
+  if (subpage === "users") return <AddUsers config={config} />;
   if (subpage === "new") {
     return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
   }
@@ -2388,6 +2390,72 @@ function ModelSizes({ model, refresh, flash }) {
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
       <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>SIZE MEASUREMENTS FOR {model.modelNo}</div>
       <SizeMeasurementGrid sizes={sizes} onChangeCell={changeCell} onCellBlur={persistCell} onAddSize={addSize} onRemoveSize={removeSize} onRemoveRow={removeRow} />
+    </div>
+  );
+}
+
+const ROLE_OPTIONS = [
+  ["sales", "Sales"], ["production", "Production"], ["admin", "Admin"], ["model_manager", "Model Manager"],
+];
+
+function AddUsers({ config }) {
+  const [form, setForm] = useState({ name: "", email: "", password: "", role: "sales", branch: "" });
+  const [creating, setCreating] = useState(false);
+  const [message, setMessage] = useState(null);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const create = async () => {
+    setMessage(null);
+    if (!form.name.trim() || !form.email.trim() || !form.password.trim()) {
+      setMessage({ type: "error", text: "Name, email, and password are all required." });
+      return;
+    }
+    setCreating(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    const { data, error } = await supabase.functions.invoke("create-user", {
+      body: { email: form.email.trim(), password: form.password, name: form.name.trim(), role: form.role, branch: form.branch || null },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+    setCreating(false);
+    if (error || data?.error) {
+      setMessage({ type: "error", text: data?.error || error?.message || "Something went wrong." });
+      return;
+    }
+    setMessage({ type: "success", text: `${form.name} was created successfully with the ${form.role} role.` });
+    setForm({ name: "", email: "", password: "", role: "sales", branch: "" });
+  };
+
+  return (
+    <div style={{ maxWidth: 520, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 20, letterSpacing: "0.05em", marginBottom: 20 }}>ADD USERS</h2>
+
+      <Field label="Full Name"><input style={inputStyle} value={form.name} onChange={set("name")} /></Field>
+      <Field label="Email"><input type="email" style={inputStyle} value={form.email} onChange={set("email")} /></Field>
+      <Field label="Password"><input type="text" style={inputStyle} value={form.password} onChange={set("password")} placeholder="At least 6 characters" /></Field>
+      <Field label="Role">
+        <select style={inputStyle} value={form.role} onChange={set("role")}>
+          {ROLE_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      </Field>
+      {form.role === "sales" && (
+        <Field label="Branch">
+          <select style={inputStyle} value={form.branch} onChange={set("branch")}>
+            <option value="">Select branch…</option>
+            {config.branches.map((b) => <option key={b.id} value={b.name}>{b.name}</option>)}
+          </select>
+        </Field>
+      )}
+
+      {message && (
+        <div style={{ background: message.type === "error" ? "#FDECEC" : "#EAF5EC", color: message.type === "error" ? "#C1302B" : "#2F8F46", border: `1px solid ${message.type === "error" ? "#F0B8B8" : "#B7DFC0"}`, borderRadius: 4, padding: "10px 12px", fontSize: 13, marginBottom: 14 }}>
+          {message.text}
+        </div>
+      )}
+
+      <button disabled={creating} onClick={create} style={{ width: "100%", background: creating ? "#C9CDD3" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "11px 0", fontSize: 13.5, fontWeight: 700 }}>
+        {creating ? "Creating…" : "Create User"}
+      </button>
+      {creating && <LoadingOverlay text="Creating login and assigning role…" />}
     </div>
   );
 }
