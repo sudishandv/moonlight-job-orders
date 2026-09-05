@@ -75,7 +75,8 @@ function ProjectStatusTag({ status }) {
 const FITTING_FIELDS_GENERAL = [
   ["neckSize", "Neck Size"], ["shoulder", "Shoulder"], ["chest", "Chest"], ["waist", "Waist"], ["hips", "Hips"],
   ["bottom", "Bottom"], ["sleeveLength", "Sleeve Length"], ["sleeveOpen", "Sleeve Open"], ["armhole", "Armhole"], ["aroundArmhole", "Around Armhole"],
-  ["bicep", "Bicep"], ["wrist", "Wrist"], ["upperArmLevel", "Upper Arm Level"], ["acrossBackWidth", "Across Back Width"], ["length", "Length"],
+  ["bicep", "Bicep"], ["wrist", "Wrist"], ["upperArmLevel", "Upper Arm Level"], ["acrossBackWidth", "Across Back Width"],
+  ["length", "Length – Front"], ["lengthBack", "Length – Back"],
 ];
 const FITTING_FIELDS_TROUSER = [
   ["trouserWaist", "Waist"], ["trouserHips", "Hips"], ["trouserThigh", "Thigh"],
@@ -243,6 +244,7 @@ function dbToModel(r) {
     collectionName: r.collection_name, styleName: r.style_name, category: r.category,
     productType: r.product_type, season: r.season, description: r.description,
     createdBy: r.created_by, createdAt: r.created_at, updatedBy: r.updated_by, updatedAt: r.updated_at,
+    customFields: r.custom_fields || [],
   };
 }
 function modelToDb(f) {
@@ -2334,7 +2336,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
 
       <div style={{ marginTop: 20 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>SIZE MEASUREMENTS</div>
-        {(canEdit && editingModel) ? <ModelSizes model={model} refresh={refresh} flash={flash} /> : <SizeMeasurementGrid sizes={sizes} readOnly />}
+        {(canEdit && editingModel) ? <ModelSizes model={model} refresh={refresh} flash={flash} /> : <ReadOnlySizeTables model={model} sizes={sizes} />}
       </div>
 
       {editingModel && (
@@ -2642,17 +2644,23 @@ function ManageList({ title, items, fields, onAdd, onRemove }) {
 }
 
 const CORE_DEFAULT_ROWS = ["shoulder", "chest", "waist", "hips", "sleeveLength", "length"];
+const DEFAULT_TEMPLATE_SIZES = ["Small", "Medium", "Large", "X-Large"];
+const DEFAULT_TEMPLATE_ROWS = ["shoulder", "chest", "sleeveLength", "armhole", "length", "bottom"];
 
-function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRemoveSize, onRemoveRow, readOnly }) {
-  const [extraRows, setExtraRows] = useState([]);
+function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRemoveSize, onRemoveRow, readOnly, customFields, onAddCustomField, initialRows }) {
+  const [extraRows, setExtraRows] = useState(() => initialRows || []);
   const [addingKey, setAddingKey] = useState("");
   const [newSizeLabel, setNewSizeLabel] = useState("");
+  const [addingCustom, setAddingCustom] = useState(false);
+  const [customLabel, setCustomLabel] = useState("");
 
-  const dataKeys = FITTING_FIELDS.filter(([k]) => sizes.some((s) => s.measurements[k])).map(([k]) => k);
+  const ALL_FIELDS = [...FITTING_FIELDS, ...(customFields || []).map((c) => [c.key, c.label])];
+  const dataKeys = ALL_FIELDS.filter(([k]) => sizes.some((s) => s.measurements[k])).map(([k]) => k);
   const rowKeys = Array.from(new Set([...extraRows, ...dataKeys]));
-  const rows = FITTING_FIELDS.filter(([k]) => rowKeys.includes(k));
-  const unusedFields = FITTING_FIELDS.filter(([k]) => !rowKeys.includes(k));
+  const rows = ALL_FIELDS.filter(([k]) => rowKeys.includes(k));
+  const unusedFields = ALL_FIELDS.filter(([k]) => !rowKeys.includes(k));
   const availableSizeLabels = ["Small", "Medium", "Large", "X-Large"].filter((l) => !sizes.some((s) => s.size_label === l));
+
   const removeRow = (key) => {
     setExtraRows((r) => r.filter((k) => k !== key));
     if (onRemoveRow) {
@@ -2665,6 +2673,15 @@ function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRem
     }
   };
 
+  const addCustomField = () => {
+    const label = customLabel.trim();
+    if (!label) return;
+    const key = "custom_" + label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    if (onAddCustomField) onAddCustomField({ key, label });
+    setExtraRows((r) => Array.from(new Set([...r, key])));
+    setCustomLabel(""); setAddingCustom(false);
+  };
+
   return (
     <div>
       {sizes.length === 0 ? (
@@ -2674,7 +2691,7 @@ function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRem
           <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 6 }}>No measurement rows yet.</div>
           {!readOnly && (
             <button type="button" onClick={() => setExtraRows(CORE_DEFAULT_ROWS)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "6px 12px", fontSize: 12 }}>
-              + Add common measurements (Shoulder, Chest, Waist, Hips, Sleeve Length, Length)
+              + Add common measurements (Shoulder, Chest, Waist, Hips, Sleeve Length, Length – Front)
             </button>
           )}
         </div>
@@ -2718,65 +2735,161 @@ function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRem
         </table>
       )}
 
-      {!readOnly && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        {unusedFields.length > 0 && (
-          <>
-            <select value={addingKey} onChange={(e) => setAddingKey(e.target.value)} style={{ ...inputStyle, width: 170 }}>
-              <option value="">+ Add measurement row…</option>
-              {unusedFields.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-            </select>
-            <button type="button" disabled={!addingKey} onClick={() => { setExtraRows((r) => [...r, addingKey]); setAddingKey(""); }}
-              style={{ background: addingKey ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add Row</button>
-          </>
-        )}
-        {onAddSize && availableSizeLabels.length > 0 && (
-          <>
-            <select value={newSizeLabel} onChange={(e) => setNewSizeLabel(e.target.value)} style={{ ...inputStyle, width: 140 }}>
-              <option value="">+ Add size column…</option>
-              {availableSizeLabels.map((l) => <option key={l} value={l}>{l}</option>)}
-            </select>
-            <button type="button" disabled={!newSizeLabel} onClick={() => { onAddSize(newSizeLabel); setNewSizeLabel(""); }}
-              style={{ background: newSizeLabel ? "#1A1A1A" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add Size</button>
-          </>
-        )}
-      </div>}
+      {!readOnly && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {unusedFields.length > 0 && (
+            <>
+              <select value={addingKey} onChange={(e) => setAddingKey(e.target.value)} style={{ ...inputStyle, width: 170 }}>
+                <option value="">+ Add measurement row…</option>
+                {unusedFields.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+              <button type="button" disabled={!addingKey} onClick={() => { setExtraRows((r) => [...r, addingKey]); setAddingKey(""); }}
+                style={{ background: addingKey ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add Row</button>
+            </>
+          )}
+          {onAddSize && availableSizeLabels.length > 0 && (
+            <>
+              <select value={newSizeLabel} onChange={(e) => setNewSizeLabel(e.target.value)} style={{ ...inputStyle, width: 140 }}>
+                <option value="">+ Add size column…</option>
+                {availableSizeLabels.map((l) => <option key={l} value={l}>{l}</option>)}
+              </select>
+              <button type="button" disabled={!newSizeLabel} onClick={() => { onAddSize(newSizeLabel); setNewSizeLabel(""); }}
+                style={{ background: newSizeLabel ? "#1A1A1A" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add Size</button>
+            </>
+          )}
+          {addingCustom ? (
+            <>
+              <input value={customLabel} onChange={(e) => setCustomLabel(e.target.value)} placeholder="New measurement name…" style={{ ...inputStyle, width: 170 }} />
+              <button type="button" onClick={addCustomField} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add</button>
+              <button type="button" onClick={() => { setAddingCustom(false); setCustomLabel(""); }} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "7px 12px", fontSize: 12 }}>Cancel</button>
+            </>
+          ) : (
+            <button type="button" onClick={() => setAddingCustom(true)} title="Create a brand-new measurement term specific to this design"
+              style={{ background: "#fff", border: "1px dashed #C9CDD3", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>+ Custom Measurement</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
+function ReadOnlySizeTables({ model, sizes }) {
+  const cutTags = model.possibleCuts ? model.possibleCuts.split(",").map((c) => c.trim()).filter(Boolean) : [];
+  const cutGroups = Array.from(new Set(sizes.map((s) => s.cut || null)));
+  const groupsToShow = cutGroups.length > 0 ? cutGroups : [null];
+  return groupsToShow.map((cut) => (
+    <div key={cut || "general"} style={{ marginBottom: 16 }}>
+      {cutTags.length > 1 && <div style={{ fontSize: 12, fontWeight: 700, color: "#3B6FA0", marginBottom: 6 }}>{cut || "General"}</div>}
+      <SizeMeasurementGrid sizes={sizes.filter((s) => (s.cut || null) === cut)} customFields={model.customFields} readOnly />
+    </div>
+  ));
+}
+
 function ModelSizes({ model, refresh, flash }) {
   const [sizes, setSizes] = useState([]);
+  const [addingCutTable, setAddingCutTable] = useState(false);
+  const [newCutChoice, setNewCutChoice] = useState("");
+  const [duplicateFrom, setDuplicateFrom] = useState("");
+
   const load = () => supabase.from("model_sizes").select("*").eq("model_id", model.id).then(({ data }) => setSizes(data || []));
   useEffect(() => { load(); }, [model.id]); // eslint-disable-line
 
-  const changeCell = (sizeLabel, key, value) => {
-    setSizes((prev) => prev.map((s) => s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
+  const changeCell = (cut, sizeLabel, key, value) => {
+    setSizes((prev) => prev.map((s) => (s.cut || null) === (cut || null) && s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
   };
-  const persistCell = async (sizeLabel) => {
-    const row = sizes.find((s) => s.size_label === sizeLabel);
+  const persistCell = async (cut, sizeLabel) => {
+    const row = sizes.find((s) => (s.cut || null) === (cut || null) && s.size_label === sizeLabel);
     if (!row) return;
     await supabase.from("model_sizes").update({ measurements: row.measurements }).eq("id", row.id);
   };
-  const removeRow = async (key) => {
-    const updated = sizes.map((s) => ({ ...s, measurements: { ...s.measurements, [key]: "" } }));
-    setSizes(updated);
+  const removeRow = async (cut, key) => {
+    const groupSizes = sizes.filter((s) => (s.cut || null) === (cut || null));
+    const updated = groupSizes.map((s) => ({ ...s, measurements: { ...s.measurements, [key]: "" } }));
+    setSizes((prev) => prev.map((s) => updated.find((u) => u.id === s.id) || s));
     await Promise.all(updated.map((s) => supabase.from("model_sizes").update({ measurements: s.measurements }).eq("id", s.id)));
   };
-  const addSize = async (label) => {
-    const { error } = await supabase.from("model_sizes").insert({ model_id: model.id, size_label: label, measurements: {} });
+  const addSize = async (cut, label) => {
+    const { error } = await supabase.from("model_sizes").insert({ model_id: model.id, size_label: label, measurements: {}, cut: cut || null });
     if (error) { flash("Error: " + error.message); return; }
     load(); flash("Size added");
   };
-  const removeSize = async (label) => {
-    const row = sizes.find((s) => s.size_label === label);
+  const removeSize = async (cut, label) => {
+    const row = sizes.find((s) => (s.cut || null) === (cut || null) && s.size_label === label);
     if (row) await supabase.from("model_sizes").delete().eq("id", row.id);
     load();
+  };
+  const addCustomField = async (field) => {
+    const existing = model.customFields || [];
+    if (existing.some((f) => f.key === field.key)) return;
+    await supabase.from("models").update({ custom_fields: [...existing, field] }).eq("id", model.id);
+    await refresh();
+  };
+
+  const cutTags = model.possibleCuts ? model.possibleCuts.split(",").map((c) => c.trim()).filter(Boolean) : [];
+  const cutGroups = Array.from(new Set(sizes.map((s) => s.cut || null)));
+  const groupsToShow = cutGroups.length > 0 ? cutGroups : [null];
+  const availableCutsToAdd = cutTags.filter((c) => !cutGroups.includes(c));
+
+  const addCutTable = async () => {
+    if (!newCutChoice) return;
+    if (duplicateFrom) {
+      const sourceCut = duplicateFrom === "__none__" ? null : duplicateFrom;
+      const sourceRows = sizes.filter((s) => (s.cut || null) === sourceCut);
+      for (const row of sourceRows) {
+        await supabase.from("model_sizes").insert({ model_id: model.id, size_label: row.size_label, measurements: { ...row.measurements }, cut: newCutChoice });
+      }
+    } else {
+      for (const label of DEFAULT_TEMPLATE_SIZES) {
+        await supabase.from("model_sizes").insert({ model_id: model.id, size_label: label, measurements: Object.fromEntries(DEFAULT_TEMPLATE_ROWS.map((k) => [k, ""])), cut: newCutChoice });
+      }
+    }
+    setAddingCutTable(false); setNewCutChoice(""); setDuplicateFrom("");
+    load(); flash(`Size table added for ${newCutChoice}`);
   };
 
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
       <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>SIZE MEASUREMENTS FOR {model.modelNo}</div>
-      <SizeMeasurementGrid sizes={sizes} onChangeCell={changeCell} onCellBlur={persistCell} onAddSize={addSize} onRemoveSize={removeSize} onRemoveRow={removeRow} />
+
+      {groupsToShow.map((cut) => (
+        <div key={cut || "general"} style={{ marginBottom: 20 }}>
+          {cutTags.length > 1 && <div style={{ fontSize: 12, fontWeight: 700, color: "#3B6FA0", marginBottom: 6 }}>{cut || "General"}</div>}
+          <SizeMeasurementGrid
+            sizes={sizes.filter((s) => (s.cut || null) === cut)}
+            onChangeCell={(sizeLabel, key, value) => changeCell(cut, sizeLabel, key, value)}
+            onCellBlur={(sizeLabel) => persistCell(cut, sizeLabel)}
+            onAddSize={(label) => addSize(cut, label)}
+            onRemoveSize={(label) => removeSize(cut, label)}
+            onRemoveRow={(key) => removeRow(cut, key)}
+            customFields={model.customFields}
+            onAddCustomField={addCustomField}
+          />
+        </div>
+      ))}
+
+      {cutTags.length > 1 && (
+        addingCutTable ? (
+          <div style={{ border: "1px solid #C9CDD3", borderRadius: 6, padding: 12, marginTop: 10 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>ADD SIZE TABLE FOR ANOTHER CUT</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+              <select value={newCutChoice} onChange={(e) => setNewCutChoice(e.target.value)} style={{ ...inputStyle, width: 160 }}>
+                <option value="">Select cut…</option>
+                {availableCutsToAdd.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <select value={duplicateFrom} onChange={(e) => setDuplicateFrom(e.target.value)} style={{ ...inputStyle, width: 240 }}>
+                <option value="">Start blank (Small–X-Large template)</option>
+                {groupsToShow.map((c) => <option key={c || "general"} value={c || "__none__"}>Duplicate values from {c || "General"}</option>)}
+              </select>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={addCutTable} disabled={!newCutChoice} style={{ background: newCutChoice ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>Add Table</button>
+              <button onClick={() => setAddingCutTable(false)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "7px 14px", fontSize: 12 }}>Cancel</button>
+            </div>
+          </div>
+        ) : availableCutsToAdd.length > 0 && (
+          <button onClick={() => setAddingCutTable(true)} style={{ background: "#fff", border: "1px dashed #C9CDD3", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700, marginTop: 10 }}>+ Add Size Table for Another Cut</button>
+        )
+      )}
     </div>
   );
 }
@@ -2934,7 +3047,11 @@ function ManageModels({ config, refresh, flash, session }) {
   };
   const removePendingDocument = (i) => setPendingDocuments((d) => d.filter((_, idx) => idx !== i));
 
-  const [pendingSizes, setPendingSizes] = useState([]);
+  const [pendingSizes, setPendingSizes] = useState(() =>
+    DEFAULT_TEMPLATE_SIZES.map((label) => ({ size_label: label, measurements: Object.fromEntries(DEFAULT_TEMPLATE_ROWS.map((k) => [k, ""])) }))
+  );
+  const [pendingCustomFields, setPendingCustomFields] = useState([]);
+  const addPendingCustomField = (field) => setPendingCustomFields((f) => [...f, field]);
   const changePendingCell = (sizeLabel, key, value) => setPendingSizes((prev) => prev.map((s) => s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
   const addPendingSize = (label) => setPendingSizes((prev) => [...prev, { size_label: label, measurements: {} }]);
   const removePendingSize = (label) => setPendingSizes((prev) => prev.filter((s) => s.size_label !== label));
@@ -2950,6 +3067,7 @@ function ManageModels({ config, refresh, flash, session }) {
     payload.created_by = session.name;
     payload.category = form.category === "__other__" ? (form.customCategory || "") : form.category;
     payload.product_type = form.productType === "__other__" ? (form.customProductType || "") : form.productType;
+    payload.custom_fields = pendingCustomFields;
     const { data: inserted, error } = await supabase.from("models").insert(payload).select().single();
     if (error) { flash("Error: " + error.message); setCreating(false); return; }
 
@@ -3020,7 +3138,9 @@ function ManageModels({ config, refresh, flash, session }) {
       await supabase.from("model_sizes").insert({ model_id: inserted.id, size_label: s.size_label, measurements: s.measurements });
     }
 
-    setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingFabrics([]); setPendingTrims([]); setPendingPatterns([]); setPendingDocuments([]); setPendingSizes([]);
+    setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingFabrics([]); setPendingTrims([]); setPendingPatterns([]); setPendingDocuments([]);
+    setPendingSizes(DEFAULT_TEMPLATE_SIZES.map((label) => ({ size_label: label, measurements: Object.fromEntries(DEFAULT_TEMPLATE_ROWS.map((k) => [k, ""])) })));
+    setPendingCustomFields([]);
     setCreating(false);
     await refresh();
     flash("Model created" + (pendingColors.length || pendingSizes.length || Object.keys(photoFiles).length ? " with photos, colors, and sizes" : ""));
@@ -3263,7 +3383,8 @@ function ManageModels({ config, refresh, flash, session }) {
 
       <div style={{ ...cardStyle, marginBottom: 20 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>SIZE MEASUREMENTS</div>
-        <SizeMeasurementGrid sizes={pendingSizes} onChangeCell={changePendingCell} onAddSize={addPendingSize} onRemoveSize={removePendingSize} />
+        <SizeMeasurementGrid sizes={pendingSizes} onChangeCell={changePendingCell} onAddSize={addPendingSize} onRemoveSize={removePendingSize}
+          customFields={pendingCustomFields} onAddCustomField={addPendingCustomField} initialRows={DEFAULT_TEMPLATE_ROWS} />
       </div>
 
       <button disabled={creating} onClick={create} style={{ width: "100%", background: creating ? "#C9CDD3" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 6, padding: "14px", fontSize: 14, fontWeight: 700, marginBottom: 28 }}>
