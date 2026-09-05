@@ -147,7 +147,7 @@ function diffSummary(before, form, fileChanged) {
 const ITEM_TYPES = ["Abaya", "Sheila", "Jalabiya", "Set"];
 const SHEILA_TYPES = ["Chiffon", "Crepe", "Georgette", "Plain"];
 const ORDER_TYPES = ["New", "Alteration"];
-const ROLE_LABEL = { sales: "Sales Panel", production: "Production Panel", admin: "Admin Panel" };
+const ROLE_LABEL = { sales: "Sales Panel", production: "Production Panel", admin: "Admin Panel", model_manager: "Model Manager" };
 
 const fmtDate = (d) => { if (!d) return "—"; try { return new Date(d).toLocaleDateString(undefined, { day: "2-digit", month: "2-digit", year: "numeric" }); } catch { return d; } };
 const fmtDateTime = (d) => { try { return new Date(d).toLocaleString(undefined, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch { return d; } };
@@ -297,7 +297,10 @@ export default function App() {
   useEffect(() => {
     if (!session) { setProfile(null); return; }
     supabase.from("profiles").select("*").eq("id", session.user.id).single()
-      .then(({ data }) => setProfile(data || null));
+      .then(({ data }) => {
+        setProfile(data || null);
+        setSubpage(data?.role === "model_manager" ? "models" : "records");
+      });
   }, [session]);
 
   const loadAll = useCallback(async () => {
@@ -340,6 +343,9 @@ export default function App() {
       {profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
+      )}
+      {profile.role === "model_manager" && (
+        <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} />
       )}
       {toast && (
         <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "#1A1A1A", color: "#fff", padding: "10px 20px", borderRadius: 4, fontSize: 13, fontFamily: "Inter, sans-serif", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", zIndex: 100 }}>
@@ -423,6 +429,12 @@ function Shell({ session, subpage, setSubpage, onLogout, children }) {
               {label}
             </button>
           ))}
+        </div>
+      )}
+      {session.role === "model_manager" && (
+        <div className="no-print" style={{ background: "#8a8a8a", padding: "10px 30px", display: "flex", gap: 22, flexWrap: "wrap" }}>
+          <button onClick={() => setSubpage("models")} style={{ background: "transparent", border: "none", color: "#fff", fontWeight: subpage === "models" ? 700 : 500, fontSize: 12.5, letterSpacing: "0.04em", textDecoration: subpage === "models" ? "underline" : "none" }}>ADD/REMOVE MODEL</button>
+          <button onClick={() => setSubpage("viewmodels")} style={{ background: "transparent", border: "none", color: "#fff", fontWeight: subpage === "viewmodels" ? 700 : 500, fontSize: 12.5, letterSpacing: "0.04em", textDecoration: subpage === "viewmodels" ? "underline" : "none" }}>VIEW MODELS</button>
         </div>
       )}
       <div style={{ padding: "26px 30px 60px" }}>{children}</div>
@@ -1664,6 +1676,14 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
       {selected && <OrderDetail order={selected} role="production" session={session} onClose={() => setSelectedId(null)} onSaveFields={handleSaveFields} onAction={handleAction} />}
     </div>
   );
+}
+
+function ModelManagerPanel({ config, refresh, flash, session, subpage, setSubpage }) {
+  if (subpage === "viewmodels") {
+    return <ModelBrowser models={config.models} canEdit={true} refresh={refresh} flash={flash} session={session} />;
+  }
+  // default view
+  return <ManageModels config={config} refresh={refresh} flash={flash} session={session} />;
 }
 
 function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
