@@ -62,6 +62,14 @@ const PRODUCT_CATALOG = {
 const PRODUCT_CATEGORIES = Object.keys(PRODUCT_CATALOG);
 const PHOTO_VIEWS = ["Front", "Back", "Side", "Detail"];
 
+const PROJECT_TYPES = ["Client Commission", "Wholesale Order", "Event / Wedding", "In-house Collection", "Other"];
+const PROJECT_STATUSES = ["Concept", "Design Development", "Sampling", "Client Review", "Approved", "In Production", "Delivered", "Closed"];
+
+function ProjectStatusTag({ status }) {
+  const colors = { "Concept": "#8a8a8a", "Design Development": "#3B6FA0", "Sampling": "#D98E2B", "Client Review": "#C1302B", "Approved": "#2F8F46", "In Production": "#2F8F46", "Delivered": "#1A1A1A", "Closed": "#1A1A1A" };
+  return <span style={{ color: colors[status] || "#1A1A1A", fontWeight: 700, fontSize: 13 }}>{(status || "").toUpperCase()}</span>;
+}
+
 const FITTING_FIELDS_GENERAL = [
   ["neckSize", "Neck Size"], ["shoulder", "Shoulder"], ["chest", "Chest"], ["waist", "Waist"], ["hips", "Hips"],
   ["bottom", "Bottom"], ["sleeveLength", "Sleeve Length"], ["sleeveOpen", "Sleeve Open"], ["armhole", "Armhole"], ["aroundArmhole", "Around Armhole"],
@@ -282,6 +290,9 @@ export default function App() {
   const [orders, setOrders] = useState(null);
   const [profiles, setProfiles] = useState(null);
   const [requirementItems, setRequirementItems] = useState(null);
+  const [projects, setProjects] = useState(null);
+  const [projectCollaborators, setProjectCollaborators] = useState(null);
+  const [allUsers, setAllUsers] = useState(null);
   const [subpage, setSubpage] = useState("records");
   const [selectedId, setSelectedId] = useState(null);
   const [toast, setToast] = useState(null);
@@ -304,13 +315,16 @@ export default function App() {
   }, [session]);
 
   const loadAll = useCallback(async () => {
-    const [{ data: branches }, { data: salespersons }, { data: models }, { data: ords }, { data: profs }, { data: reqItems }] = await Promise.all([
+    const [{ data: branches }, { data: salespersons }, { data: models }, { data: ords }, { data: profs }, { data: reqItems }, { data: projs }, { data: collabs }, { data: users }] = await Promise.all([
       supabase.from("branches").select("*").order("name"),
       supabase.from("salespersons").select("*").order("name"),
       supabase.from("models").select("*").order("model_no"),
       supabase.from("job_orders").select("*").order("created_at", { ascending: false }),
       supabase.from("customer_profiles").select("*").order("created_at", { ascending: false }),
       supabase.from("requirement_items").select("*").order("created_at", { ascending: false }),
+      supabase.from("projects").select("*").order("created_at", { ascending: false }),
+      supabase.from("project_collaborators").select("*"),
+      supabase.from("profiles").select("*"),
     ]);
     setConfig({ branches: branches || [], salespersons: salespersons || [], models: (models || []).map(dbToModel) });
     setOrders((ords || []).map(dbToOrder));
@@ -319,6 +333,9 @@ export default function App() {
       id: r.id, profileId: r.profile_id, model: r.model, recommendedSize: r.recommended_size,
       deltas: r.deltas, notes: r.notes, jobOrderId: r.job_order_id, createdAt: r.created_at,
     })));
+    setProjects(projs || []);
+    setProjectCollaborators(collabs || []);
+    setAllUsers(users || []);
   }, []);
 
   useEffect(() => { if (profile) loadAll(); }, [profile, loadAll]);
@@ -326,25 +343,28 @@ export default function App() {
   if (session === undefined) return <Loading text="Loading…" />;
   if (!session) return <LoginScreen onLoggedIn={() => {}} />;
   if (profile === null) return <NoProfileScreen onSignOut={() => supabase.auth.signOut()} />;
-  if (!config || !orders || !profiles || !requirementItems) return <Loading text="Loading job orders…" />;
+  if (!config || !orders || !profiles || !requirementItems || !projects || !projectCollaborators || !allUsers) return <Loading text="Loading job orders…" />;
 
   const refresh = loadAll;
 
   return (
     <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()}>
-      {profile.role === "sales" && (
+      {subpage === "projects" && (
+        <ProjectsPage projects={projects} collaborators={projectCollaborators} allUsers={allUsers} session={profile} refresh={refresh} flash={flash} />
+      )}
+      {subpage !== "projects" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
-      {profile.role === "production" && (
+      {subpage !== "projects" && profile.role === "production" && (
         <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
-      {profile.role === "admin" && (
+      {subpage !== "projects" && profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
-      {profile.role === "model_manager" && (
+      {subpage !== "projects" && profile.role === "model_manager" && (
         <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} />
       )}
       {toast && (
@@ -418,6 +438,8 @@ function Shell({ session, subpage, setSubpage, onLogout, children }) {
               <a className="link" onClick={() => setSubpage("customers")}>CUSTOMERS</a>
             </>
           )}
+          <span>|</span>
+          <a className="link" onClick={() => setSubpage("projects")}>PROJECTS</a>
           <span>|</span>
           <a className="link" onClick={onLogout}>LOGOUT</a>
         </div>
@@ -1451,6 +1473,189 @@ function RequirementDetail({ row, onClose }) {
 
         <div style={{ fontWeight: 700, fontSize: 12.5, margin: "18px 0 6px" }}>CUSTOMER SIGNATURE</div>
         {p.signature_url ? <img src={p.signature_url} alt="signature" style={{ border: "1px solid #E5E5E5", maxWidth: "100%", background: "#fff" }} /> : <div style={{ fontSize: 13, color: "#8a8a8a" }}>No signature captured for this profile.</div>}
+      </div>
+    </div>
+  );
+}
+
+function ProjectsPage({ projects, collaborators, allUsers, session, refresh, flash }) {
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({ name: "", clientName: "", projectType: PROJECT_TYPES[0], brief: "" });
+
+  const canCreate = session.role === "admin" || session.role === "model_manager";
+  const canSeeAll = canCreate;
+  const collabByProject = (id) => collaborators.filter((c) => c.project_id === id);
+  const visible = projects.filter((p) => canSeeAll || collabByProject(p.id).some((c) => c.user_id === session.id));
+  const filtered = visible.filter((p) => !query.trim() || p.name.toLowerCase().includes(query.toLowerCase()) || (p.client_name || "").toLowerCase().includes(query.toLowerCase()));
+
+  const createProject = async () => {
+    if (!form.name.trim()) return;
+    const { data, error } = await supabase.from("projects").insert({
+      name: form.name, client_name: form.clientName, project_type: form.projectType, brief: form.brief,
+      status: "Concept", created_by: session.name,
+    }).select().single();
+    if (error) { flash("Error: " + error.message); return; }
+    setCreating(false); setForm({ name: "", clientName: "", projectType: PROJECT_TYPES[0], brief: "" });
+    await refresh(); setSelectedId(data.id); flash("Project created");
+  };
+
+  if (selectedId) {
+    const p = projects.find((x) => x.id === selectedId);
+    if (p) return <ProjectDetailPage project={p} collaborators={collabByProject(p.id)} allUsers={allUsers} session={session} refresh={refresh} flash={flash} onBack={() => setSelectedId(null)} />;
+  }
+
+  return (
+    <div>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>PROJECTS</h2>
+      <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
+        <input placeholder="Search project or client…" value={query} onChange={(e) => setQuery(e.target.value)} style={{ ...inputStyle, width: 260 }} />
+        {canCreate && <button onClick={() => setCreating(true)} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>+ New Project</button>}
+      </div>
+
+      {creating && (
+        <div style={{ ...cardStyle, maxWidth: 600, margin: "0 auto 24px" }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>NEW PROJECT</div>
+          <Field label="Project Name"><input style={inputStyle} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} /></Field>
+          <Field label="Client Name"><input style={inputStyle} value={form.clientName} onChange={(e) => setForm((f) => ({ ...f, clientName: e.target.value }))} /></Field>
+          <Field label="Project Type">
+            <select style={inputStyle} value={form.projectType} onChange={(e) => setForm((f) => ({ ...f, projectType: e.target.value }))}>
+              {PROJECT_TYPES.map((t) => <option key={t}>{t}</option>)}
+            </select>
+          </Field>
+          <Field label="Brief (optional for now)"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.brief} onChange={(e) => setForm((f) => ({ ...f, brief: e.target.value }))} /></Field>
+          <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+            <button onClick={createProject} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Create Project</button>
+            <button onClick={() => setCreating(false)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {filtered.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No projects found.</div> : (
+        <div style={{ display: "grid", gap: 10 }}>
+          {filtered.map((p) => (
+            <div key={p.id} onClick={() => setSelectedId(p.id)} style={{ border: "1px solid #E5E5E5", padding: 14, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{p.name}</div>
+                <div style={{ fontSize: 12, color: "#8a8a8a" }}>{p.client_name}{p.project_type ? ` · ${p.project_type}` : ""}</div>
+              </div>
+              <ProjectStatusTag status={p.status} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectDetailPage({ project, collaborators, allUsers, session, refresh, flash, onBack }) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState(null);
+  const [newCollabId, setNewCollabId] = useState("");
+  const canManage = session.role === "admin";
+
+  const startEdit = () => {
+    setForm({ name: project.name, clientName: project.client_name || "", projectType: project.project_type || "", brief: project.brief || "", status: project.status });
+    setEditing(true);
+  };
+  const save = async () => {
+    const { error } = await supabase.from("projects").update({
+      name: form.name, client_name: form.clientName, project_type: form.projectType, brief: form.brief, status: form.status,
+      updated_by: session.name, updated_at: new Date().toISOString(),
+    }).eq("id", project.id);
+    if (error) { flash("Error: " + error.message); return; }
+    setEditing(false); await refresh(); flash("Project updated");
+  };
+  const addCollaborator = async () => {
+    if (!newCollabId) return;
+    const { error } = await supabase.from("project_collaborators").insert({ project_id: project.id, user_id: newCollabId, added_by: session.name });
+    if (error) { flash("Error: " + error.message); return; }
+    setNewCollabId(""); await refresh(); flash("Collaborator added");
+  };
+  const removeCollaborator = async (id) => { await supabase.from("project_collaborators").delete().eq("id", id); await refresh(); };
+  const availableUsers = allUsers.filter((u) => !collaborators.some((c) => c.user_id === u.id));
+
+  return (
+    <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+      <div className="no-print" style={{ marginBottom: 14 }}><a className="link" onClick={onBack}>← Back to Projects</a></div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+        <div>
+          <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 24 }}>{project.name}</div>
+          <div style={{ fontSize: 13, color: "#8a8a8a" }}>{project.client_name}{project.project_type ? ` · ${project.project_type}` : ""}</div>
+          <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 4 }}>
+            Created by {project.created_by || "—"} on {fmtDateTime(project.created_at)}
+            {project.updated_by && project.updated_at !== project.created_at ? ` · Last edited by ${project.updated_by} on ${fmtDateTime(project.updated_at)}` : ""}
+          </div>
+        </div>
+        {canManage && !editing && <a className="link" onClick={startEdit}>Edit Project</a>}
+      </div>
+      <div style={{ marginTop: 8 }}><ProjectStatusTag status={project.status} /></div>
+
+      {editing ? (
+        <div style={{ ...cardStyle, marginTop: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>EDIT PROJECT</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <Field label="Project Name"><input style={inputStyle} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} /></Field>
+            <Field label="Client Name"><input style={inputStyle} value={form.clientName} onChange={(e) => setForm((f) => ({ ...f, clientName: e.target.value }))} /></Field>
+            <Field label="Project Type">
+              <select style={inputStyle} value={form.projectType} onChange={(e) => setForm((f) => ({ ...f, projectType: e.target.value }))}>
+                <option value="">Select…</option>
+                {PROJECT_TYPES.map((t) => <option key={t}>{t}</option>)}
+              </select>
+            </Field>
+            <Field label="Status">
+              <select style={inputStyle} value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}>
+                {PROJECT_STATUSES.map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </Field>
+          </div>
+          <Field label="Brief (occasion, budget, style direction, references)"><textarea style={{ ...inputStyle, minHeight: 100 }} value={form.brief} onChange={(e) => setForm((f) => ({ ...f, brief: e.target.value }))} /></Field>
+          <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+            <button onClick={save} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Save Changes</button>
+            <button onClick={() => setEditing(false)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ ...cardStyle, marginTop: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>BRIEF</div>
+          <div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{project.brief || "No brief added yet."}</div>
+        </div>
+      )}
+
+      <div style={{ ...cardStyle, marginTop: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>COLLABORATORS</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: canManage ? 12 : 0 }}>
+          {collaborators.length === 0 && <div style={{ fontSize: 13, color: "#8a8a8a" }}>No collaborators added yet.</div>}
+          {collaborators.map((c) => {
+            const u = allUsers.find((x) => x.id === c.user_id);
+            return (
+              <span key={c.id} style={{ background: "#EEF0F2", border: "1px solid #C9CDD3", borderRadius: 14, padding: "5px 12px", fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 8 }}>
+                {u ? `${u.name} (${u.role})` : "Unknown user"}
+                {canManage && <span onClick={() => removeCollaborator(c.id)} style={{ cursor: "pointer", color: "#C1302B", fontWeight: 700 }}>×</span>}
+              </span>
+            );
+          })}
+        </div>
+        {canManage && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <select value={newCollabId} onChange={(e) => setNewCollabId(e.target.value)} style={{ ...inputStyle, width: 220 }}>
+              <option value="">Select a user to add…</option>
+              {availableUsers.map((u) => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
+            </select>
+            <button onClick={addCollaborator} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px", fontSize: 12.5, fontWeight: 700 }}>+ Add Collaborator</button>
+          </div>
+        )}
+      </div>
+
+      <div style={{ ...cardStyle, marginTop: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>TASKS</div>
+        <div style={{ fontSize: 13, color: "#8a8a8a" }}>Coming in the next phase — a full task board with assignees, due dates, and status.</div>
+      </div>
+
+      <div style={{ ...cardStyle, marginTop: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>LINKED MODELS</div>
+        <div style={{ fontSize: 13, color: "#8a8a8a" }}>Coming in the next phase — link models from your catalog to this project.</div>
       </div>
     </div>
   );
