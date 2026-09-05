@@ -46,6 +46,20 @@ const STYLE_FIELDS = [
   ["collectionName", "Collection Name"], ["styleName", "Style Name"], ["category", "Category"],
   ["productType", "Product Type"], ["season", "Season"],
 ];
+
+const PRODUCT_CATALOG = {
+  "Abaya": ["Classic Abaya", "A-Line Abaya", "Flare Abaya", "Butterfly Abaya", "Kimono Abaya", "Jacket-Cut Abaya", "Suit-Cut Abaya", "Cape Abaya", "Open Abaya", "Closed Abaya"],
+  "Jacket & Blazer": ["Short Jacket", "Long Jacket", "Blazer", "Long Blazer", "Coat", "Couture Coat"],
+  "Suit": ["Classic Suit", "Modest Suit", "Blazer & Trouser Suit", "Jacket & Trouser Suit", "A-Line Suit", "Travel Suit"],
+  "Dress": ["Dress", "Modest Dress", "Inner Dress", "Butterfly Dress", "Evening Dress", "Silk Dress", "Couture Gown"],
+  "Jalabiya": ["Classic Jalabiya", "Kimono Jalabiya", "Embroidered Jalabiya", "Velvet Jalabiya"],
+  "Kaftan": ["Classic Kaftan", "Couture Kaftan", "Embroidered Kaftan", "Patterned Kaftan"],
+  "Top & Shirt": ["Top", "Shirt", "Blouse", "Tunic"],
+  "Trousers": ["Straight Trousers", "Wide-Leg Trousers", "Flare Trousers", "Tailored Trousers"],
+  "Skirt": ["Straight Skirt", "A-Line Skirt", "Flared Skirt", "Maxi Skirt"],
+  "Set": ["Top & Trouser Set", "Jacket & Skirt Set", "Modest Set", "Coordinated Set"],
+};
+const PRODUCT_CATEGORIES = Object.keys(PRODUCT_CATALOG);
 const PHOTO_VIEWS = ["Front", "Back", "Side", "Detail"];
 
 const FITTING_FIELDS_GENERAL = [
@@ -2327,6 +2341,8 @@ function ManageModels({ config, refresh, flash, session }) {
     STYLE_FIELDS.forEach(([k]) => { payload[k.replace(/[A-Z]/g, (m) => "_" + m.toLowerCase())] = form[k]; });
     payload.description = form.description;
     payload.created_by = session.name;
+    payload.category = form.category === "__other__" ? (form.customCategory || "") : form.category;
+    payload.product_type = form.productType === "__other__" ? (form.customProductType || "") : form.productType;
     const { data: inserted, error } = await supabase.from("models").insert(payload).select().single();
     if (error) { flash("Error: " + error.message); setCreating(false); return; }
 
@@ -2414,7 +2430,29 @@ function ManageModels({ config, refresh, flash, session }) {
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>STYLE OVERVIEW</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
             <Field label="Style No (Model No)"><input style={inputStyle} value={form.modelNo} onChange={set("modelNo")} /></Field>
-            {STYLE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form[k]} onChange={set(k)} /></Field>)}
+            <Field label="Collection Name"><input style={inputStyle} value={form.collectionName} onChange={set("collectionName")} /></Field>
+            <Field label="Style Name"><input style={inputStyle} value={form.styleName} onChange={set("styleName")} /></Field>
+            <Field label="Category">
+              <select style={inputStyle} value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value, productType: "" }))}>
+                <option value="">Select category…</option>
+                {PRODUCT_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                <option value="__other__">Other (specify)</option>
+              </select>
+              {form.category === "__other__" && (
+                <input style={{ ...inputStyle, marginTop: 6 }} placeholder="Enter custom category" value={form.customCategory || ""} onChange={(e) => setForm((f) => ({ ...f, customCategory: e.target.value }))} />
+              )}
+            </Field>
+            <Field label="Product Type">
+              <select style={inputStyle} value={form.productType} onChange={(e) => setForm((f) => ({ ...f, productType: e.target.value }))} disabled={!form.category || form.category === "__other__"}>
+                <option value="">{form.category ? "Select product type…" : "Select a category first"}</option>
+                {(PRODUCT_CATALOG[form.category] || []).map((t) => <option key={t} value={t}>{t}</option>)}
+                <option value="__other__">Other (specify)</option>
+              </select>
+              {form.productType === "__other__" && (
+                <input style={{ ...inputStyle, marginTop: 6 }} placeholder="Enter custom product type" value={form.customProductType || ""} onChange={(e) => setForm((f) => ({ ...f, customProductType: e.target.value }))} />
+              )}
+            </Field>
+            <Field label="Season"><input style={inputStyle} value={form.season} onChange={set("season")} /></Field>
           </div>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.description} onChange={set("description")} /></Field>
         </div>
