@@ -64,8 +64,8 @@ const PHOTO_VIEWS = ["Front", "Back", "Side", "Detail"];
 
 const FITTING_FIELDS_GENERAL = [
   ["neckSize", "Neck Size"], ["shoulder", "Shoulder"], ["chest", "Chest"], ["waist", "Waist"], ["hips", "Hips"],
-  ["sleeveLength", "Sleeve Length"], ["aroundArmhole", "Around Armhole"], ["bicep", "Bicep"], ["wrist", "Wrist"],
-  ["upperArmLevel", "Upper Arm Level"], ["acrossBackWidth", "Across Back Width"], ["length", "Length"],
+  ["bottom", "Bottom"], ["sleeveLength", "Sleeve Length"], ["sleeveOpen", "Sleeve Open"], ["armhole", "Armhole"], ["aroundArmhole", "Around Armhole"],
+  ["bicep", "Bicep"], ["wrist", "Wrist"], ["upperArmLevel", "Upper Arm Level"], ["acrossBackWidth", "Across Back Width"], ["length", "Length"],
 ];
 const FITTING_FIELDS_TROUSER = [
   ["trouserWaist", "Waist"], ["trouserHips", "Hips"], ["trouserThigh", "Thigh"],
