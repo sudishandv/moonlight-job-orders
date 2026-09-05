@@ -296,6 +296,7 @@ export default function App() {
   const [projectCollaborators, setProjectCollaborators] = useState(null);
   const [allUsers, setAllUsers] = useState(null);
   const [projectTasks, setProjectTasks] = useState(null);
+  const [projectModels, setProjectModels] = useState(null);
   const [subpage, setSubpage] = useState("records");
   const [selectedId, setSelectedId] = useState(null);
   const [toast, setToast] = useState(null);
@@ -318,7 +319,7 @@ export default function App() {
   }, [session?.user?.id]);
 
   const loadAll = useCallback(async () => {
-    const [{ data: branches }, { data: salespersons }, { data: models }, { data: ords }, { data: profs }, { data: reqItems }, { data: projs }, { data: collabs }, { data: users }, { data: tasks }] = await Promise.all([
+    const [{ data: branches }, { data: salespersons }, { data: models }, { data: ords }, { data: profs }, { data: reqItems }, { data: projs }, { data: collabs }, { data: users }, { data: tasks }, { data: projModels }] = await Promise.all([
       supabase.from("branches").select("*").order("name"),
       supabase.from("salespersons").select("*").order("name"),
       supabase.from("models").select("*").order("model_no"),
@@ -329,6 +330,7 @@ export default function App() {
       supabase.from("project_collaborators").select("*"),
       supabase.from("profiles").select("*"),
       supabase.from("project_tasks").select("*"),
+      supabase.from("project_models").select("*"),
     ]);
     setConfig({ branches: branches || [], salespersons: salespersons || [], models: (models || []).map(dbToModel) });
     setOrders((ords || []).map(dbToOrder));
@@ -341,6 +343,7 @@ export default function App() {
     setProjectCollaborators(collabs || []);
     setAllUsers(users || []);
     setProjectTasks(tasks || []);
+    setProjectModels(projModels || []);
   }, []);
 
   useEffect(() => { if (profile) loadAll(); }, [profile, loadAll]);
@@ -348,14 +351,14 @@ export default function App() {
   if (session === undefined) return <Loading text="Loading…" />;
   if (!session) return <LoginScreen onLoggedIn={() => {}} />;
   if (profile === null) return <NoProfileScreen onSignOut={() => supabase.auth.signOut()} />;
-  if (!config || !orders || !profiles || !requirementItems || !projects || !projectCollaborators || !allUsers || !projectTasks) return <Loading text="Loading job orders…" />;
+  if (!config || !orders || !profiles || !requirementItems || !projects || !projectCollaborators || !allUsers || !projectTasks || !projectModels) return <Loading text="Loading job orders…" />;
 
   const refresh = loadAll;
 
   return (
     <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()}>
       {subpage === "projects" && (
-        <ProjectsPage projects={projects} collaborators={projectCollaborators} allUsers={allUsers} session={profile} refresh={refresh} flash={flash} tasks={projectTasks} />
+        <ProjectsPage projects={projects} collaborators={projectCollaborators} allUsers={allUsers} session={profile} refresh={refresh} flash={flash} tasks={projectTasks} projectModels={projectModels} models={config.models} />
       )}
       {subpage !== "projects" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
@@ -1483,7 +1486,7 @@ function RequirementDetail({ row, onClose }) {
   );
 }
 
-function ProjectsPage({ projects, collaborators, allUsers, session, refresh, flash, tasks }) {
+function ProjectsPage({ projects, collaborators, allUsers, session, refresh, flash, tasks, projectModels, models }) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(null);
   const [creating, setCreating] = useState(false);
@@ -1508,7 +1511,7 @@ function ProjectsPage({ projects, collaborators, allUsers, session, refresh, fla
 
   if (selectedId) {
     const p = projects.find((x) => x.id === selectedId);
-    if (p) return <ProjectDetailPage project={p} collaborators={collabByProject(p.id)} allUsers={allUsers} session={session} refresh={refresh} flash={flash} onBack={() => setSelectedId(null)} tasks={tasks} />;
+    if (p) return <ProjectDetailPage project={p} collaborators={collabByProject(p.id)} allUsers={allUsers} session={session} refresh={refresh} flash={flash} onBack={() => setSelectedId(null)} tasks={tasks} projectModels={projectModels} models={models} />;
   }
 
   return (
@@ -1683,11 +1686,64 @@ function TaskBoard({ project, tasks, collaborators, allUsers, session, refresh, 
   );
 }
 
-function ProjectDetailPage({ project, collaborators, allUsers, session, refresh, flash, onBack, tasks }) {
+function LinkedModels({ project, projectModels, models, session, refresh, flash, onViewModel }) {
+  const [addingModelId, setAddingModelId] = useState("");
+  const linked = projectModels.filter((pm) => pm.project_id === project.id);
+  const linkedModelObjs = linked.map((pm) => models.find((m) => m.id === pm.model_id)).filter(Boolean);
+  const availableModels = models.filter((m) => !linked.some((pm) => pm.model_id === m.id));
+
+  const addModel = async () => {
+    if (!addingModelId) return;
+    const { error } = await supabase.from("project_models").insert({ project_id: project.id, model_id: addingModelId, added_by: session.name });
+    if (error) { flash("Error: " + error.message); return; }
+    setAddingModelId(""); await refresh(); flash("Model linked");
+  };
+  const removeModel = async (modelId) => {
+    const row = linked.find((pm) => pm.model_id === modelId);
+    if (row) await supabase.from("project_models").delete().eq("id", row.id);
+    await refresh();
+  };
+
+  return (
+    <div>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>LINKED MODELS</div>
+      {linkedModelObjs.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 12 }}>No models linked yet.</div> : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 14 }}>
+          {linkedModelObjs.map((m) => (
+            <div key={m.id} style={{ border: "1px solid #E5E5E5", borderRadius: 6, padding: 10, textAlign: "center" }}>
+              <ModelThumb model={m} size={80} style={{ margin: "0 auto 6px" }} />
+              <div style={{ fontSize: 12.5, fontWeight: 600 }}>{m.modelNo}</div>
+              <div style={{ fontSize: 11, color: "#8a8a8a", marginBottom: 6 }}>{m.styleName || ""}</div>
+              <div style={{ display: "flex", justifyContent: "center", gap: 10 }}>
+                <a className="link" style={{ fontSize: 11 }} onClick={() => onViewModel(m.id)}>View</a>
+                <a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => removeModel(m.id)}>Unlink</a>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <select value={addingModelId} onChange={(e) => setAddingModelId(e.target.value)} style={{ ...inputStyle, width: 240 }}>
+          <option value="">Select a model to link…</option>
+          {availableModels.map((m) => <option key={m.id} value={m.id}>{m.modelNo}{m.styleName ? ` — ${m.styleName}` : ""}</option>)}
+        </select>
+        <button onClick={addModel} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px", fontSize: 12.5, fontWeight: 700 }}>+ Link Model</button>
+      </div>
+    </div>
+  );
+}
+
+function ProjectDetailPage({ project, collaborators, allUsers, session, refresh, flash, onBack, tasks, projectModels, models }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(null);
   const [newCollabId, setNewCollabId] = useState("");
+  const [viewingModelId, setViewingModelId] = useState(null);
   const canManage = session.role === "admin";
+
+  if (viewingModelId) {
+    const m = models.find((x) => x.id === viewingModelId);
+    if (m) return <ModelDetailPage model={m} canEdit={false} refresh={refresh} flash={flash} session={session} onBack={() => setViewingModelId(null)} />;
+  }
 
   const startEdit = () => {
     setForm({ name: project.name, clientName: project.client_name || "", projectType: project.project_type || "", brief: project.brief || "", status: project.status });
@@ -1787,8 +1843,7 @@ function ProjectDetailPage({ project, collaborators, allUsers, session, refresh,
       </div>
 
       <div style={{ ...cardStyle, marginTop: 16 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>LINKED MODELS</div>
-        <div style={{ fontSize: 13, color: "#8a8a8a" }}>Coming in the next phase — link models from your catalog to this project.</div>
+        <LinkedModels project={project} projectModels={projectModels} models={models} session={session} refresh={refresh} flash={flash} onViewModel={setViewingModelId} />
       </div>
     </div>
   );
