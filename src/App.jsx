@@ -1675,7 +1675,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
   const [patterns, setPatterns] = useState([]);
   const [docs, setDocs] = useState([]);
   const [lightbox, setLightbox] = useState(null);
-  const [editingCore, setEditingCore] = useState(false);
+  const [editingModel, setEditingModel] = useState(false);
   const [coreForm, setCoreForm] = useState(null);
   const [savingCore, setSavingCore] = useState(false);
 
@@ -1688,7 +1688,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
       sideFinishing: model.sideFinishing || "", sleeveOpenFinishing: model.sleeveOpenFinishing || "", armHoleFinishing: model.armHoleFinishing || "",
       bottomFinishing: model.bottomFinishing || "",
     });
-    setEditingCore(true);
+    setEditingModel(true);
   };
 
   const saveCoreEdits = async () => {
@@ -1704,12 +1704,13 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
     }).eq("id", model.id);
     setSavingCore(false);
     if (error) { flash("Error: " + error.message); return; }
-    setEditingCore(false);
+    setEditingModel(false);
+    loadReadOnlyData();
     await refresh();
     flash("Model details updated");
   };
 
-  useEffect(() => {
+  const loadReadOnlyData = () => {
     supabase.from("model_images").select("*").eq("model_id", model.id).then(({ data }) => setImages(data || []));
     supabase.from("model_colors").select("*").eq("model_id", model.id).then(({ data }) => setColors(data || []));
     supabase.from("model_sizes").select("*").eq("model_id", model.id).then(({ data }) => setSizes(data || []));
@@ -1717,7 +1718,9 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
     supabase.from("model_trims").select("*").eq("model_id", model.id).then(({ data }) => setTrims(data || []));
     supabase.from("model_patterns").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setPatterns(data || []));
     supabase.from("model_documents").select("*").eq("model_id", model.id).then(({ data }) => setDocs(data || []));
-  }, [model.id]);
+  };
+
+  useEffect(loadReadOnlyData, [model.id]);
 
   const removeModel = async () => {
     await supabase.from("models").delete().eq("id", model.id);
@@ -1735,17 +1738,17 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
           <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 24 }}>{model.modelNo}{model.styleName ? ` — ${model.styleName}` : ""}</div>
           <div style={{ fontSize: 13, color: "#8a8a8a" }}>{[model.collectionName, model.category, model.productType, model.season].filter(Boolean).join(" · ")}</div>
           <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 4 }}>
-            Created by {model.createdBy || "—"} on {fmtDate(model.createdAt)}
-            {model.updatedBy && model.updatedAt && model.updatedAt !== model.createdAt ? ` · Last edited by ${model.updatedBy} on ${fmtDate(model.updatedAt)}` : ""}
+            Created by {model.createdBy || "—"} on {fmtDateTime(model.createdAt)}
+            {model.updatedBy && model.updatedAt && model.updatedAt !== model.createdAt ? ` · Last edited by ${model.updatedBy} on ${fmtDateTime(model.updatedAt)}` : ""}
           </div>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
-          {canEdit && !editingCore && <a className="link" onClick={startEditCore}>Edit Details</a>}
+          {canEdit && !editingModel && <a className="link" onClick={startEditCore}>Edit Model</a>}
           {canEdit && <a className="link" style={{ color: "#C1302B" }} onClick={removeModel}>Remove Model</a>}
         </div>
       </div>
 
-      {editingCore && (
+      {editingModel && (
         <div style={{ ...cardStyle, marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>EDIT STYLE OVERVIEW & KEY DETAILS</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 12 }}>
@@ -1783,12 +1786,6 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
             <Field label="Arm Hole Finishing"><TagField value={coreForm.armHoleFinishing} onChange={(v) => setCoreForm((f) => ({ ...f, armHoleFinishing: v }))} options={ARM_HOLE_FINISH_OPTIONS} /></Field>
             <Field label="Bottom / Length Finishing"><TagField value={coreForm.bottomFinishing} onChange={(v) => setCoreForm((f) => ({ ...f, bottomFinishing: v }))} options={BOTTOM_FINISH_OPTIONS} /></Field>
           </div>
-
-          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-            <button disabled={savingCore} onClick={saveCoreEdits} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Save Changes</button>
-            <button onClick={() => setEditingCore(false)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Cancel</button>
-          </div>
-          {savingCore && <LoadingOverlay text="Saving changes…" />}
         </div>
       )}
 
@@ -1797,7 +1794,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 16 }}>
         <div style={cardStyle}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>PHOTOS</div>
-          {canEdit ? <ModelImages model={model} refresh={refresh} flash={flash} /> : images.length > 0 ? (
+          {(canEdit && editingModel) ? <ModelImages model={model} refresh={refresh} flash={flash} /> : images.length > 0 ? (
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               {images.map((img) => (
                 <div key={img.id} style={{ textAlign: "center" }}>
@@ -1811,7 +1808,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
 
         <div style={cardStyle}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>COLOR VARIATIONS</div>
-          {canEdit ? <ModelColors model={model} refresh={refresh} flash={flash} /> : colors.length > 0 ? (
+          {(canEdit && editingModel) ? <ModelColors model={model} refresh={refresh} flash={flash} /> : colors.length > 0 ? (
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               {colors.map((c) => (
                 <div key={c.id} style={{ textAlign: "center" }}>
@@ -1827,7 +1824,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
 
         <div style={cardStyle}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>FABRIC SWATCHES</div>
-          {canEdit ? <ModelFabrics model={model} refresh={refresh} flash={flash} /> : fabrics.length > 0 ? (
+          {(canEdit && editingModel) ? <ModelFabrics model={model} refresh={refresh} flash={flash} /> : fabrics.length > 0 ? (
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               {fabrics.map((f) => (
                 <div key={f.id} style={{ textAlign: "center", width: 90 }}>
@@ -1844,7 +1841,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
 
         <div style={cardStyle}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>TRIMS & ACCESSORIES</div>
-          {canEdit ? <ModelTrims model={model} refresh={refresh} flash={flash} /> : trims.length > 0 ? (
+          {(canEdit && editingModel) ? <ModelTrims model={model} refresh={refresh} flash={flash} /> : trims.length > 0 ? (
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               {trims.map((t) => (
                 <div key={t.id} style={{ textAlign: "center", width: 80 }}>
@@ -1862,7 +1859,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
 
       <div style={{ ...cardStyle, marginBottom: 16 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>PATTERN & CUTTING SUMMARY</div>
-        {canEdit ? <ModelPatterns model={model} refresh={refresh} flash={flash} /> : patterns.length > 0 ? (
+        {(canEdit && editingModel) ? <ModelPatterns model={model} refresh={refresh} flash={flash} /> : patterns.length > 0 ? (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "#F7F7F5" }}>
@@ -1890,10 +1887,10 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
         ) : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No pattern pieces.</div>}
       </div>
 
-      {(canEdit || docs.length > 0) && (
+      {((canEdit && editingModel) || docs.length > 0) && (
         <div style={{ ...cardStyle, marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>SKETCHES & REFERENCE DOCUMENTS</div>
-          {canEdit ? <ModelDocuments model={model} session={session} refresh={refresh} flash={flash} /> : (
+          {(canEdit && editingModel) ? <ModelDocuments model={model} session={session} refresh={refresh} flash={flash} /> : (
             <div style={{ display: "grid", gap: 6 }}>
               {docs.map((d) => (
                 <div key={d.id} style={{ fontSize: 12.5 }}><a href={d.file_url} target="_blank" rel="noreferrer" className="link">{d.file_name}</a></div>
@@ -1903,7 +1900,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
         </div>
       )}
 
-      {!editingCore && (
+      {!editingModel && (
         <div style={cardStyle}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>KEY DETAILS / MANUFACTURING SPECS</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
@@ -1924,8 +1921,16 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
 
       <div style={{ marginTop: 20 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>SIZE MEASUREMENTS</div>
-        {canEdit ? <ModelSizes model={model} refresh={refresh} flash={flash} /> : <SizeMeasurementGrid sizes={sizes} readOnly />}
+        {(canEdit && editingModel) ? <ModelSizes model={model} refresh={refresh} flash={flash} /> : <SizeMeasurementGrid sizes={sizes} readOnly />}
       </div>
+
+      {editingModel && (
+        <div style={{ display: "flex", gap: 10, marginTop: 24, paddingTop: 20, borderTop: "1px solid #E5E5E5" }}>
+          <button disabled={savingCore} onClick={saveCoreEdits} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontSize: 13.5, fontWeight: 700 }}>Save Changes</button>
+          <button onClick={() => { setEditingModel(false); loadReadOnlyData(); }} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 22px", fontSize: 13.5, fontWeight: 700 }}>Done Editing</button>
+        </div>
+      )}
+      {savingCore && <LoadingOverlay text="Saving changes…" />}
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
     </div>
   );
