@@ -2861,8 +2861,13 @@ function ManageModels({ config, refresh, flash, session }) {
   const [pendingColors, setPendingColors] = useState([]);
   const [newColorName, setNewColorName] = useState("");
   const [newColorFile, setNewColorFile] = useState(null);
+  const [colorAddError, setColorAddError] = useState("");
   const addPendingColor = () => {
-    if (!newColorName.trim()) return;
+    if (!newColorName.trim()) {
+      setColorAddError("Enter a color name before adding.");
+      return;
+    }
+    setColorAddError("");
     setPendingColors((c) => [...c, { name: newColorName, file: newColorFile }]);
     setNewColorName(""); setNewColorFile(null);
   };
@@ -2873,8 +2878,13 @@ function ManageModels({ config, refresh, flash, session }) {
   const [newFabricName, setNewFabricName] = useState("");
   const [newFabricCode, setNewFabricCode] = useState("");
   const [newFabricFile, setNewFabricFile] = useState(null);
+  const [fabricAddError, setFabricAddError] = useState("");
   const addPendingFabric = () => {
-    if (!newFabricName.trim()) return;
+    if (!newFabricName.trim()) {
+      setFabricAddError("Enter a fabric name before adding.");
+      return;
+    }
+    setFabricAddError("");
     setPendingFabrics((f) => [...f, { role: newFabricRole, name: newFabricName, code: newFabricCode, file: newFabricFile }]);
     setNewFabricName(""); setNewFabricCode(""); setNewFabricFile(null);
   };
@@ -2884,8 +2894,13 @@ function ManageModels({ config, refresh, flash, session }) {
   const [newTrimName, setNewTrimName] = useState("");
   const [newTrimCode, setNewTrimCode] = useState("");
   const [newTrimFile, setNewTrimFile] = useState(null);
+  const [trimAddError, setTrimAddError] = useState("");
   const addPendingTrim = () => {
-    if (!newTrimName.trim()) return;
+    if (!newTrimName.trim()) {
+      setTrimAddError("Enter an item name before adding.");
+      return;
+    }
+    setTrimAddError("");
     setPendingTrims((t) => [...t, { name: newTrimName, code: newTrimCode, file: newTrimFile }]);
     setNewTrimName(""); setNewTrimCode(""); setNewTrimFile(null);
   };
@@ -3113,12 +3128,13 @@ function ManageModels({ config, refresh, flash, session }) {
               </div>
             ))}
             <div style={{ textAlign: "center", width: 110 }}>
-              <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
-                <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
+              <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+                {newColorFile ? <img src={URL.createObjectURL(newColorFile)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>}
               </div>
               <input placeholder="Color name" value={newColorName} onChange={(e) => setNewColorName(e.target.value)} style={{ ...inputStyle, fontSize: 11, padding: "5px 6px", marginBottom: 4, textAlign: "center" }} />
               <FileButton label="Photo" onChange={(e) => setNewColorFile(e.target.files?.[0] || null)} />
               <button type="button" onClick={addPendingColor} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
+              {colorAddError && <div style={{ color: "#C1302B", fontSize: 11.5, marginTop: 4 }}>{colorAddError}</div>}
             </div>
           </div>
         </div>
@@ -3137,8 +3153,8 @@ function ManageModels({ config, refresh, flash, session }) {
               </div>
             ))}
             <div style={{ textAlign: "center", width: 110 }}>
-              <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
-                <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
+              <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+                {newFabricFile ? <img src={URL.createObjectURL(newFabricFile)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>}
               </div>
               <select value={newFabricRole} onChange={(e) => setNewFabricRole(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }}>
                 {["Main Fabric", "Lining", "Other"].map((r) => <option key={r}>{r}</option>)}
@@ -3147,6 +3163,7 @@ function ManageModels({ config, refresh, flash, session }) {
               <input placeholder="Code" value={newFabricCode} onChange={(e) => setNewFabricCode(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
               <FileButton label="Photo" onChange={(e) => setNewFabricFile(e.target.files?.[0] || null)} />
               <button type="button" onClick={addPendingFabric} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
+              {fabricAddError && <div style={{ color: "#C1302B", fontSize: 11.5, marginTop: 4 }}>{fabricAddError}</div>}
             </div>
           </div>
         </div>
@@ -3165,13 +3182,14 @@ function ManageModels({ config, refresh, flash, session }) {
               </div>
             ))}
             <div style={{ textAlign: "center", width: 110 }}>
-              <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
-                <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
+              <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+                {newTrimFile ? <img src={URL.createObjectURL(newTrimFile)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>}
               </div>
               <input placeholder="Item name" value={newTrimName} onChange={(e) => setNewTrimName(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
               <input placeholder="Code" value={newTrimCode} onChange={(e) => setNewTrimCode(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
               <FileButton label="Photo" onChange={(e) => setNewTrimFile(e.target.files?.[0] || null)} />
               <button type="button" onClick={addPendingTrim} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
+              {trimAddError && <div style={{ color: "#C1302B", fontSize: 11.5, marginTop: 4 }}>{trimAddError}</div>}
             </div>
           </div>
         </div>
@@ -3326,12 +3344,17 @@ function ModelColors({ model, refresh, flash }) {
   const [name, setName] = useState("");
   const [file, setFile] = useState(null);
   const [lightbox, setLightbox] = useState(null);
+  const [addError, setAddError] = useState("");
 
   const load = () => supabase.from("model_colors").select("*").eq("model_id", model.id).then(({ data }) => setColors(data || []));
   useEffect(() => { load(); }, [model.id]); // eslint-disable-line
 
   const add = async () => {
-    if (!name.trim()) return;
+    if (!name.trim()) {
+      setAddError("Enter a color name before adding.");
+      return;
+    }
+    setAddError("");
     let swatchUrl = null;
     if (file) {
       const path = `model-colors/${model.id}-${Date.now()}-${file.name}`;
@@ -3356,12 +3379,13 @@ function ModelColors({ model, refresh, flash }) {
           </div>
         ))}
         <div style={{ textAlign: "center", width: 110 }}>
-          <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
-            <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
+          <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+            {file ? <img src={URL.createObjectURL(file)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>}
           </div>
           <input placeholder="Color name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, fontSize: 11, padding: "5px 6px", marginBottom: 4, textAlign: "center" }} />
           <FileButton label="Photo" onChange={(e) => setFile(e.target.files?.[0] || null)} />
           <button type="button" onClick={add} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
+          {addError && <div style={{ color: "#C1302B", fontSize: 11.5, marginTop: 4 }}>{addError}</div>}
         </div>
       </div>
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
@@ -3376,12 +3400,17 @@ function ModelFabrics({ model, refresh, flash }) {
   const [code, setCode] = useState("");
   const [file, setFile] = useState(null);
   const [lightbox, setLightbox] = useState(null);
+  const [addError, setAddError] = useState("");
 
   const load = () => supabase.from("model_fabrics").select("*").eq("model_id", model.id).then(({ data }) => setFabrics(data || []));
   useEffect(() => { load(); }, [model.id]); // eslint-disable-line
 
   const add = async () => {
-    if (!name.trim()) return;
+    if (!name.trim()) {
+      setAddError("Enter a fabric name before adding.");
+      return;
+    }
+    setAddError("");
     let swatchUrl = null;
     if (file) {
       const path = `model-fabrics/${model.id}-${Date.now()}-${file.name}`;
@@ -3407,8 +3436,8 @@ function ModelFabrics({ model, refresh, flash }) {
           </div>
         ))}
         <div style={{ textAlign: "center", width: 110 }}>
-          <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
-            <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
+          <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+            {file ? <img src={URL.createObjectURL(file)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>}
           </div>
           <select value={role} onChange={(e) => setRole(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }}>
             {["Main Fabric", "Lining", "Other"].map((r) => <option key={r}>{r}</option>)}
@@ -3417,6 +3446,7 @@ function ModelFabrics({ model, refresh, flash }) {
           <input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
           <FileButton label="Photo" onChange={(e) => setFile(e.target.files?.[0] || null)} />
           <button type="button" onClick={add} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
+          {addError && <div style={{ color: "#C1302B", fontSize: 11.5, marginTop: 4 }}>{addError}</div>}
         </div>
       </div>
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
@@ -3430,12 +3460,17 @@ function ModelTrims({ model, refresh, flash }) {
   const [code, setCode] = useState("");
   const [file, setFile] = useState(null);
   const [lightbox, setLightbox] = useState(null);
+  const [addError, setAddError] = useState("");
 
   const load = () => supabase.from("model_trims").select("*").eq("model_id", model.id).then(({ data }) => setTrims(data || []));
   useEffect(() => { load(); }, [model.id]); // eslint-disable-line
 
   const add = async () => {
-    if (!name.trim()) return;
+    if (!name.trim()) {
+      setAddError("Enter an item name before adding.");
+      return;
+    }
+    setAddError("");
     let imageUrl = null;
     if (file) {
       const path = `model-trims/${model.id}-${Date.now()}-${file.name}`;
@@ -3461,13 +3496,14 @@ function ModelTrims({ model, refresh, flash }) {
           </div>
         ))}
         <div style={{ textAlign: "center", width: 110 }}>
-          <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
-            <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>
+          <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+            {file ? <img src={URL.createObjectURL(file)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>}
           </div>
           <input placeholder="Item name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
           <input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
           <FileButton label="Photo" onChange={(e) => setFile(e.target.files?.[0] || null)} />
           <button type="button" onClick={add} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
+          {addError && <div style={{ color: "#C1302B", fontSize: 11.5, marginTop: 4 }}>{addError}</div>}
         </div>
       </div>
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
