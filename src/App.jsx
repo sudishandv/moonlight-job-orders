@@ -3128,11 +3128,11 @@ function ManageModels({ config, refresh, flash, session }) {
               </div>
             ))}
             <div style={{ textAlign: "center", width: 110 }}>
-              <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+              <label htmlFor="pending-color-photo" style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, cursor: "pointer" }}>
                 {newColorFile ? <img src={URL.createObjectURL(newColorFile)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>}
-              </div>
+                <input id="pending-color-photo" type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => setNewColorFile(e.target.files?.[0] || null)} />
+              </label>
               <input placeholder="Color name" value={newColorName} onChange={(e) => setNewColorName(e.target.value)} style={{ ...inputStyle, fontSize: 11, padding: "5px 6px", marginBottom: 4, textAlign: "center" }} />
-              <FileButton label="Photo" onChange={(e) => setNewColorFile(e.target.files?.[0] || null)} />
               <button type="button" onClick={addPendingColor} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
               {colorAddError && <div style={{ color: "#C1302B", fontSize: 11.5, marginTop: 4 }}>{colorAddError}</div>}
             </div>
@@ -3153,15 +3153,15 @@ function ManageModels({ config, refresh, flash, session }) {
               </div>
             ))}
             <div style={{ textAlign: "center", width: 110 }}>
-              <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+              <label htmlFor="pending-fabric-photo" style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, cursor: "pointer" }}>
                 {newFabricFile ? <img src={URL.createObjectURL(newFabricFile)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>}
-              </div>
+                <input id="pending-fabric-photo" type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => setNewFabricFile(e.target.files?.[0] || null)} />
+              </label>
               <select value={newFabricRole} onChange={(e) => setNewFabricRole(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }}>
                 {["Main Fabric", "Lining", "Other"].map((r) => <option key={r}>{r}</option>)}
               </select>
               <input placeholder="Fabric name" value={newFabricName} onChange={(e) => setNewFabricName(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
               <input placeholder="Code" value={newFabricCode} onChange={(e) => setNewFabricCode(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
-              <FileButton label="Photo" onChange={(e) => setNewFabricFile(e.target.files?.[0] || null)} />
               <button type="button" onClick={addPendingFabric} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
               {fabricAddError && <div style={{ color: "#C1302B", fontSize: 11.5, marginTop: 4 }}>{fabricAddError}</div>}
             </div>
@@ -3182,12 +3182,12 @@ function ManageModels({ config, refresh, flash, session }) {
               </div>
             ))}
             <div style={{ textAlign: "center", width: 110 }}>
-              <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+              <label htmlFor="pending-trim-photo" style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, cursor: "pointer" }}>
                 {newTrimFile ? <img src={URL.createObjectURL(newTrimFile)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>}
-              </div>
+                <input id="pending-trim-photo" type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => setNewTrimFile(e.target.files?.[0] || null)} />
+              </label>
               <input placeholder="Item name" value={newTrimName} onChange={(e) => setNewTrimName(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
               <input placeholder="Code" value={newTrimCode} onChange={(e) => setNewTrimCode(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
-              <FileButton label="Photo" onChange={(e) => setNewTrimFile(e.target.files?.[0] || null)} />
               <button type="button" onClick={addPendingTrim} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
               {trimAddError && <div style={{ color: "#C1302B", fontSize: 11.5, marginTop: 4 }}>{trimAddError}</div>}
             </div>
@@ -3379,11 +3379,11 @@ function ModelColors({ model, refresh, flash }) {
           </div>
         ))}
         <div style={{ textAlign: "center", width: 110 }}>
-          <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+          <label htmlFor="model-color-photo" style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, cursor: "pointer" }}>
             {file ? <img src={URL.createObjectURL(file)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>}
-          </div>
+            <input id="model-color-photo" type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          </label>
           <input placeholder="Color name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, fontSize: 11, padding: "5px 6px", marginBottom: 4, textAlign: "center" }} />
-          <FileButton label="Photo" onChange={(e) => setFile(e.target.files?.[0] || null)} />
           <button type="button" onClick={add} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
           {addError && <div style={{ color: "#C1302B", fontSize: 11.5, marginTop: 4 }}>{addError}</div>}
         </div>
@@ -3436,15 +3436,15 @@ function ModelFabrics({ model, refresh, flash }) {
           </div>
         ))}
         <div style={{ textAlign: "center", width: 110 }}>
-          <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+          <label htmlFor="model-fabric-photo" style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, cursor: "pointer" }}>
             {file ? <img src={URL.createObjectURL(file)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>}
-          </div>
+            <input id="model-fabric-photo" type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          </label>
           <select value={role} onChange={(e) => setRole(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }}>
             {["Main Fabric", "Lining", "Other"].map((r) => <option key={r}>{r}</option>)}
           </select>
           <input placeholder="Fabric name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
           <input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
-          <FileButton label="Photo" onChange={(e) => setFile(e.target.files?.[0] || null)} />
           <button type="button" onClick={add} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
           {addError && <div style={{ color: "#C1302B", fontSize: 11.5, marginTop: 4 }}>{addError}</div>}
         </div>
@@ -3496,12 +3496,12 @@ function ModelTrims({ model, refresh, flash }) {
           </div>
         ))}
         <div style={{ textAlign: "center", width: 110 }}>
-          <div style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
+          <label htmlFor="model-trim-photo" style={{ width: 110, height: 110, border: "1px dashed #C9CDD3", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, cursor: "pointer" }}>
             {file ? <img src={URL.createObjectURL(file)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, color: "#C9CDD3" }}>+</span>}
-          </div>
+            <input id="model-trim-photo" type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          </label>
           <input placeholder="Item name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
           <input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} style={{ ...inputStyle, fontSize: 10, padding: "4px", marginBottom: 3 }} />
-          <FileButton label="Photo" onChange={(e) => setFile(e.target.files?.[0] || null)} />
           <button type="button" onClick={add} style={{ marginTop: 4, width: "100%", background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 0", fontSize: 11, fontWeight: 700 }}>+ Add</button>
           {addError && <div style={{ color: "#C1302B", fontSize: 11.5, marginTop: 4 }}>{addError}</div>}
         </div>
