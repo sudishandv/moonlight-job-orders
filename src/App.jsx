@@ -162,6 +162,15 @@ function Lightbox({ src, alt, onClose }) {
   );
 }
 
+function LoadingOverlay({ text }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(255,255,255,0.8)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, flexDirection: "column", gap: 12 }}>
+      <div style={{ width: 36, height: 36, border: "3px solid #C9CDD3", borderTopColor: "#1A1A1A", borderRadius: "50%", animation: "mc-spin 0.8s linear infinite" }} />
+      <div style={{ fontSize: 13, color: "#1A1A1A", fontWeight: 600 }}>{text}</div>
+    </div>
+  );
+}
+
 let fileButtonCounter = 0;
 function FileButton({ onChange, label, accept }) {
   const [id] = useState(() => `fb-${++fileButtonCounter}`);
@@ -222,7 +231,8 @@ function dbToModel(r) {
     requirements: r.requirements, sideFinishing: r.side_finishing, sleeveOpenFinishing: r.sleeve_open_finishing,
     armHoleFinishing: r.arm_hole_finishing, bottomFinishing: r.bottom_finishing, photoUrl: r.photo_url,
     collectionName: r.collection_name, styleName: r.style_name, category: r.category,
-    productType: r.product_type, season: r.season, description: r.description, createdBy: r.created_by,
+    productType: r.product_type, season: r.season, description: r.description,
+    createdBy: r.created_by, createdAt: r.created_at, updatedBy: r.updated_by, updatedAt: r.updated_at,
   };
 }
 function modelToDb(f) {
@@ -367,6 +377,7 @@ function GlobalStyle() {
       table { border-collapse: collapse; width: 100%; }
       a.link { color: #1A1A1A; text-decoration: underline; cursor: pointer; }
       @media print { .no-print { display: none !important; } }
+      @keyframes mc-spin { to { transform: rotate(360deg); } }
     `}</style>
   );
 }
@@ -1664,6 +1675,39 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
   const [patterns, setPatterns] = useState([]);
   const [docs, setDocs] = useState([]);
   const [lightbox, setLightbox] = useState(null);
+  const [editingCore, setEditingCore] = useState(false);
+  const [coreForm, setCoreForm] = useState(null);
+  const [savingCore, setSavingCore] = useState(false);
+
+  const startEditCore = () => {
+    setCoreForm({
+      collectionName: model.collectionName || "", styleName: model.styleName || "", category: model.category || "",
+      productType: model.productType || "", season: model.season || "", description: model.description || "",
+      possibleCuts: model.possibleCuts || "", mainFabricCode: model.mainFabricCode || "", innerFabricCode: model.innerFabricCode || "",
+      otherFabric: model.otherFabric || "", sizeRange: model.sizeRange || "", requirements: model.requirements || "",
+      sideFinishing: model.sideFinishing || "", sleeveOpenFinishing: model.sleeveOpenFinishing || "", armHoleFinishing: model.armHoleFinishing || "",
+      bottomFinishing: model.bottomFinishing || "",
+    });
+    setEditingCore(true);
+  };
+
+  const saveCoreEdits = async () => {
+    setSavingCore(true);
+    const category = coreForm.category === "__other__" ? (coreForm.customCategory || "") : coreForm.category;
+    const productType = coreForm.productType === "__other__" ? (coreForm.customProductType || "") : coreForm.productType;
+    const { error } = await supabase.from("models").update({
+      collection_name: coreForm.collectionName, style_name: coreForm.styleName, category, product_type: productType,
+      season: coreForm.season, description: coreForm.description, possible_cuts: coreForm.possibleCuts, main_fabric_code: coreForm.mainFabricCode,
+      inner_fabric_code: coreForm.innerFabricCode, other_fabric: coreForm.otherFabric, size_range: coreForm.sizeRange, requirements: coreForm.requirements,
+      side_finishing: coreForm.sideFinishing, sleeve_open_finishing: coreForm.sleeveOpenFinishing, arm_hole_finishing: coreForm.armHoleFinishing,
+      bottom_finishing: coreForm.bottomFinishing, updated_at: new Date().toISOString(), updated_by: session.name,
+    }).eq("id", model.id);
+    setSavingCore(false);
+    if (error) { flash("Error: " + error.message); return; }
+    setEditingCore(false);
+    await refresh();
+    flash("Model details updated");
+  };
 
   useEffect(() => {
     supabase.from("model_images").select("*").eq("model_id", model.id).then(({ data }) => setImages(data || []));
@@ -1690,9 +1734,64 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
         <div>
           <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 24 }}>{model.modelNo}{model.styleName ? ` — ${model.styleName}` : ""}</div>
           <div style={{ fontSize: 13, color: "#8a8a8a" }}>{[model.collectionName, model.category, model.productType, model.season].filter(Boolean).join(" · ")}</div>
+          <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 4 }}>
+            Created by {model.createdBy || "—"} on {fmtDate(model.createdAt)}
+            {model.updatedBy && model.updatedAt && model.updatedAt !== model.createdAt ? ` · Last edited by ${model.updatedBy} on ${fmtDate(model.updatedAt)}` : ""}
+          </div>
         </div>
-        {canEdit && <a className="link" style={{ color: "#C1302B" }} onClick={removeModel}>Remove Model</a>}
+        <div style={{ display: "flex", gap: 10 }}>
+          {canEdit && !editingCore && <a className="link" onClick={startEditCore}>Edit Details</a>}
+          {canEdit && <a className="link" style={{ color: "#C1302B" }} onClick={removeModel}>Remove Model</a>}
+        </div>
       </div>
+
+      {editingCore && (
+        <div style={{ ...cardStyle, marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>EDIT STYLE OVERVIEW & KEY DETAILS</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 12 }}>
+            <Field label="Collection Name"><input style={inputStyle} value={coreForm.collectionName} onChange={(e) => setCoreForm((f) => ({ ...f, collectionName: e.target.value }))} /></Field>
+            <Field label="Style Name"><input style={inputStyle} value={coreForm.styleName} onChange={(e) => setCoreForm((f) => ({ ...f, styleName: e.target.value }))} /></Field>
+            <Field label="Category">
+              <select style={inputStyle} value={coreForm.category} onChange={(e) => setCoreForm((f) => ({ ...f, category: e.target.value, productType: "" }))}>
+                <option value="">Select category…</option>
+                {PRODUCT_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                <option value="__other__">Other (specify)</option>
+              </select>
+              {coreForm.category === "__other__" && <input style={{ ...inputStyle, marginTop: 6 }} placeholder="Enter custom category" value={coreForm.customCategory || ""} onChange={(e) => setCoreForm((f) => ({ ...f, customCategory: e.target.value }))} />}
+            </Field>
+            <Field label="Product Type">
+              <select style={inputStyle} value={coreForm.productType} onChange={(e) => setCoreForm((f) => ({ ...f, productType: e.target.value }))} disabled={!coreForm.category || coreForm.category === "__other__"}>
+                <option value="">{coreForm.category ? "Select product type…" : "Select a category first"}</option>
+                {(PRODUCT_CATALOG[coreForm.category] || []).map((t) => <option key={t} value={t}>{t}</option>)}
+                <option value="__other__">Other (specify)</option>
+              </select>
+              {coreForm.productType === "__other__" && <input style={{ ...inputStyle, marginTop: 6 }} placeholder="Enter custom product type" value={coreForm.customProductType || ""} onChange={(e) => setCoreForm((f) => ({ ...f, customProductType: e.target.value }))} />}
+            </Field>
+            <Field label="Season"><input style={inputStyle} value={coreForm.season} onChange={(e) => setCoreForm((f) => ({ ...f, season: e.target.value }))} /></Field>
+          </div>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={coreForm.description} onChange={(e) => setCoreForm((f) => ({ ...f, description: e.target.value }))} /></Field>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginTop: 14 }}>
+            <Field label="Possible Cuts"><TagField value={coreForm.possibleCuts} onChange={(v) => setCoreForm((f) => ({ ...f, possibleCuts: v }))} options={POSSIBLE_CUTS_OPTIONS} /></Field>
+            <Field label="Main Fabric Code"><TagField value={coreForm.mainFabricCode} onChange={(v) => setCoreForm((f) => ({ ...f, mainFabricCode: v }))} /></Field>
+            <Field label="Inner Fabric Code"><TagField value={coreForm.innerFabricCode} onChange={(v) => setCoreForm((f) => ({ ...f, innerFabricCode: v }))} /></Field>
+            <Field label="Other Fabric"><TagField value={coreForm.otherFabric} onChange={(v) => setCoreForm((f) => ({ ...f, otherFabric: v }))} /></Field>
+            <Field label="Size Range"><TagField value={coreForm.sizeRange} onChange={(v) => setCoreForm((f) => ({ ...f, sizeRange: v }))} options={SIZE_RANGE_OPTIONS} /></Field>
+            <Field label="Requirements"><TagField value={coreForm.requirements} onChange={(v) => setCoreForm((f) => ({ ...f, requirements: v }))} options={REQUIREMENTS_OPTIONS} /></Field>
+            <Field label="Side Finishing"><TagField value={coreForm.sideFinishing} onChange={(v) => setCoreForm((f) => ({ ...f, sideFinishing: v }))} options={SIDE_FINISH_OPTIONS} /></Field>
+            <Field label="Sleeve Open Finishing"><TagField value={coreForm.sleeveOpenFinishing} onChange={(v) => setCoreForm((f) => ({ ...f, sleeveOpenFinishing: v }))} options={SLEEVE_OPEN_FINISH_OPTIONS} /></Field>
+            <Field label="Arm Hole Finishing"><TagField value={coreForm.armHoleFinishing} onChange={(v) => setCoreForm((f) => ({ ...f, armHoleFinishing: v }))} options={ARM_HOLE_FINISH_OPTIONS} /></Field>
+            <Field label="Bottom / Length Finishing"><TagField value={coreForm.bottomFinishing} onChange={(v) => setCoreForm((f) => ({ ...f, bottomFinishing: v }))} options={BOTTOM_FINISH_OPTIONS} /></Field>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+            <button disabled={savingCore} onClick={saveCoreEdits} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Save Changes</button>
+            <button onClick={() => setEditingCore(false)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Cancel</button>
+          </div>
+          {savingCore && <LoadingOverlay text="Saving changes…" />}
+        </div>
+      )}
+
       {model.description && <div style={{ fontSize: 13.5, color: "#4A5468", margin: "10px 0 20px" }}>{model.description}</div>}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 16 }}>
@@ -1804,22 +1903,24 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
         </div>
       )}
 
-      <div style={cardStyle}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>KEY DETAILS / MANUFACTURING SPECS</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
-          {MODEL_FIELDS.slice(1).map(([k, l]) => (
-            <div key={k}>
-              <div style={label13}>{l}</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                {(model[k] || "").split(",").map((t) => t.trim()).filter(Boolean).map((t, i) => (
-                  <span key={`${t}-${i}`} style={{ background: "#EEF0F2", border: "1px solid #C9CDD3", borderRadius: 12, padding: "2px 9px", fontSize: 11.5 }}>{t}</span>
-                ))}
-                {!model[k] && <span style={{ fontSize: 13, color: "#8a8a8a" }}>—</span>}
+      {!editingCore && (
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>KEY DETAILS / MANUFACTURING SPECS</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+            {MODEL_FIELDS.slice(1).map(([k, l]) => (
+              <div key={k}>
+                <div style={label13}>{l}</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {(model[k] || "").split(",").map((t) => t.trim()).filter(Boolean).map((t, i) => (
+                    <span key={`${t}-${i}`} style={{ background: "#EEF0F2", border: "1px solid #C9CDD3", borderRadius: 12, padding: "2px 9px", fontSize: 11.5 }}>{t}</span>
+                  ))}
+                  {!model[k] && <span style={{ fontSize: 13, color: "#8a8a8a" }}>—</span>}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       <div style={{ marginTop: 20 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>SIZE MEASUREMENTS</div>
@@ -2132,19 +2233,21 @@ function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRem
   const [extraRows, setExtraRows] = useState([]);
   const [addingKey, setAddingKey] = useState("");
   const [newSizeLabel, setNewSizeLabel] = useState("");
-  const [hiddenRows, setHiddenRows] = useState([]);
 
   const dataKeys = FITTING_FIELDS.filter(([k]) => sizes.some((s) => s.measurements[k])).map(([k]) => k);
-  const rowKeys = Array.from(new Set([...CORE_DEFAULT_ROWS, ...extraRows, ...dataKeys])).filter((k) => !hiddenRows.includes(k));
+  const rowKeys = Array.from(new Set([...extraRows, ...dataKeys]));
   const rows = FITTING_FIELDS.filter(([k]) => rowKeys.includes(k));
   const unusedFields = FITTING_FIELDS.filter(([k]) => !rowKeys.includes(k));
   const availableSizeLabels = ["Small", "Medium", "Large", "X-Large"].filter((l) => !sizes.some((s) => s.size_label === l));
   const removeRow = (key) => {
-    setHiddenRows((h) => [...h, key]);
+    setExtraRows((r) => r.filter((k) => k !== key));
     if (onRemoveRow) {
       onRemoveRow(key);
     } else {
-      sizes.forEach((s) => onChangeCell(s.size_label, key, ""));
+      sizes.forEach((s) => {
+        onChangeCell(s.size_label, key, "");
+        if (onCellBlur) onCellBlur(s.size_label, key);
+      });
     }
   };
 
@@ -2152,6 +2255,15 @@ function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRem
     <div>
       {sizes.length === 0 ? (
         <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 10 }}>Add a size column (S/M/L/XL) below to start entering measurements.</div>
+      ) : rows.length === 0 ? (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 6 }}>No measurement rows yet.</div>
+          {!readOnly && (
+            <button type="button" onClick={() => setExtraRows(CORE_DEFAULT_ROWS)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "6px 12px", fontSize: 12 }}>
+              + Add common measurements (Shoulder, Chest, Waist, Hips, Sleeve Length, Length)
+            </button>
+          )}
+        </div>
       ) : (
         <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
           <thead>
@@ -2659,6 +2771,7 @@ function ManageModels({ config, refresh, flash, session }) {
       <button disabled={creating} onClick={create} style={{ width: "100%", background: creating ? "#C9CDD3" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 6, padding: "14px", fontSize: 14, fontWeight: 700, marginBottom: 28 }}>
         {creating ? "Creating…" : "Create Model"}
       </button>
+      {creating && <LoadingOverlay text="Creating model — uploading photos and details…" />}
     </div>
   );
 }
