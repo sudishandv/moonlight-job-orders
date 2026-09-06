@@ -1912,9 +1912,33 @@ function ProjectDetailPage({ project, collaborators, allUsers, session, refresh,
 }
 
 function CustomersPage({ profiles, orders }) {
-  const [selected, setSelected] = useState(null);
   const [query, setQuery] = useState("");
-  const filtered = profiles.filter((p) => !query.trim() || p.name.toLowerCase().includes(query.toLowerCase()) || (p.mobile || "").includes(query));
+  const [selectedMobile, setSelectedMobile] = useState(null);
+
+  const byMobile = {};
+  profiles.forEach((p) => {
+    if (!p.mobile) return;
+    if (!byMobile[p.mobile] || new Date(p.createdAt) > new Date(byMobile[p.mobile].createdAt)) {
+      byMobile[p.mobile] = p;
+    }
+  });
+  const customers = Object.values(byMobile).map((p) => ({
+    ...p,
+    orderCount: orders.filter((o) => o.mobile === p.mobile).length,
+  }));
+  const filtered = customers.filter((p) => !query.trim() || p.name.toLowerCase().includes(query.toLowerCase()) || (p.mobile || "").includes(query));
+
+  if (selectedMobile) {
+    return (
+      <CustomerDetail
+        mobile={selectedMobile}
+        profiles={profiles.filter((p) => p.mobile === selectedMobile)}
+        orders={orders.filter((o) => o.mobile === selectedMobile)}
+        onClose={() => setSelectedMobile(null)}
+      />
+    );
+  }
+
   return (
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>CUSTOMER RECORDS</h2>
@@ -1924,58 +1948,84 @@ function CustomersPage({ profiles, orders }) {
       {filtered.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No customer profiles found.</div> : (
         <table>
           <thead><tr style={{ borderBottom: "2px solid #1A1A1A", fontSize: 12.5, textAlign: "left" }}>
-            <th style={{ padding: "9px 10px" }}>Name</th><th style={{ padding: "9px 10px" }}>Mobile</th><th style={{ padding: "9px 10px" }}>Branch</th><th style={{ padding: "9px 10px" }}>Created</th><th style={{ padding: "9px 10px" }}>View</th>
+            <th style={{ padding: "9px 10px" }}>Name</th><th style={{ padding: "9px 10px" }}>Mobile</th>
+            <th style={{ padding: "9px 10px" }}>Orders</th><th style={{ padding: "9px 10px" }}>View</th>
           </tr></thead>
           <tbody>
             {filtered.map((p) => (
-              <tr key={p.id} style={{ borderBottom: "1px solid #E5E5E5", fontSize: 13.5 }}>
+              <tr key={p.mobile} style={{ borderBottom: "1px solid #E5E5E5", fontSize: 13.5 }}>
                 <td style={{ padding: "9px 10px" }}>{p.name}</td>
                 <td style={{ padding: "9px 10px" }}>{p.mobile}</td>
-                <td style={{ padding: "9px 10px" }}>{p.branch}</td>
-                <td style={{ padding: "9px 10px" }}>{fmtDate(p.createdAt)}</td>
-                <td style={{ padding: "9px 10px" }}><a className="link" onClick={() => setSelected(p)}>View</a></td>
+                <td style={{ padding: "9px 10px" }}>{p.orderCount}</td>
+                <td style={{ padding: "9px 10px" }}><a className="link" onClick={() => setSelectedMobile(p.mobile)}>View</a></td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
-      {selected && <CustomerDetail profile={selected} orders={orders} onClose={() => setSelected(null)} />}
     </div>
   );
 }
 
-function CustomerDetail({ profile, orders, onClose }) {
-  const history = orders.filter((o) => o.mobile === profile.mobile);
+function CustomerDetail({ mobile, profiles, orders, onClose }) {
+  const [legacyFitted, setLegacyFitted] = useState([]);
+  const [legacyOrders, setLegacyOrders] = useState([]);
+
+  useEffect(() => {
+    supabase.from("legacy_fitted_measurements").select("*").eq("mobile", mobile).then(({ data }) => setLegacyFitted(data || []));
+    supabase.from("legacy_orders").select("*").eq("mobile", mobile).order("id", { ascending: false }).then(({ data }) => setLegacyOrders(data || []));
+  }, [mobile]);
+
+  const sortedProfiles = [...profiles].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const name = sortedProfiles[0]?.name || "—";
+
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", justifyContent: "flex-end", zIndex: 50 }} className="no-print" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", width: 480, maxWidth: "100%", height: "100%", overflowY: "auto", padding: "26px 28px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
-            <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20 }}>{profile.name}</div>
-            <div style={{ fontSize: 13.5, color: "#8a8a8a" }}>{profile.mobile}</div>
-          </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: "#8a8a8a" }}>×</button>
-        </div>
+    <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+      <div className="no-print" style={{ marginBottom: 14 }}><a className="link" onClick={onClose}>← Back to Customers</a></div>
+      <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 24 }}>{name}</div>
+      <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 20 }}>{mobile}</div>
 
-        <div style={{ fontWeight: 700, fontSize: 12.5, margin: "18px 0 6px" }}>FITTING MEASUREMENTS</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, fontSize: 13, marginBottom: 16 }}>
-          {FITTING_FIELDS.map(([k, l]) => <div key={k}>{l}: {profile.measurements?.[k] || "—"}</div>)}
-        </div>
-
-        <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>ALL ORDERS FOR THIS PHONE NUMBER</div>
-        {history.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>No job orders placed yet.</div> : (
-          <div style={{ display: "grid", gap: 8 }}>
-            {history.map((o) => (
-              <div key={o.id} style={{ border: "1px solid #E5E5E5", padding: 10, fontSize: 13 }}>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span className="mono">{o.invoiceNo}</span>
-                  <StatusTag status={o.status} />
-                </div>
-                <div>{o.model} — {fmtDate(o.createdAt)}</div>
-              </div>
-            ))}
+      <div style={cardStyle}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>FITTING MEASUREMENT HISTORY (new system)</div>
+        {sortedProfiles.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>No measurements recorded yet.</div> : sortedProfiles.map((p) => (
+          <div key={p.id} style={{ borderBottom: "1px solid #E5E5E5", padding: "8px 0" }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Recorded {fmtDateTime(p.createdAt)}{p.branch ? ` · ${p.branch}` : ""}</div>
+            <div style={{ fontSize: 12, color: "#8a8a8a" }}>
+              {FITTING_FIELDS.filter(([k]) => p.measurements?.[k]).map(([k, l]) => `${l}: ${p.measurements[k]}`).join(", ") || "—"}
+            </div>
           </div>
-        )}
+        ))}
+      </div>
+
+      <div style={{ ...cardStyle, marginTop: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>ALL ORDERS — NEW SYSTEM ({orders.length})</div>
+        {orders.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>No job orders placed yet.</div> : orders.map((o) => (
+          <div key={o.id} style={{ border: "1px solid #E5E5E5", borderRadius: 4, padding: 10, marginBottom: 8, fontSize: 13 }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span className="mono">{o.jobOrderNo}</span><StatusTag status={o.status} /></div>
+            <div>{o.model} — {fmtDate(o.createdAt)}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ ...cardStyle, marginTop: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6, color: "#2F8F46" }}>OLD SYSTEM — GENUINE FITTED MEASUREMENT</div>
+        {legacyFitted.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>None found.</div> : legacyFitted.map((f) => (
+          <div key={f.id} style={{ fontSize: 12, padding: "4px 0" }}>
+            {["shoulder", "chest", "waist", "hips", "armhole", "sleeve_length", "length", "bicep", "wrist", "neck"].filter((k) => f[k]).map((k) => `${k}: ${f[k]}`).join(", ")}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ ...cardStyle, marginTop: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>OLD SYSTEM — PAST ORDERS / CUTTING REFERENCE ({legacyOrders.length})</div>
+        {legacyOrders.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>None found.</div> : legacyOrders.map((o) => (
+          <div key={o.id} style={{ borderBottom: "1px solid #E5E5E5", padding: "8px 0", fontSize: 12 }}>
+            <strong>{o.order_date}</strong> — {o.garment_type || "—"} ({o.model_no || "—"})
+            <div style={{ color: "#8a8a8a" }}>
+              {["shoulder", "chest", "waist", "hips", "bottom", "armhole", "sleeve_length", "sleeve_open", "length_front", "length_back"].filter((k) => o[k]).map((k) => `${k}: ${o[k]}`).join(", ") || "No usable measurements on this record"}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
