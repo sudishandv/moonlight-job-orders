@@ -84,6 +84,9 @@ const FITTING_FIELDS_TROUSER = [
 ];
 const FITTING_FIELDS = [...FITTING_FIELDS_GENERAL, ...FITTING_FIELDS_TROUSER];
 
+const MEASUREMENT_OPTIONS = [];
+for (let v = 5; v <= 70; v += 0.5) MEASUREMENT_OPTIONS.push(v % 1 === 0 ? String(v) : v.toFixed(1));
+
 const ALL_MEASURE_FIELDS = [...MEASURE_FIELDS, ...FITTING_FIELDS_GENERAL, ...FITTING_FIELDS_TROUSER]
   .filter((f, i, arr) => arr.findIndex((x) => x[0] === f[0]) === i);
 
@@ -1221,6 +1224,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const [loadMobile, setLoadMobile] = useState("");
   const [loadMsg, setLoadMsg] = useState("");
   const [legacyResults, setLegacyResults] = useState([]);
+  const [legacyCuttingRefs, setLegacyCuttingRefs] = useState([]);
   const sigCanvasRef = React.useRef(null);
 
   const setC = (k) => (e) => setCustomer((c) => ({ ...c, [k]: e.target.value }));
@@ -1230,6 +1234,8 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     if (!loadMobile.trim()) return;
     setLoadMsg("Searching…");
     setLegacyResults([]);
+    setLegacyCuttingRefs([]);
+
     const { data } = await supabase.from("customer_profiles").select("*").eq("mobile", loadMobile.trim()).order("created_at", { ascending: false }).limit(1);
     if (data && data[0]) {
       setCustomer({ name: data[0].name, mobile: data[0].mobile });
@@ -1237,32 +1243,19 @@ function RequirementForm({ config, session, onCancel, onSave }) {
       setLoadMsg(`Loaded measurements from ${fmtDate(data[0].created_at)}.`);
       return;
     }
-    const { data: legacy } = await supabase.from("legacy_orders").select("*").eq("mobile", loadMobile.trim()).order("id", { ascending: false }).limit(5);
-    if (legacy && legacy.length > 0) {
-      setLegacyResults(legacy);
-      setLoadMsg("No profile in the new system — found old records below.");
-    } else {
-      setLoadMsg("No existing profile or old records found for that number.");
-    }
-  };
 
-  const loadFromLegacy = (order) => {
-    setCustomer((c) => ({ name: order.name || c.name, mobile: order.mobile }));
-    setMeasurements((m) => ({
-      ...m,
-      shoulder: order.shoulder || m.shoulder,
-      chest: order.chest || m.chest,
-      waist: order.waist || m.waist,
-      hips: order.hips || m.hips,
-      bottom: order.bottom || m.bottom,
-      armhole: order.armhole || m.armhole,
-      sleeveLength: order.sleeve_length || m.sleeveLength,
-      sleeveOpen: order.sleeve_open || m.sleeveOpen,
-      length: order.length_front || m.length,
-      lengthBack: order.length_back || m.lengthBack,
-    }));
-    setLegacyResults([]);
-    setLoadMsg(`Loaded from old record dated ${order.order_date}.`);
+    const { data: fitted } = await supabase.from("legacy_fitted_measurements").select("*").eq("mobile", loadMobile.trim()).limit(1);
+    if (fitted && fitted.length > 0) {
+      setLegacyResults(fitted);
+      setLoadMsg("No profile in the new system — found a genuine fitted measurement from the old system below.");
+    } else {
+      setLoadMsg("No existing profile or fitted measurement found for that number.");
+    }
+
+    const { data: cuttingRefs } = await supabase.from("legacy_orders").select("*").eq("mobile", loadMobile.trim()).order("id", { ascending: false }).limit(5);
+    if (cuttingRefs && cuttingRefs.length > 0) {
+      setLegacyCuttingRefs(cuttingRefs);
+    }
   };
 
   const addItem = async () => {
@@ -1323,17 +1316,27 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         <button onClick={loadByMobile} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "9px 16px", fontSize: 13, fontWeight: 700 }}>Load Measurements</button>
         {loadMsg && <span style={{ fontSize: 12, color: "#8a8a8a" }}>{loadMsg}</span>}
         {legacyResults.length > 0 && (
-          <div style={{ border: "1px solid #C9CDD3", borderRadius: 6, padding: 12, marginTop: 10, maxWidth: 640, marginLeft: "auto", marginRight: "auto" }}>
-            <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>OLD SYSTEM RECORDS FOUND (most recent {legacyResults.length})</div>
+          <div style={{ border: "1px solid #2F8F46", borderRadius: 6, padding: 12, marginTop: 10, maxWidth: 640, marginLeft: "auto", marginRight: "auto" }}>
+            <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 4, color: "#2F8F46" }}>GENUINE FITTED MEASUREMENT ON FILE (from old system)</div>
+            <div style={{ fontSize: 11, color: "#8a8a8a", marginBottom: 8 }}>Shown for reference — enter the values into the fields above yourself.</div>
             {legacyResults.map((o) => (
-              <div key={o.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #E5E5E5", padding: "8px 0", gap: 10 }}>
-                <div style={{ fontSize: 12, textAlign: "left" }}>
-                  <strong>{o.order_date}</strong> — {o.garment_type || "—"} ({o.model_no || "—"})
-                  <div style={{ color: "#8a8a8a", fontSize: 11 }}>
-                    {["shoulder", "chest", "waist", "hips", "bottom", "armhole", "sleeve_length", "sleeve_open", "length_front", "length_back"].filter((k) => o[k]).map((k) => `${k}: ${o[k]}`).join(", ") || "No usable measurements on this record"}
-                  </div>
+              <div key={o.id} style={{ fontSize: 12, textAlign: "left", padding: "4px 0" }}>
+                {["shoulder", "chest", "waist", "hips", "armhole", "sleeve_length", "length", "bicep", "wrist", "neck"].filter((k) => o[k]).map((k) => `${k}: ${o[k]}`).join(", ")}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {legacyCuttingRefs.length > 0 && (
+          <div style={{ border: "1px solid #C9CDD3", borderRadius: 6, padding: 12, marginTop: 10, maxWidth: 640, marginLeft: "auto", marginRight: "auto" }}>
+            <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 4 }}>PAST CUTTING REFERENCE (old system — not a fitted measurement)</div>
+            <div style={{ fontSize: 11, color: "#8a8a8a", marginBottom: 8 }}>These are the cutting numbers actually used on past garments — shown for reference only, since they're already adjusted for a specific old model, not her raw body measurement.</div>
+            {legacyCuttingRefs.map((o) => (
+              <div key={o.id} style={{ borderBottom: "1px solid #E5E5E5", padding: "8px 0", fontSize: 12, textAlign: "left" }}>
+                <strong>{o.order_date}</strong> — {o.garment_type || "—"} ({o.model_no || "—"})
+                <div style={{ color: "#8a8a8a", fontSize: 11 }}>
+                  {["shoulder", "chest", "waist", "hips", "bottom", "armhole", "sleeve_length", "sleeve_open", "length_front", "length_back"].filter((k) => o[k]).map((k) => `${k}: ${o[k]}`).join(", ") || "No usable measurements on this record"}
                 </div>
-                <button onClick={() => loadFromLegacy(o)} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "6px 12px", fontSize: 11.5, fontWeight: 700, whiteSpace: "nowrap" }}>Load These</button>
               </div>
             ))}
           </div>
@@ -1347,11 +1350,25 @@ function RequirementForm({ config, session, onCancel, onSave }) {
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>CUSTOMER FITTING MEASUREMENTS — GENERAL</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 16 }}>
-        {FITTING_FIELDS_GENERAL.map(([k, l]) => <Field key={k} label={l}><MeasureStepper value={measurements[k]} onChange={setMVal(k)} /></Field>)}
+        {FITTING_FIELDS_GENERAL.map(([k, l]) => (
+          <Field key={k} label={l}>
+            <select value={measurements[k]} onChange={(e) => setMVal(k)(e.target.value)} style={inputStyle}>
+              <option value="">—</option>
+              {MEASUREMENT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </Field>
+        ))}
       </div>
       <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>FOR TROUSER</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
-        {FITTING_FIELDS_TROUSER.map(([k, l]) => <Field key={k} label={l}><MeasureStepper value={measurements[k]} onChange={setMVal(k)} /></Field>)}
+        {FITTING_FIELDS_TROUSER.map(([k, l]) => (
+          <Field key={k} label={l}>
+            <select value={measurements[k]} onChange={(e) => setMVal(k)(e.target.value)} style={inputStyle}>
+              <option value="">—</option>
+              {MEASUREMENT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </Field>
+        ))}
       </div>
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "20px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>ITEMS</div>
