@@ -86,6 +86,12 @@ const FITTING_FIELDS = [...FITTING_FIELDS_GENERAL, ...FITTING_FIELDS_TROUSER];
 
 const MEASUREMENT_OPTIONS = [];
 for (let v = 5; v <= 70; v += 0.5) MEASUREMENT_OPTIONS.push(v % 1 === 0 ? String(v) : v.toFixed(1));
+const normalizeMeasurement = (v) => {
+  if (v === undefined || v === null || v === "") return "";
+  const n = parseFloat(v);
+  if (Number.isNaN(n)) return "";
+  return n % 1 === 0 ? String(n) : n.toFixed(1);
+};
 
 const ALL_MEASURE_FIELDS = [...MEASURE_FIELDS, ...FITTING_FIELDS_GENERAL, ...FITTING_FIELDS_TROUSER]
   .filter((f, i, arr) => arr.findIndex((x) => x[0] === f[0]) === i);
@@ -339,7 +345,7 @@ export default function App() {
     ]);
     setConfig({ branches: branches || [], salespersons: salespersons || [], models: (models || []).map(dbToModel) });
     setOrders((ords || []).map(dbToOrder));
-    setProfiles((profs || []).map((p) => ({ ...p, createdAt: p.created_at })));
+    setProfiles((profs || []).map((p) => ({ ...p, createdAt: p.created_at, updatedAt: p.updated_at })));
     setRequirementItems((reqItems || []).map((r) => ({
       id: r.id, profileId: r.profile_id, model: r.model, recommendedSize: r.recommended_size,
       deltas: r.deltas, notes: r.notes, jobOrderId: r.job_order_id, createdAt: r.created_at,
@@ -734,10 +740,21 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
 
   const handleSaveRequirement = async (customer, measurements, items, deliveryDate, signatureUrl, createOrders) => {
     const branch = session.branch || (session.role === "admin" ? "Admin" : "");
-    const { data: profile, error: pErr } = await supabase.from("customer_profiles").insert({
-      name: customer.name, mobile: customer.mobile, measurements, branch, created_by: session.name,
-      signature_url: signatureUrl || null,
-    }).select().single();
+    const { data: existing } = await supabase.from("customer_profiles").select("id").eq("mobile", customer.mobile).order("created_at", { ascending: false }).limit(1);
+
+    let profile, pErr;
+    if (existing && existing.length > 0) {
+      const result = await supabase.from("customer_profiles").update({
+        name: customer.name, measurements, branch, signature_url: signatureUrl || null, updated_at: new Date().toISOString(),
+      }).eq("id", existing[0].id).select().single();
+      profile = result.data; pErr = result.error;
+    } else {
+      const result = await supabase.from("customer_profiles").insert({
+        name: customer.name, mobile: customer.mobile, measurements, branch, created_by: session.name,
+        signature_url: signatureUrl || null,
+      }).select().single();
+      profile = result.data; pErr = result.error;
+    }
     if (pErr) { flash("Error: " + pErr.message); return; }
 
     const validItems = items.filter((it) => !it.error);
@@ -813,7 +830,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSave={handleSaveRequirement} />;
   }
   if (subpage === "customers") {
-    return <CustomersPage profiles={profiles} orders={orders} />;
+    return <CustomersPage profiles={profiles} orders={orders} session={session} refresh={refresh} />;
   }
   if (subpage === "requirements") {
     return (
@@ -1911,22 +1928,29 @@ function ProjectDetailPage({ project, collaborators, allUsers, session, refresh,
   );
 }
 
-function CustomersPage({ profiles, orders }) {
+function CustomersPage({ profiles, orders, session, refresh }) {
   const [query, setQuery] = useState("");
   const [selectedMobile, setSelectedMobile] = useState(null);
+  const [legacyFittedIndex, setLegacyFittedIndex] = useState([]);
+  const [legacyOrdersIndex, setLegacyOrdersIndex] = useState([]);
+
+  useEffect(() => {
+    supabase.from("legacy_fitted_measurements").select("mobile,name").then(({ data }) => setLegacyFittedIndex(data || []));
+    supabase.from("legacy_orders").select("mobile,name").then(({ data }) => setLegacyOrdersIndex(data || []));
+  }, []);
 
   const byMobile = {};
   profiles.forEach((p) => {
     if (!p.mobile) return;
     if (!byMobile[p.mobile] || new Date(p.createdAt) > new Date(byMobile[p.mobile].createdAt)) {
-      byMobile[p.mobile] = p;
+      byMobile[p.mobile] = { name: p.name, mobile: p.mobile, hasNewProfile: true };
     }
   });
-  const customers = Object.values(byMobile).map((p) => ({
-    ...p,
-    orderCount: orders.filter((o) => o.mobile === p.mobile).length,
-  }));
-  const filtered = customers.filter((p) => !query.trim() || p.name.toLowerCase().includes(query.toLowerCase()) || (p.mobile || "").includes(query));
+  legacyFittedIndex.forEach((r) => { if (r.mobile && !byMobile[r.mobile]) byMobile[r.mobile] = { name: r.name, mobile: r.mobile, hasNewProfile: false }; });
+  legacyOrdersIndex.forEach((r) => { if (r.mobile && !byMobile[r.mobile]) byMobile[r.mobile] = { name: r.name, mobile: r.mobile, hasNewProfile: false }; });
+
+  const customers = Object.values(byMobile).map((c) => ({ ...c, orderCount: orders.filter((o) => o.mobile === c.mobile).length }));
+  const filtered = customers.filter((c) => !query.trim() || (c.name || "").toLowerCase().includes(query.toLowerCase()) || (c.mobile || "").includes(query));
 
   if (selectedMobile) {
     return (
@@ -1934,6 +1958,8 @@ function CustomersPage({ profiles, orders }) {
         mobile={selectedMobile}
         profiles={profiles.filter((p) => p.mobile === selectedMobile)}
         orders={orders.filter((o) => o.mobile === selectedMobile)}
+        session={session}
+        refresh={refresh}
         onClose={() => setSelectedMobile(null)}
       />
     );
@@ -1945,19 +1971,20 @@ function CustomersPage({ profiles, orders }) {
       <div className="no-print" style={{ textAlign: "center", marginBottom: 18 }}>
         <input placeholder="Search name or mobile number" value={query} onChange={(e) => setQuery(e.target.value)} style={{ ...inputStyle, width: 280, display: "inline-block" }} />
       </div>
-      {filtered.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No customer profiles found.</div> : (
+      {filtered.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No customers found.</div> : (
         <table>
           <thead><tr style={{ borderBottom: "2px solid #1A1A1A", fontSize: 12.5, textAlign: "left" }}>
             <th style={{ padding: "9px 10px" }}>Name</th><th style={{ padding: "9px 10px" }}>Mobile</th>
-            <th style={{ padding: "9px 10px" }}>Orders</th><th style={{ padding: "9px 10px" }}>View</th>
+            <th style={{ padding: "9px 10px" }}>Orders</th><th style={{ padding: "9px 10px" }}>Source</th><th style={{ padding: "9px 10px" }}>View</th>
           </tr></thead>
           <tbody>
-            {filtered.map((p) => (
-              <tr key={p.mobile} style={{ borderBottom: "1px solid #E5E5E5", fontSize: 13.5 }}>
-                <td style={{ padding: "9px 10px" }}>{p.name}</td>
-                <td style={{ padding: "9px 10px" }}>{p.mobile}</td>
-                <td style={{ padding: "9px 10px" }}>{p.orderCount}</td>
-                <td style={{ padding: "9px 10px" }}><a className="link" onClick={() => setSelectedMobile(p.mobile)}>View</a></td>
+            {filtered.map((c) => (
+              <tr key={c.mobile} style={{ borderBottom: "1px solid #E5E5E5", fontSize: 13.5 }}>
+                <td style={{ padding: "9px 10px" }}>{c.name}</td>
+                <td style={{ padding: "9px 10px" }}>{c.mobile}</td>
+                <td style={{ padding: "9px 10px" }}>{c.orderCount}</td>
+                <td style={{ padding: "9px 10px", fontSize: 11.5, color: c.hasNewProfile ? "#2F8F46" : "#8a8a8a" }}>{c.hasNewProfile ? "New system" : "Old system only"}</td>
+                <td style={{ padding: "9px 10px" }}><a className="link" onClick={() => setSelectedMobile(c.mobile)}>View</a></td>
               </tr>
             ))}
           </tbody>
@@ -1967,17 +1994,45 @@ function CustomersPage({ profiles, orders }) {
   );
 }
 
-function CustomerDetail({ mobile, profiles, orders, onClose }) {
+function CustomerDetail({ mobile, profiles, orders, session, refresh, onClose }) {
   const [legacyFitted, setLegacyFitted] = useState([]);
   const [legacyOrders, setLegacyOrders] = useState([]);
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     supabase.from("legacy_fitted_measurements").select("*").eq("mobile", mobile).then(({ data }) => setLegacyFitted(data || []));
     supabase.from("legacy_orders").select("*").eq("mobile", mobile).order("id", { ascending: false }).then(({ data }) => setLegacyOrders(data || []));
   }, [mobile]);
 
-  const sortedProfiles = [...profiles].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  const name = sortedProfiles[0]?.name || "—";
+  const latestProfile = [...profiles].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0] || null;
+  const name = latestProfile?.name || legacyFitted[0]?.name || legacyOrders[0]?.name || "—";
+
+  const startEdit = () => {
+    const base = latestProfile?.measurements || {};
+    const legacyBase = legacyFitted[0] || {};
+    setForm({
+      name,
+      measurements: Object.fromEntries(FITTING_FIELDS.map(([k]) => [k, normalizeMeasurement(base[k]) || normalizeMeasurement(legacyBase[k])])),
+    });
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    setSaving(true);
+    if (latestProfile) {
+      await supabase.from("customer_profiles").update({ name: form.name, measurements: form.measurements, updated_at: new Date().toISOString() }).eq("id", latestProfile.id);
+    } else {
+      await supabase.from("customer_profiles").insert({
+        name: form.name, mobile, measurements: form.measurements,
+        branch: session.branch || (session.role === "admin" ? "Admin" : ""), created_by: session.name,
+      });
+    }
+    setSaving(false);
+    setEditing(false);
+    await refresh();
+  };
 
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto" }}>
@@ -1986,15 +2041,41 @@ function CustomerDetail({ mobile, profiles, orders, onClose }) {
       <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 20 }}>{mobile}</div>
 
       <div style={cardStyle}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>FITTING MEASUREMENT HISTORY (new system)</div>
-        {sortedProfiles.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>No measurements recorded yet.</div> : sortedProfiles.map((p) => (
-          <div key={p.id} style={{ borderBottom: "1px solid #E5E5E5", padding: "8px 0" }}>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Recorded {fmtDateTime(p.createdAt)}{p.branch ? ` · ${p.branch}` : ""}</div>
-            <div style={{ fontSize: 12, color: "#8a8a8a" }}>
-              {FITTING_FIELDS.filter(([k]) => p.measurements?.[k]).map(([k, l]) => `${l}: ${p.measurements[k]}`).join(", ") || "—"}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>FITTING MEASUREMENT (new system)</div>
+          {!editing && <a className="link" onClick={startEdit}>{latestProfile ? "Edit" : "+ Add Fitted Measurement"}</a>}
+        </div>
+
+        {editing ? (
+          <div>
+            <Field label="Name"><input style={inputStyle} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} /></Field>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginTop: 10 }}>
+              {FITTING_FIELDS.map(([k, l]) => (
+                <Field key={k} label={l}>
+                  <select value={form.measurements[k]} onChange={(e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }))} style={inputStyle}>
+                    <option value="">—</option>
+                    {MEASUREMENT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </Field>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+              <button disabled={saving} onClick={saveEdit} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Save</button>
+              <button onClick={() => setEditing(false)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Cancel</button>
             </div>
           </div>
-        ))}
+        ) : latestProfile ? (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+              Last updated {fmtDateTime(latestProfile.updatedAt || latestProfile.createdAt)}{latestProfile.branch ? ` · ${latestProfile.branch}` : ""}
+            </div>
+            <div style={{ fontSize: 12, color: "#8a8a8a" }}>
+              {FITTING_FIELDS.filter(([k]) => latestProfile.measurements?.[k]).map(([k, l]) => `${l}: ${latestProfile.measurements[k]}`).join(", ") || "—"}
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, color: "#8a8a8a" }}>No fitted measurement in the new system yet — click "+ Add Fitted Measurement" above{legacyFitted.length > 0 ? " (pre-filled from her old fitted record below)" : ""}.</div>
+        )}
       </div>
 
       <div style={{ ...cardStyle, marginTop: 16 }}>
@@ -2624,10 +2705,21 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
 
   const handleSaveRequirement = async (customer, measurements, items, deliveryDate, signatureUrl, createOrders) => {
     const branch = session.branch || (session.role === "admin" ? "Admin" : "");
-    const { data: profile, error: pErr } = await supabase.from("customer_profiles").insert({
-      name: customer.name, mobile: customer.mobile, measurements, branch, created_by: session.name,
-      signature_url: signatureUrl || null,
-    }).select().single();
+    const { data: existing } = await supabase.from("customer_profiles").select("id").eq("mobile", customer.mobile).order("created_at", { ascending: false }).limit(1);
+
+    let profile, pErr;
+    if (existing && existing.length > 0) {
+      const result = await supabase.from("customer_profiles").update({
+        name: customer.name, measurements, branch, signature_url: signatureUrl || null, updated_at: new Date().toISOString(),
+      }).eq("id", existing[0].id).select().single();
+      profile = result.data; pErr = result.error;
+    } else {
+      const result = await supabase.from("customer_profiles").insert({
+        name: customer.name, mobile: customer.mobile, measurements, branch, created_by: session.name,
+        signature_url: signatureUrl || null,
+      }).select().single();
+      profile = result.data; pErr = result.error;
+    }
     if (pErr) { flash("Error: " + pErr.message); return; }
 
     const validItems = items.filter((it) => !it.error);
@@ -2701,7 +2793,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSave={handleSaveRequirement} />;
   }
   if (subpage === "customers") {
-    return <CustomersPage profiles={profiles} orders={orders} />;
+    return <CustomersPage profiles={profiles} orders={orders} session={session} refresh={refresh} />;
   }
   if (subpage === "requirements") {
     return <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={true} canCreateOrder={true} onCreateOrder={handleCreateOrderFromRow} onDelete={handleDeleteRequirement} />;
