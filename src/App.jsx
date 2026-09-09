@@ -2567,13 +2567,28 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
 
 function ModelBrowser({ models, canEdit, refresh, flash, session }) {
   const [query, setQuery] = useState("");
+  const [keywords, setKeywords] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
 
-  const filtered = models.filter((m) => {
-    if (!query.trim()) return true;
-    const q = query.toLowerCase();
+  const addKeyword = () => {
+    const k = query.trim();
+    if (!k || keywords.includes(k)) return;
+    setKeywords((prev) => [...prev, k]);
+    setQuery("");
+  };
+  const removeKeyword = (k) => setKeywords((prev) => prev.filter((x) => x !== k));
+
+  const matchesKeyword = (m, k) => {
+    const q = k.toLowerCase();
     return [m.modelNo, m.styleName, m.collectionName, m.category, m.productType, m.season, m.description]
       .filter(Boolean).some((f) => f.toLowerCase().includes(q));
+  };
+
+  const filtered = models.filter((m) => {
+    const liveQuery = query.trim();
+    if (keywords.length === 0 && !liveQuery) return true;
+    const allKeywords = liveQuery ? [...keywords, liveQuery] : keywords;
+    return allKeywords.every((k) => matchesKeyword(m, k));
   });
 
   if (selectedId) {
@@ -2585,7 +2600,27 @@ function ModelBrowser({ models, canEdit, refresh, flash, session }) {
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>VIEW MODELS</h2>
       <div className="no-print" style={{ textAlign: "center", marginBottom: 18 }}>
-        <input placeholder="Search model number, category, style, keyword…" value={query} onChange={(e) => setQuery(e.target.value)} style={{ ...inputStyle, width: 340, display: "inline-block" }} />
+        <div style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "center", maxWidth: 600 }}>
+          <input
+            placeholder="Search collection, model no, style, category, product type, season…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addKeyword(); } }}
+            style={{ ...inputStyle, width: 320 }}
+          />
+          <button type="button" onClick={addKeyword} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12.5, fontWeight: 700 }}>+ Add Filter</button>
+        </div>
+        {keywords.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", marginTop: 10 }}>
+            {keywords.map((k) => (
+              <span key={k} style={{ background: "#EEF0F2", border: "1px solid #C9CDD3", borderRadius: 12, padding: "3px 10px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                {k}
+                <span onClick={() => removeKeyword(k)} style={{ cursor: "pointer", color: "#C1302B", fontWeight: 700 }}>×</span>
+              </span>
+            ))}
+            <a className="link" style={{ fontSize: 11.5, marginLeft: 4 }} onClick={() => setKeywords([])}>Clear all</a>
+          </div>
+        )}
       </div>
       {filtered.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No models match your search.</div> : (
         <div style={{ display: "grid", gap: 10 }}>
