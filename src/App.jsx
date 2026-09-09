@@ -2279,6 +2279,8 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
   const [fabrics, setFabrics] = useState([]);
   const [trims, setTrims] = useState([]);
   const [patterns, setPatterns] = useState([]);
+  const [materials, setMaterials] = useState([]);
+  const [manpower, setManpower] = useState([]);
   const [docs, setDocs] = useState([]);
   const [lightbox, setLightbox] = useState(null);
   const [editingModel, setEditingModel] = useState(false);
@@ -2323,6 +2325,8 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
     supabase.from("model_fabrics").select("*").eq("model_id", model.id).then(({ data }) => setFabrics(data || []));
     supabase.from("model_trims").select("*").eq("model_id", model.id).then(({ data }) => setTrims(data || []));
     supabase.from("model_patterns").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setPatterns(data || []));
+    supabase.from("model_materials").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setMaterials(data || []));
+    supabase.from("model_manpower").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setManpower(data || []));
     supabase.from("model_documents").select("*").eq("model_id", model.id).then(({ data }) => setDocs(data || []));
   };
 
@@ -2491,6 +2495,25 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
             </tbody>
           </table>
         ) : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No pattern pieces.</div>}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, marginBottom: 16 }}>
+        <div style={cardStyle}>
+          {(canEdit && editingModel) ? <ModelMaterials model={model} refresh={refresh} flash={flash} /> : (
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>MATERIAL USED</div>
+              {materials.length > 0 ? materials.map((r) => <div key={r.id} style={{ fontSize: 12.5, padding: "4px 0" }}>{r.material_type} — {r.material_code || "—"} — Qty {r.quantity || "—"}</div>) : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No materials.</div>}
+            </div>
+          )}
+        </div>
+        <div style={cardStyle}>
+          {(canEdit && editingModel) ? <ModelManpower model={model} refresh={refresh} flash={flash} /> : (
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>MANPOWER DETAILS</div>
+              {manpower.length > 0 ? manpower.map((r) => <div key={r.id} style={{ fontSize: 12.5, padding: "4px 0" }}>{r.person_name} — {r.department || "—"} — {r.time_used || "—"}</div>) : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No manpower entries.</div>}
+            </div>
+          )}
+        </div>
       </div>
 
       {((canEdit && editingModel) || docs.length > 0) && (
@@ -3262,6 +3285,26 @@ function ManageModels({ config, refresh, flash, session }) {
   };
   const removePendingPattern = (i) => setPendingPatterns((p) => p.filter((_, idx) => idx !== i));
 
+  const [pendingMaterials, setPendingMaterials] = useState([]);
+  const [newMaterial, setNewMaterial] = useState({ material_type: "", material_code: "", quantity: "" });
+  const setNewMaterialField = (k) => (e) => setNewMaterial((m) => ({ ...m, [k]: e.target.value }));
+  const addPendingMaterial = () => {
+    if (!newMaterial.material_type.trim()) return;
+    setPendingMaterials((m) => [...m, newMaterial]);
+    setNewMaterial({ material_type: "", material_code: "", quantity: "" });
+  };
+  const removePendingMaterial = (i) => setPendingMaterials((m) => m.filter((_, idx) => idx !== i));
+
+  const [pendingManpower, setPendingManpower] = useState([]);
+  const [newManpower, setNewManpower] = useState({ person_name: "", department: "", time_used: "" });
+  const setNewManpowerField = (k) => (e) => setNewManpower((m) => ({ ...m, [k]: e.target.value }));
+  const addPendingManpower = () => {
+    if (!newManpower.person_name.trim()) return;
+    setPendingManpower((m) => [...m, newManpower]);
+    setNewManpower({ person_name: "", department: "", time_used: "" });
+  };
+  const removePendingManpower = (i) => setPendingManpower((m) => m.filter((_, idx) => idx !== i));
+
   const [pendingDocuments, setPendingDocuments] = useState([]);
   const addPendingDocument = (e) => {
     const file = e.target.files?.[0];
@@ -3373,6 +3416,13 @@ function ManageModels({ config, refresh, flash, session }) {
       await supabase.from("model_patterns").insert({ model_id: inserted.id, ...rest, diagram_url: diagramUrl });
     }
 
+    for (const m of pendingMaterials) {
+      await supabase.from("model_materials").insert({ model_id: inserted.id, ...m });
+    }
+    for (const m of pendingManpower) {
+      await supabase.from("model_manpower").insert({ model_id: inserted.id, ...m });
+    }
+
     for (const file of pendingDocuments) {
       const path = `model-documents/${inserted.id}-${Date.now()}-${file.name}`;
       const { error: upErr } = await supabase.storage.from("attachments").upload(path, file);
@@ -3386,7 +3436,7 @@ function ManageModels({ config, refresh, flash, session }) {
       await supabase.from("model_sizes").insert({ model_id: inserted.id, size_label: s.size_label, measurements: s.measurements, cut: s.cut || null });
     }
 
-    setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingFabrics([]); setPendingTrims([]); setPendingPatterns([]); setPendingDocuments([]);
+    setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingFabrics([]); setPendingTrims([]); setPendingPatterns([]); setPendingMaterials([]); setPendingManpower([]); setPendingDocuments([]);
     setPendingSizes(DEFAULT_TEMPLATE_SIZES.map((label) => ({ size_label: label, measurements: Object.fromEntries(DEFAULT_TEMPLATE_ROWS.map((k) => [k, ""])), cut: null })));
     setPendingCustomFields([]);
     setAddingCutTable(false); setNewCutChoice(""); setDuplicateFrom("");
@@ -3612,6 +3662,68 @@ function ManageModels({ config, refresh, flash, session }) {
             )}
           </div>
           <button type="button" onClick={addPendingPattern} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 6, padding: "8px 18px", fontSize: 12, fontWeight: 700 }}>+ Add Piece</button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, marginBottom: 16 }}>
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>MATERIAL USED</div>
+          {pendingMaterials.length > 0 && (
+            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+              <thead><tr style={{ background: "#F7F7F5" }}>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Type of Material</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Material Code</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Quantity</th>
+                <th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
+              </tr></thead>
+              <tbody>
+                {pendingMaterials.map((m, i) => (
+                  <tr key={i} style={{ borderBottom: "1px solid #E5E5E5" }}>
+                    <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{m.material_type}</td>
+                    <td style={{ padding: "6px 8px", fontSize: 12.5 }} className="mono">{m.material_code || "—"}</td>
+                    <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{m.quantity || "—"}</td>
+                    <td style={{ padding: "6px 8px" }}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => removePendingMaterial(i)}>Remove</a></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input placeholder="Type of Material" value={newMaterial.material_type} onChange={setNewMaterialField("material_type")} style={{ ...inputStyle, flex: "1 1 140px" }} />
+            <input placeholder="Material Code" value={newMaterial.material_code} onChange={setNewMaterialField("material_code")} style={{ ...inputStyle, flex: "1 1 110px" }} />
+            <input placeholder="Quantity" value={newMaterial.quantity} onChange={setNewMaterialField("quantity")} style={{ ...inputStyle, flex: "1 1 90px" }} />
+            <button type="button" onClick={addPendingMaterial} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700 }}>+ Add</button>
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>MANPOWER DETAILS</div>
+          {pendingManpower.length > 0 && (
+            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+              <thead><tr style={{ background: "#F7F7F5" }}>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Person Name</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Department</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Time Used</th>
+                <th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
+              </tr></thead>
+              <tbody>
+                {pendingManpower.map((m, i) => (
+                  <tr key={i} style={{ borderBottom: "1px solid #E5E5E5" }}>
+                    <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{m.person_name}</td>
+                    <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{m.department || "—"}</td>
+                    <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{m.time_used || "—"}</td>
+                    <td style={{ padding: "6px 8px" }}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => removePendingManpower(i)}>Remove</a></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input placeholder="Person Name" value={newManpower.person_name} onChange={setNewManpowerField("person_name")} style={{ ...inputStyle, flex: "1 1 140px" }} />
+            <input placeholder="Department" value={newManpower.department} onChange={setNewManpowerField("department")} style={{ ...inputStyle, flex: "1 1 110px" }} />
+            <input placeholder="Time Used (e.g. 2.5 hrs)" value={newManpower.time_used} onChange={setNewManpowerField("time_used")} style={{ ...inputStyle, flex: "1 1 110px" }} />
+            <button type="button" onClick={addPendingManpower} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700 }}>+ Add</button>
+          </div>
         </div>
       </div>
 
@@ -4005,6 +4117,104 @@ function ModelPatterns({ model, refresh, flash }) {
         <button type="button" onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 6, padding: "8px 18px", fontSize: 12, fontWeight: 700 }}>+ Add Piece</button>
       </div>
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
+    </div>
+  );
+}
+
+function ModelMaterials({ model, refresh, flash }) {
+  const [rows, setRows] = useState([]);
+  const [form, setForm] = useState({ material_type: "", material_code: "", quantity: "" });
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const load = () => supabase.from("model_materials").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setRows(data || []));
+  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+
+  const add = async () => {
+    if (!form.material_type.trim()) return;
+    await supabase.from("model_materials").insert({ model_id: model.id, ...form });
+    setForm({ material_type: "", material_code: "", quantity: "" });
+    await load(); flash("Material added");
+  };
+  const remove = async (id) => { await supabase.from("model_materials").delete().eq("id", id); await load(); };
+
+  return (
+    <div>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>MATERIAL USED</div>
+      {rows.length > 0 && (
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+          <thead><tr style={{ background: "#F7F7F5" }}>
+            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Type of Material</th>
+            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Material Code</th>
+            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Quantity</th>
+            <th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
+          </tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} style={{ borderBottom: "1px solid #E5E5E5" }}>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{r.material_type}</td>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }} className="mono">{r.material_code || "—"}</td>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{r.quantity || "—"}</td>
+                <td style={{ padding: "6px 8px" }}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => remove(r.id)}>Remove</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input placeholder="Type of Material" value={form.material_type} onChange={set("material_type")} style={{ ...inputStyle, flex: "1 1 140px" }} />
+        <input placeholder="Material Code" value={form.material_code} onChange={set("material_code")} style={{ ...inputStyle, flex: "1 1 110px" }} />
+        <input placeholder="Quantity" value={form.quantity} onChange={set("quantity")} style={{ ...inputStyle, flex: "1 1 90px" }} />
+        <button type="button" onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700 }}>+ Add</button>
+      </div>
+    </div>
+  );
+}
+
+function ModelManpower({ model, refresh, flash }) {
+  const [rows, setRows] = useState([]);
+  const [form, setForm] = useState({ person_name: "", department: "", time_used: "" });
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const load = () => supabase.from("model_manpower").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setRows(data || []));
+  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+
+  const add = async () => {
+    if (!form.person_name.trim()) return;
+    await supabase.from("model_manpower").insert({ model_id: model.id, ...form });
+    setForm({ person_name: "", department: "", time_used: "" });
+    await load(); flash("Manpower entry added");
+  };
+  const remove = async (id) => { await supabase.from("model_manpower").delete().eq("id", id); await load(); };
+
+  return (
+    <div>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>MANPOWER DETAILS</div>
+      {rows.length > 0 && (
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+          <thead><tr style={{ background: "#F7F7F5" }}>
+            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Person Name</th>
+            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Department</th>
+            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Time Used</th>
+            <th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
+          </tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} style={{ borderBottom: "1px solid #E5E5E5" }}>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{r.person_name}</td>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{r.department || "—"}</td>
+                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{r.time_used || "—"}</td>
+                <td style={{ padding: "6px 8px" }}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => remove(r.id)}>Remove</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input placeholder="Person Name" value={form.person_name} onChange={set("person_name")} style={{ ...inputStyle, flex: "1 1 140px" }} />
+        <input placeholder="Department" value={form.department} onChange={set("department")} style={{ ...inputStyle, flex: "1 1 110px" }} />
+        <input placeholder="Time Used (e.g. 2.5 hrs)" value={form.time_used} onChange={set("time_used")} style={{ ...inputStyle, flex: "1 1 110px" }} />
+        <button type="button" onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700 }}>+ Add</button>
+      </div>
     </div>
   );
 }
