@@ -107,7 +107,9 @@ const ROLE_HOME_CARDS = {
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
   admin: [
+    ["🧵", "New Job Order", "Start one from scratch", "new"],
     ["📋", "All Records", "View and manage job orders", "records"],
+    ["📐", "New Requirement", "Take fitting measurements", "requirement"],
     ["📄", "All Requirements", "Browse saved requirements", "requirements"],
     ["🏬", "Add/Remove Branch", "Manage branch list", "branches"],
     ["➕", "Add Model", "Create a new style", "models"],
