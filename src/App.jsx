@@ -616,7 +616,7 @@ function Shell({ session, subpage, setSubpage, onLogout, children, notifications
   return (
     <div style={{ minHeight: "100vh", background: "#fff", color: "#1A1A1A", fontFamily: F.body }}>
       <GlobalStyle />
-      <div className="no-print" style={{ borderBottom: "2px solid #1A1A1A", padding: "18px 30px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+      <div className="no-print" style={{ position: "sticky", top: 0, zIndex: 100, background: "#fff", borderBottom: "2px solid #1A1A1A", padding: "18px 30px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div onClick={() => setSubpage("home")} style={{ fontFamily: F.display, fontWeight: 700, fontSize: 26, letterSpacing: "0.12em", cursor: "pointer" }}>
           MOONLIGHT
           <div style={{ fontSize: 10, letterSpacing: "0.35em", textAlign: "center", fontWeight: 500, marginTop: -4 }}>CONCEPT</div>
