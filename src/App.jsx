@@ -93,8 +93,8 @@ function ProjectStatusTag({ status }) {
 
 const ROLE_HOME_CARDS = {
   sales: [
-    ["📋", "All Records", "View and manage job orders", "records"],
     ["🧵", "New Job Order", "Start one from scratch", "new"],
+    ["📋", "All Records", "View and manage job orders", "records"],
     ["📐", "New Requirement", "Take fitting measurements", "requirement"],
     ["📄", "Requirement List", "Browse saved requirements", "requirements"],
     ["👤", "Customers", "Search profiles & history", "customers"],
@@ -277,13 +277,16 @@ function NotificationBell({ session, notifications, refreshNotifications }) {
 
   return (
     <div style={{ position: "relative", display: "inline-block" }}>
-      <span onClick={toggle} style={{ cursor: "pointer", position: "relative", fontSize: 15 }}>
-        🔔
-        {unread > 0 && (
-          <span style={{ position: "absolute", top: -7, right: -9, background: "#C1302B", color: "#fff", borderRadius: 10, fontSize: 9, padding: "1px 5px", fontWeight: 700, lineHeight: 1.3 }}>
-            {unread > 9 ? "9+" : unread}
-          </span>
-        )}
+      <span onClick={toggle} style={{ cursor: "pointer", position: "relative", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5 }}>
+        <span style={{ position: "relative", fontSize: 15 }}>
+          🔔
+          {unread > 0 && (
+            <span style={{ position: "absolute", top: -7, right: -9, background: "#C1302B", color: "#fff", borderRadius: 10, fontSize: 9, padding: "1px 5px", fontWeight: 700, lineHeight: 1.3 }}>
+              {unread > 9 ? "9+" : unread}
+            </span>
+          )}
+        </span>
+        <span>Notifications</span>
       </span>
       {open && (
         <div className="no-print" style={{ position: "absolute", top: 26, right: 0, width: 300, maxHeight: 380, overflowY: "auto", background: "#fff", border: "1px solid #C9CDD3", borderRadius: 6, boxShadow: "0 10px 28px rgba(0,0,0,0.14)", zIndex: 200, padding: 12, textAlign: "left" }}>
@@ -612,17 +615,14 @@ function Shell({ session, subpage, setSubpage, onLogout, children, notifications
     <div style={{ minHeight: "100vh", background: "#fff", color: "#1A1A1A", fontFamily: F.body }}>
       <GlobalStyle />
       <div className="no-print" style={{ borderBottom: "2px solid #1A1A1A", padding: "18px 30px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 26, letterSpacing: "0.12em" }}>
+        <div onClick={() => setSubpage("home")} style={{ fontFamily: F.display, fontWeight: 700, fontSize: 26, letterSpacing: "0.12em", cursor: "pointer" }}>
           MOONLIGHT
           <div style={{ fontSize: 10, letterSpacing: "0.35em", textAlign: "center", fontWeight: 500, marginTop: -4 }}>CONCEPT</div>
         </div>
         <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.03em", display: "flex", gap: 14, alignItems: "center" }}>
           <span><span style={{ color: "#8a8a8a" }}>{session.name} ·</span> {ROLE_LABEL[session.role].toUpperCase()}</span>
           <DashboardMenu session={session} setSubpage={setSubpage} onLogout={onLogout} />
-          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <NotificationBell session={session} notifications={notifications} refreshNotifications={refreshNotifications} />
-            <span style={{ fontSize: 12 }}>Notifications</span>
-          </div>
+          <NotificationBell session={session} notifications={notifications} refreshNotifications={refreshNotifications} />
         </div>
       </div>
       <div style={{ padding: "26px 30px 60px" }}>{children}</div>
