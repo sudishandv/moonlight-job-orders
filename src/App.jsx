@@ -300,6 +300,48 @@ function NotificationBell({ session, notifications, refreshNotifications }) {
   );
 }
 
+function DashboardMenu({ session, setSubpage, onLogout }) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = React.useRef(null);
+  const cards = ROLE_HOME_CARDS[session.role] || [];
+
+  useEffect(() => {
+    const onClickOutside = (e) => { if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  const go = (target) => { setSubpage(target); setOpen(false); };
+
+  return (
+    <div ref={wrapperRef} style={{ position: "relative", display: "inline-block" }}>
+      <button onClick={() => setOpen((o) => !o)} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "7px 16px", fontSize: 12.5, fontWeight: 700, letterSpacing: "0.03em", cursor: "pointer" }}>
+        DASHBOARD ▾
+      </button>
+      {open && (
+        <div className="no-print" style={{ position: "absolute", top: 34, right: 0, minWidth: 210, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 6, boxShadow: "0 10px 28px rgba(0,0,0,0.14)", zIndex: 200, padding: 6, textAlign: "left" }}>
+          <div onClick={() => go("home")} style={{ padding: "8px 10px", fontSize: 12.5, cursor: "pointer", borderRadius: 4 }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+            🏠 Dashboard Home
+          </div>
+          <div style={{ borderTop: "1px solid #E5E5E5", margin: "4px 0" }} />
+          {cards.map(([icon, title, desc, target]) => (
+            <div key={target} onClick={() => go(target)} style={{ padding: "8px 10px", fontSize: 12.5, cursor: "pointer", borderRadius: 4 }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+              {icon} {title}
+            </div>
+          ))}
+          <div style={{ borderTop: "1px solid #E5E5E5", margin: "4px 0" }} />
+          <div onClick={() => { setOpen(false); onLogout(); }} style={{ padding: "8px 10px", fontSize: 12.5, cursor: "pointer", borderRadius: 4, color: "#C1302B" }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+            Logout
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LoadingOverlay({ text }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(255,255,255,0.8)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, flexDirection: "column", gap: 12 }}>
@@ -574,38 +616,15 @@ function Shell({ session, subpage, setSubpage, onLogout, children, notifications
           MOONLIGHT
           <div style={{ fontSize: 10, letterSpacing: "0.35em", textAlign: "center", fontWeight: 500, marginTop: -4 }}>CONCEPT</div>
         </div>
-        <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.03em", display: "flex", gap: 10, alignItems: "center" }}>
-          <span style={{ color: "#8a8a8a" }}>{session.name} ·</span>
-          <span>{ROLE_LABEL[session.role].toUpperCase()}</span>
-          <span>|</span>
-          <a className="link" onClick={() => setSubpage("home")}>HOME</a>
-          <NotificationBell session={session} notifications={notifications} refreshNotifications={refreshNotifications} />
-          {session.role === "production" && (
-            <>
-              <span>|</span>
-              <a className="link" onClick={() => setSubpage("records")}>PRODUCTION PANEL</a>
-              <a className="link" onClick={() => setSubpage("items")}>ITEM DETAILS</a>
-              <a className="link" onClick={() => setSubpage("requirements")}>ALL REQUIREMENTS</a>
-            </>
-          )}
-          {(session.role === "sales" || session.role === "admin") && (
-            <>
-              <span>|</span>
-              <a className="link" onClick={() => setSubpage("customers")}>CUSTOMERS</a>
-            </>
-          )}
-          <span>|</span>
-          <a className="link" onClick={() => setSubpage("projects")}>PROJECTS</a>
-          <span>|</span>
-          <a className="link" onClick={onLogout}>LOGOUT</a>
+        <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.03em", display: "flex", gap: 14, alignItems: "center" }}>
+          <span><span style={{ color: "#8a8a8a" }}>{session.name} ·</span> {ROLE_LABEL[session.role].toUpperCase()}</span>
+          <DashboardMenu session={session} setSubpage={setSubpage} onLogout={onLogout} />
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <NotificationBell session={session} notifications={notifications} refreshNotifications={refreshNotifications} />
+            <span style={{ fontSize: 12 }}>Notifications</span>
+          </div>
         </div>
       </div>
-      {session.role === "model_manager" && (
-        <div className="no-print" style={{ background: "#8a8a8a", padding: "10px 30px", display: "flex", gap: 22, flexWrap: "wrap" }}>
-          <button onClick={() => setSubpage("models")} style={{ background: "transparent", border: "none", color: "#fff", fontWeight: subpage === "models" ? 700 : 500, fontSize: 12.5, letterSpacing: "0.04em", textDecoration: subpage === "models" ? "underline" : "none" }}>ADD MODEL</button>
-          <button onClick={() => setSubpage("viewmodels")} style={{ background: "transparent", border: "none", color: "#fff", fontWeight: subpage === "viewmodels" ? 700 : 500, fontSize: 12.5, letterSpacing: "0.04em", textDecoration: subpage === "viewmodels" ? "underline" : "none" }}>VIEW MODELS</button>
-        </div>
-      )}
       <div style={{ padding: "26px 30px 60px" }}>{children}</div>
     </div>
   );
