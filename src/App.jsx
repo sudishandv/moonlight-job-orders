@@ -1030,10 +1030,29 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
     deliveryDate: "", comments: "",
   });
   const [file, setFile] = useState(null);
+  const [modelSizes, setModelSizes] = useState([]);
+  const [pickedCut, setPickedCut] = useState("");
+  const [pickedSize, setPickedSize] = useState("");
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const setMeasure = (k) => (e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }));
   const model = config.models.find((m) => m.modelNo === form.model);
   const valid = form.name.trim() && form.mobile.trim();
+
+  useEffect(() => {
+    if (!model) { setModelSizes([]); return; }
+    supabase.from("model_sizes").select("*").eq("model_id", model.id).then(({ data }) => { setModelSizes(data || []); setPickedCut(""); setPickedSize(""); });
+  }, [model?.id]);
+
+  const cutsAvailable = Array.from(new Set(modelSizes.map((s) => s.cut || "General")));
+  const activeCut = pickedCut || cutsAvailable[0] || "General";
+  const sizesForCut = modelSizes.filter((s) => (s.cut || "General") === activeCut);
+
+  const applySize = (sizeLabel) => {
+    const row = sizesForCut.find((s) => s.size_label === sizeLabel);
+    if (!row) return;
+    setForm((f) => ({ ...f, measurements: { ...f.measurements, ...row.measurements } }));
+    setPickedSize(sizeLabel);
+  };
 
   return (
     <div>
@@ -1049,6 +1068,28 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
         <Field label="Prepared By"><input style={inputStyle} value={isEdit ? initialOrder.preparedBy : session.name} disabled /></Field>
         <Field label="Branch"><select style={inputStyle} value={form.branch} onChange={set("branch")} disabled={readOnly}>{config.branches.map((b) => <option key={b.id} value={b.name}>{b.name}</option>)}</select></Field>
       </div>
+
+      {!readOnly && modelSizes.length > 0 && (
+        <div style={{ border: "1px solid #C9CDD3", borderRadius: 4, padding: 12, marginBottom: 14, display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, alignSelf: "center" }}>Load from catalog:</div>
+          {cutsAvailable.length > 1 && (
+            <div>
+              <div style={label13}>Cut</div>
+              <select value={activeCut} onChange={(e) => { setPickedCut(e.target.value); setPickedSize(""); }} style={{ ...inputStyle, width: 140 }}>
+                {cutsAvailable.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          )}
+          <div>
+            <div style={label13}>Size</div>
+            <select value={pickedSize} onChange={(e) => applySize(e.target.value)} style={{ ...inputStyle, width: 140 }}>
+              <option value="">Select size…</option>
+              {sizesForCut.map((s) => <option key={s.id} value={s.size_label}>{s.size_label}</option>)}
+            </select>
+          </div>
+          {pickedSize && <div style={{ fontSize: 11.5, color: "#2F8F46", alignSelf: "center" }}>Loaded {pickedSize}{cutsAvailable.length > 1 ? ` (${activeCut})` : ""} — you can still edit any field below.</div>}
+        </div>
+      )}
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>MEASUREMENTS</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 12 }}>
