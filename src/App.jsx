@@ -254,6 +254,52 @@ function Lightbox({ src, alt, onClose }) {
   );
 }
 
+async function notify(session, message, type) {
+  try { await supabase.from("notifications").insert({ message, type, created_by: session.name }); } catch (e) { /* non-critical, ignore */ }
+}
+
+function NotificationBell({ session, notifications, refreshNotifications }) {
+  const [open, setOpen] = useState(false);
+  const [lastSeenOverride, setLastSeenOverride] = useState(null);
+  const lastSeen = lastSeenOverride || (session.notifications_last_seen_at ? new Date(session.notifications_last_seen_at) : new Date(0));
+  const unread = notifications.filter((n) => new Date(n.created_at) > lastSeen).length;
+
+  const toggle = async () => {
+    const opening = !open;
+    setOpen(opening);
+    if (opening) {
+      const now = new Date().toISOString();
+      setLastSeenOverride(new Date(now));
+      await supabase.from("profiles").update({ notifications_last_seen_at: now }).eq("id", session.id);
+      await refreshNotifications();
+    }
+  };
+
+  return (
+    <div style={{ position: "relative", display: "inline-block" }}>
+      <span onClick={toggle} style={{ cursor: "pointer", position: "relative", fontSize: 15 }}>
+        🔔
+        {unread > 0 && (
+          <span style={{ position: "absolute", top: -7, right: -9, background: "#C1302B", color: "#fff", borderRadius: 10, fontSize: 9, padding: "1px 5px", fontWeight: 700, lineHeight: 1.3 }}>
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
+      </span>
+      {open && (
+        <div className="no-print" style={{ position: "absolute", top: 26, right: 0, width: 300, maxHeight: 380, overflowY: "auto", background: "#fff", border: "1px solid #C9CDD3", borderRadius: 6, boxShadow: "0 10px 28px rgba(0,0,0,0.14)", zIndex: 200, padding: 12, textAlign: "left" }}>
+          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, letterSpacing: "0.03em" }}>RECENT ACTIVITY</div>
+          {notifications.length === 0 ? <div style={{ fontSize: 12, color: "#8a8a8a" }}>Nothing yet.</div> : notifications.slice(0, 20).map((n) => (
+            <div key={n.id} style={{ fontSize: 12, padding: "7px 0", borderBottom: "1px solid #E5E5E5" }}>
+              <div>{n.message}</div>
+              <div className="mono" style={{ fontSize: 10.5, color: "#8a8a8a", marginTop: 2 }}>{fmtDateTime(n.created_at)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LoadingOverlay({ text }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(255,255,255,0.8)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, flexDirection: "column", gap: 12 }}>
@@ -383,6 +429,7 @@ export default function App() {
   const [subpage, setSubpage] = useState("home");
   const [selectedId, setSelectedId] = useState(null);
   const [toast, setToast] = useState(null);
+  const [notifications, setNotifications] = useState([]);
 
   const flash = (msg) => { setToast(msg); window.clearTimeout(flash._t); flash._t = window.setTimeout(() => setToast(null), 2400); };
 
@@ -431,6 +478,18 @@ export default function App() {
 
   useEffect(() => { if (profile) loadAll(); }, [profile, loadAll]);
 
+  const loadNotifications = useCallback(async () => {
+    const { data } = await supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(50);
+    setNotifications(data || []);
+  }, []);
+
+  useEffect(() => {
+    if (!profile) return;
+    loadNotifications();
+    const interval = setInterval(loadNotifications, 30000);
+    return () => clearInterval(interval);
+  }, [profile, loadNotifications]);
+
   if (session === undefined) return <Loading text="Loading…" />;
   if (!session) return <LoginScreen onLoggedIn={() => {}} />;
   if (profile === null) return <NoProfileScreen onSignOut={() => supabase.auth.signOut()} />;
@@ -439,7 +498,7 @@ export default function App() {
   const refresh = loadAll;
 
   return (
-    <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()}>
+    <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()} notifications={notifications} refreshNotifications={loadNotifications}>
       {subpage === "home" && <HomePage session={profile} setSubpage={setSubpage} />}
       {subpage === "projects" && (
         PROJECTS_ENABLED
@@ -502,7 +561,7 @@ function GlobalStyle() {
   );
 }
 
-function Shell({ session, subpage, setSubpage, onLogout, children }) {
+function Shell({ session, subpage, setSubpage, onLogout, children, notifications, refreshNotifications }) {
   const adminTabs = [
     ["records", "ALL RECORDS"], ["requirements", "ALL REQUIREMENTS"], ["branches", "ADD/REMOVE BRANCH"],
     ["models", "ADD MODEL"], ["viewmodels", "VIEW MODELS"], ["users", "ADD USERS"],
@@ -520,6 +579,7 @@ function Shell({ session, subpage, setSubpage, onLogout, children }) {
           <span>{ROLE_LABEL[session.role].toUpperCase()}</span>
           <span>|</span>
           <a className="link" onClick={() => setSubpage("home")}>HOME</a>
+          <NotificationBell session={session} notifications={notifications} refreshNotifications={refreshNotifications} />
           {session.role === "production" && (
             <>
               <span>|</span>
@@ -777,6 +837,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     };
     const { data, error } = await supabase.from("job_orders").insert(row).select().single();
     if (error) { flash("Error: " + error.message); return; }
+    notify(session, `${session.name} created job order ${jobNo}`, "job_order");
     await refresh();
     setSubpage("records");
     setSelectedId(data.id);
@@ -855,6 +916,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
         }).select().single();
         jobOrderId = order?.id || null;
         lastOrderId = jobOrderId;
+        if (order) notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a requirement`, "job_order");
       }
       await supabase.from("requirement_items").insert({
         profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: it.deltas || {},
@@ -863,7 +925,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     }
     await refresh();
     if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
-    else { setSubpage("customers"); flash("Customer profile saved"); }
+    else { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
   };
 
   const handleCreateOrderFromRow = async (row) => {
@@ -879,6 +941,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
     if (error) { flash("Error: " + error.message); return; }
+    notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order");
     await supabase.from("requirement_items").update({ job_order_id: order.id }).eq("id", row.id);
     await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created");
   };
@@ -1671,6 +1734,7 @@ function ProjectsPage({ projects, collaborators, allUsers, session, refresh, fla
       status: "Concept", created_by: session.name,
     }).select().single();
     if (error) { flash("Error: " + error.message); return; }
+    notify(session, `${session.name} created a new project: ${data.name}`, "project");
     setCreating(false); setForm({ name: "", clientName: "", projectType: PROJECT_TYPES[0], brief: "" });
     await refresh(); setSelectedId(data.id); flash("Project created");
   };
@@ -2834,6 +2898,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     };
     const { data, error } = await supabase.from("job_orders").insert(row).select().single();
     if (error) { flash("Error: " + error.message); return; }
+    notify(session, `${session.name} created job order ${jobNo}`, "job_order");
     await refresh();
     setSubpage("records");
     setSelectedId(data.id);
@@ -2906,6 +2971,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
         }).select().single();
         jobOrderId = order?.id || null;
         lastOrderId = jobOrderId;
+        if (order) notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a requirement`, "job_order");
       }
       await supabase.from("requirement_items").insert({
         profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: it.deltas || {},
@@ -2914,7 +2980,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     }
     await refresh();
     if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
-    else { setSubpage("customers"); flash("Customer profile saved"); }
+    else { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
   };
 
   const handleCreateOrderFromRow = async (row) => {
@@ -2930,6 +2996,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
     if (error) { flash("Error: " + error.message); return; }
+    notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order");
     await supabase.from("requirement_items").update({ job_order_id: order.id }).eq("id", row.id);
     await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created");
   };
@@ -3501,6 +3568,7 @@ function ManageModels({ config, refresh, flash, session }) {
     payload.custom_fields = pendingCustomFields;
     const { data: inserted, error } = await supabase.from("models").insert(payload).select().single();
     if (error) { flash("Error: " + error.message); setCreating(false); return; }
+    notify(session, `${session.name} created a new model: ${inserted.model_no}`, "model");
 
     let frontUrl = null;
     for (const view of Object.keys(photoFiles)) {
