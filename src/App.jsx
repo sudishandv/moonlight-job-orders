@@ -89,6 +89,59 @@ function ProjectStatusTag({ status }) {
   return <span style={{ color: colors[status] || "#1A1A1A", fontWeight: 700, fontSize: 13 }}>{(status || "").toUpperCase()}</span>;
 }
 
+const ROLE_HOME_CARDS = {
+  sales: [
+    ["📋", "All Records", "View and manage job orders", "records"],
+    ["🧵", "New Job Order", "Start one from scratch", "new"],
+    ["📐", "New Requirement", "Take fitting measurements", "requirement"],
+    ["📄", "Requirement List", "Browse saved requirements", "requirements"],
+    ["👤", "Customers", "Search profiles & history", "customers"],
+    ["🗂️", "Projects", "Design team projects", "projects"],
+  ],
+  production: [
+    ["📋", "Production Panel", "Orders awaiting production", "records"],
+    ["🧥", "Item Details", "Browse the model catalog", "items"],
+    ["📄", "Requirement List", "View saved requirements", "requirements"],
+    ["🗂️", "Projects", "Design team projects", "projects"],
+  ],
+  admin: [
+    ["📋", "All Records", "View and manage job orders", "records"],
+    ["📄", "All Requirements", "Browse saved requirements", "requirements"],
+    ["🏬", "Add/Remove Branch", "Manage branch list", "branches"],
+    ["➕", "Add Model", "Create a new style", "models"],
+    ["🧥", "View Models", "Browse & edit the catalog", "viewmodels"],
+    ["👥", "Add Users", "Create logins & assign roles", "users"],
+    ["👤", "Customers", "Search profiles & history", "customers"],
+    ["🗂️", "Projects", "Design team projects", "projects"],
+  ],
+  model_manager: [
+    ["➕", "Add Model", "Create a new style", "models"],
+    ["🧥", "View Models", "Browse & edit the catalog", "viewmodels"],
+    ["🗂️", "Projects", "Design team projects", "projects"],
+  ],
+};
+
+function HomePage({ session, setSubpage }) {
+  const cards = ROLE_HOME_CARDS[session.role] || [];
+  return (
+    <div style={{ maxWidth: 760, margin: "0 auto" }}>
+      <div style={{ textAlign: "center", marginBottom: 24 }}>
+        <div style={{ fontSize: 13, color: "#8a8a8a" }}>Welcome back, {session.name}</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
+        {cards.map(([icon, title, desc, target]) => (
+          <div key={target} onClick={() => setSubpage(target)}
+            style={{ border: "1px solid #DDE1E7", borderRadius: 4, padding: "26px 16px", textAlign: "center", cursor: "pointer" }}>
+            <div style={{ fontSize: 26, marginBottom: 8 }}>{icon}</div>
+            <div style={{ fontWeight: 700, fontSize: 13.5, letterSpacing: "0.03em", marginBottom: 4 }}>{title.toUpperCase()}</div>
+            <div style={{ fontSize: 11, color: "#8a8a8a" }}>{desc}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const FITTING_FIELDS_GENERAL = [
   ["neckSize", "Neck Size"], ["shoulder", "Shoulder"], ["chest", "Chest"], ["waist", "Waist"], ["hips", "Hips"],
   ["bottom", "Bottom"], ["sleeveLength", "Sleeve Length"], ["sleeveOpen", "Sleeve Open"], ["armhole", "Armhole"], ["aroundArmhole", "Around Armhole"],
@@ -325,7 +378,7 @@ export default function App() {
   const [allUsers, setAllUsers] = useState(null);
   const [projectTasks, setProjectTasks] = useState(null);
   const [projectModels, setProjectModels] = useState(null);
-  const [subpage, setSubpage] = useState("records");
+  const [subpage, setSubpage] = useState("home");
   const [selectedId, setSelectedId] = useState(null);
   const [toast, setToast] = useState(null);
 
@@ -342,7 +395,7 @@ export default function App() {
     supabase.from("profiles").select("*").eq("id", session.user.id).single()
       .then(({ data }) => {
         setProfile(data || null);
-        setSubpage(data?.role === "model_manager" ? "models" : "records");
+        setSubpage("home");
       });
   }, [session?.user?.id]);
 
@@ -385,22 +438,23 @@ export default function App() {
 
   return (
     <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()}>
+      {subpage === "home" && <HomePage session={profile} setSubpage={setSubpage} />}
       {subpage === "projects" && (
         <ProjectsPage projects={projects} collaborators={projectCollaborators} allUsers={allUsers} session={profile} refresh={refresh} flash={flash} tasks={projectTasks} projectModels={projectModels} models={config.models} />
       )}
-      {subpage !== "projects" && profile.role === "sales" && (
+      {subpage !== "home" && subpage !== "projects" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
-      {subpage !== "projects" && profile.role === "production" && (
+      {subpage !== "home" && subpage !== "projects" && profile.role === "production" && (
         <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
-      {subpage !== "projects" && profile.role === "admin" && (
+      {subpage !== "home" && subpage !== "projects" && profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
-      {subpage !== "projects" && profile.role === "model_manager" && (
+      {subpage !== "home" && subpage !== "projects" && profile.role === "model_manager" && (
         <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} />
       )}
       {toast && (
@@ -460,6 +514,8 @@ function Shell({ session, subpage, setSubpage, onLogout, children }) {
         <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.03em", display: "flex", gap: 10, alignItems: "center" }}>
           <span style={{ color: "#8a8a8a" }}>{session.name} ·</span>
           <span>{ROLE_LABEL[session.role].toUpperCase()}</span>
+          <span>|</span>
+          <a className="link" onClick={() => setSubpage("home")}>HOME</a>
           {session.role === "production" && (
             <>
               <span>|</span>
