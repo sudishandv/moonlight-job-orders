@@ -1033,6 +1033,8 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
   const [modelSizes, setModelSizes] = useState([]);
   const [pickedCut, setPickedCut] = useState("");
   const [pickedSize, setPickedSize] = useState("");
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
+  const [showAllFields, setShowAllFields] = useState(false);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const setMeasure = (k) => (e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }));
   const model = config.models.find((m) => m.modelNo === form.model);
@@ -1052,7 +1054,12 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
     if (!row) return;
     setForm((f) => ({ ...f, measurements: { ...f.measurements, ...row.measurements } }));
     setPickedSize(sizeLabel);
+    setCatalogLoaded(true);
   };
+
+  const visibleFields = readOnly
+    ? ALL_MEASURE_FIELDS.filter(([k]) => form.measurements[k])
+    : (catalogLoaded && !showAllFields) ? ALL_MEASURE_FIELDS.filter(([k]) => form.measurements[k]) : ALL_MEASURE_FIELDS;
 
   return (
     <div>
@@ -1091,10 +1098,24 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
         </div>
       )}
 
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>MEASUREMENTS</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "14px 0 6px" }}>
+        <div style={{ fontWeight: 700, fontSize: 13 }}>MEASUREMENTS</div>
+        {!readOnly && catalogLoaded && (
+          <a className="link" style={{ fontSize: 11.5 }} onClick={() => setShowAllFields((s) => !s)}>{showAllFields ? "Hide empty fields" : "Show all fields"}</a>
+        )}
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 12 }}>
-        {(readOnly ? ALL_MEASURE_FIELDS.filter(([k]) => form.measurements[k]) : ALL_MEASURE_FIELDS).map(([k, l]) => (
-          <Field key={k} label={l}><input style={inputStyle} value={form.measurements[k] || ""} onChange={setMeasure(k)} disabled={readOnly} /></Field>
+        {visibleFields.map(([k, l]) => (
+          <Field key={k} label={l}>
+            {readOnly ? (
+              <input style={inputStyle} value={form.measurements[k] || ""} disabled />
+            ) : (
+              <select value={form.measurements[k] || ""} onChange={setMeasure(k)} style={inputStyle}>
+                <option value="">—</option>
+                {MEASUREMENT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            )}
+          </Field>
         ))}
       </div>
 
