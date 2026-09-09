@@ -1,6 +1,23 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "./supabaseClient";
 
+// Supabase's default PostgREST config caps any single response at 1000 rows
+// server-side, regardless of how large a .range() the client asks for — so
+// tables that can exceed that (like legacy_orders) need real pagination.
+async function fetchAllRows(table, columns) {
+  const pageSize = 1000;
+  let rows = [];
+  let offset = 0;
+  while (true) {
+    const { data } = await supabase.from(table).select(columns).range(offset, offset + pageSize - 1);
+    if (!data || data.length === 0) break;
+    rows = rows.concat(data);
+    if (data.length < pageSize) break;
+    offset += pageSize;
+  }
+  return rows;
+}
+
 /* =========================================================
    MOONLIGHT CONCEPT — Job Order System (Supabase-backed)
    Roles: Sales (incl. showroom actions) / Production / Admin
@@ -1937,8 +1954,8 @@ function CustomersPage({ profiles, orders, session, refresh }) {
   const PAGE_SIZE = 25;
 
   useEffect(() => {
-    supabase.from("legacy_fitted_measurements").select("mobile,name").then(({ data }) => setLegacyFittedIndex(data || []));
-    supabase.from("legacy_orders").select("mobile,name").then(({ data }) => setLegacyOrdersIndex(data || []));
+    fetchAllRows("legacy_fitted_measurements", "mobile,name").then(setLegacyFittedIndex);
+    fetchAllRows("legacy_orders", "mobile,name").then(setLegacyOrdersIndex);
   }, []);
 
   const byMobile = {};
