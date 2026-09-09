@@ -600,15 +600,6 @@ function Shell({ session, subpage, setSubpage, onLogout, children, notifications
           <a className="link" onClick={onLogout}>LOGOUT</a>
         </div>
       </div>
-      {session.role === "admin" && (
-        <div className="no-print" style={{ background: "#8a8a8a", padding: "10px 30px", display: "flex", gap: 22, flexWrap: "wrap" }}>
-          {adminTabs.map(([key, label]) => (
-            <button key={key} onClick={() => setSubpage(key)} style={{ background: "transparent", border: "none", color: "#fff", fontWeight: subpage === key ? 700 : 500, fontSize: 12.5, letterSpacing: "0.04em", textDecoration: subpage === key ? "underline" : "none" }}>
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
       {session.role === "model_manager" && (
         <div className="no-print" style={{ background: "#8a8a8a", padding: "10px 30px", display: "flex", gap: 22, flexWrap: "wrap" }}>
           <button onClick={() => setSubpage("models")} style={{ background: "transparent", border: "none", color: "#fff", fontWeight: subpage === "models" ? 700 : 500, fontSize: 12.5, letterSpacing: "0.04em", textDecoration: subpage === "models" ? "underline" : "none" }}>ADD MODEL</button>
@@ -3026,12 +3017,18 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     return <CustomersPage profiles={profiles} orders={orders} session={session} refresh={refresh} />;
   }
   if (subpage === "requirements") {
-    return <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={true} canCreateOrder={true} onCreateOrder={handleCreateOrderFromRow} onDelete={handleDeleteRequirement} />;
+    return (
+      <div>
+        <SalesTabs subpage={subpage} setSubpage={setSubpage} />
+        <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={true} canCreateOrder={true} onCreateOrder={handleCreateOrderFromRow} onDelete={handleDeleteRequirement} />
+      </div>
+    );
   }
 
   return (
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL RECORDS</h2>
+      <SalesTabs subpage={subpage} setSubpage={setSubpage} />
       <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />
       <div className="no-print" style={{ textAlign: "right", marginBottom: 10 }}>
         <button onClick={() => setSubpage("requirement")} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em", marginRight: 8 }}>+ NEW REQUIREMENT</button>
