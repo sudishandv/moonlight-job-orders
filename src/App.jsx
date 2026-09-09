@@ -23,6 +23,8 @@ async function fetchAllRows(table, columns) {
    Roles: Sales (incl. showroom actions) / Production / Admin
 ========================================================= */
 
+const PROJECTS_ENABLED = false; // flip to true when ready to continue building this module
+
 const STATUS = {
   job_created: { label: "Job Created", color: "#2F8F46" },
   job_rejected: { label: "Job Rejected", color: "#C1302B" },
@@ -440,7 +442,9 @@ export default function App() {
     <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()}>
       {subpage === "home" && <HomePage session={profile} setSubpage={setSubpage} />}
       {subpage === "projects" && (
-        <ProjectsPage projects={projects} collaborators={projectCollaborators} allUsers={allUsers} session={profile} refresh={refresh} flash={flash} tasks={projectTasks} projectModels={projectModels} models={config.models} />
+        PROJECTS_ENABLED
+          ? <ProjectsPage projects={projects} collaborators={projectCollaborators} allUsers={allUsers} session={profile} refresh={refresh} flash={flash} tasks={projectTasks} projectModels={projectModels} models={config.models} />
+          : <ProjectsUnderConstruction />
       )}
       {subpage !== "home" && subpage !== "projects" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
@@ -1634,6 +1638,16 @@ function RequirementDetail({ row, onClose }) {
         <div style={{ fontWeight: 700, fontSize: 12.5, margin: "18px 0 6px" }}>CUSTOMER SIGNATURE</div>
         {p.signature_url ? <img src={p.signature_url} alt="signature" style={{ border: "1px solid #E5E5E5", maxWidth: "100%", background: "#fff" }} /> : <div style={{ fontSize: 13, color: "#8a8a8a" }}>No signature captured for this profile.</div>}
       </div>
+    </div>
+  );
+}
+
+function ProjectsUnderConstruction() {
+  return (
+    <div style={{ maxWidth: 480, margin: "80px auto", textAlign: "center" }}>
+      <div style={{ fontSize: 34, marginBottom: 12 }}>🚧</div>
+      <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 8 }}>Projects — Under Construction</div>
+      <div style={{ fontSize: 13.5, color: "#8a8a8a" }}>This module is still being worked on and isn't ready for regular use yet. Check back soon.</div>
     </div>
   );
 }
