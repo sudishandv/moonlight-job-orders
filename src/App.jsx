@@ -430,7 +430,7 @@ function GlobalStyle() {
 function Shell({ session, subpage, setSubpage, onLogout, children }) {
   const adminTabs = [
     ["records", "ALL RECORDS"], ["requirements", "ALL REQUIREMENTS"], ["branches", "ADD/REMOVE BRANCH"],
-    ["models", "ADD/REMOVE MODEL"], ["viewmodels", "VIEW MODELS"], ["users", "ADD USERS"],
+    ["models", "ADD MODEL"], ["viewmodels", "VIEW MODELS"], ["users", "ADD USERS"],
   ];
   return (
     <div style={{ minHeight: "100vh", background: "#fff", color: "#1A1A1A", fontFamily: F.body }}>
@@ -474,7 +474,7 @@ function Shell({ session, subpage, setSubpage, onLogout, children }) {
       )}
       {session.role === "model_manager" && (
         <div className="no-print" style={{ background: "#8a8a8a", padding: "10px 30px", display: "flex", gap: 22, flexWrap: "wrap" }}>
-          <button onClick={() => setSubpage("models")} style={{ background: "transparent", border: "none", color: "#fff", fontWeight: subpage === "models" ? 700 : 500, fontSize: 12.5, letterSpacing: "0.04em", textDecoration: subpage === "models" ? "underline" : "none" }}>ADD/REMOVE MODEL</button>
+          <button onClick={() => setSubpage("models")} style={{ background: "transparent", border: "none", color: "#fff", fontWeight: subpage === "models" ? 700 : 500, fontSize: 12.5, letterSpacing: "0.04em", textDecoration: subpage === "models" ? "underline" : "none" }}>ADD MODEL</button>
           <button onClick={() => setSubpage("viewmodels")} style={{ background: "transparent", border: "none", color: "#fff", fontWeight: subpage === "viewmodels" ? 700 : 500, fontSize: 12.5, letterSpacing: "0.04em", textDecoration: subpage === "viewmodels" ? "underline" : "none" }}>VIEW MODELS</button>
         </div>
       )}
