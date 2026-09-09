@@ -1933,6 +1933,8 @@ function CustomersPage({ profiles, orders, session, refresh }) {
   const [selectedMobile, setSelectedMobile] = useState(null);
   const [legacyFittedIndex, setLegacyFittedIndex] = useState([]);
   const [legacyOrdersIndex, setLegacyOrdersIndex] = useState([]);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 25;
 
   useEffect(() => {
     supabase.from("legacy_fitted_measurements").select("mobile,name").then(({ data }) => setLegacyFittedIndex(data || []));
@@ -1949,8 +1951,15 @@ function CustomersPage({ profiles, orders, session, refresh }) {
   legacyFittedIndex.forEach((r) => { if (r.mobile && !byMobile[r.mobile]) byMobile[r.mobile] = { name: r.name, mobile: r.mobile, hasNewProfile: false }; });
   legacyOrdersIndex.forEach((r) => { if (r.mobile && !byMobile[r.mobile]) byMobile[r.mobile] = { name: r.name, mobile: r.mobile, hasNewProfile: false }; });
 
-  const customers = Object.values(byMobile).map((c) => ({ ...c, orderCount: orders.filter((o) => o.mobile === c.mobile).length }));
+  const customers = Object.values(byMobile).map((c) => ({
+    ...c,
+    newOrderCount: orders.filter((o) => o.mobile === c.mobile).length,
+    oldOrderCount: legacyOrdersIndex.filter((o) => o.mobile === c.mobile).length,
+  }));
   const filtered = customers.filter((c) => !query.trim() || (c.name || "").toLowerCase().includes(query.toLowerCase()) || (c.mobile || "").includes(query));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const paged = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   if (selectedMobile) {
     return (
@@ -1969,26 +1978,35 @@ function CustomersPage({ profiles, orders, session, refresh }) {
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>CUSTOMER RECORDS</h2>
       <div className="no-print" style={{ textAlign: "center", marginBottom: 18 }}>
-        <input placeholder="Search name or mobile number" value={query} onChange={(e) => setQuery(e.target.value)} style={{ ...inputStyle, width: 280, display: "inline-block" }} />
+        <input placeholder="Search name or mobile number" value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} style={{ ...inputStyle, width: 280, display: "inline-block" }} />
       </div>
       {filtered.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No customers found.</div> : (
         <table>
           <thead><tr style={{ borderBottom: "2px solid #1A1A1A", fontSize: 12.5, textAlign: "left" }}>
             <th style={{ padding: "9px 10px" }}>Name</th><th style={{ padding: "9px 10px" }}>Mobile</th>
-            <th style={{ padding: "9px 10px" }}>Orders</th><th style={{ padding: "9px 10px" }}>Source</th><th style={{ padding: "9px 10px" }}>View</th>
+            <th style={{ padding: "9px 10px" }}>New Orders</th><th style={{ padding: "9px 10px" }}>Old Orders</th>
+            <th style={{ padding: "9px 10px" }}>Source</th><th style={{ padding: "9px 10px" }}>View</th>
           </tr></thead>
           <tbody>
-            {filtered.map((c) => (
+            {paged.map((c) => (
               <tr key={c.mobile} style={{ borderBottom: "1px solid #E5E5E5", fontSize: 13.5 }}>
                 <td style={{ padding: "9px 10px" }}>{c.name}</td>
                 <td style={{ padding: "9px 10px" }}>{c.mobile}</td>
-                <td style={{ padding: "9px 10px" }}>{c.orderCount}</td>
+                <td style={{ padding: "9px 10px" }}>{c.newOrderCount}</td>
+                <td style={{ padding: "9px 10px" }}>{c.oldOrderCount}</td>
                 <td style={{ padding: "9px 10px", fontSize: 11.5, color: c.hasNewProfile ? "#2F8F46" : "#8a8a8a" }}>{c.hasNewProfile ? "New system" : "Old system only"}</td>
                 <td style={{ padding: "9px 10px" }}><a className="link" onClick={() => setSelectedMobile(c.mobile)}>View</a></td>
               </tr>
             ))}
           </tbody>
         </table>
+      )}
+      {totalPages > 1 && (
+        <div className="no-print" style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 14, marginTop: 16 }}>
+          <button disabled={currentPage === 1} onClick={() => setPage((p) => p - 1)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "6px 14px", fontSize: 12.5, opacity: currentPage === 1 ? 0.4 : 1 }}>← Prev</button>
+          <span style={{ fontSize: 12.5, color: "#5a5a5a" }}>Page {currentPage} of {totalPages} ({filtered.length} customers)</span>
+          <button disabled={currentPage === totalPages} onClick={() => setPage((p) => p + 1)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "6px 14px", fontSize: 12.5, opacity: currentPage === totalPages ? 0.4 : 1 }}>Next →</button>
+        </div>
       )}
     </div>
   );
