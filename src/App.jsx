@@ -116,11 +116,13 @@ const ROLE_HOME_CARDS = {
     ["🧥", "View Models", "Browse & edit the catalog", "viewmodels"],
     ["👥", "Add Users", "Create logins & assign roles", "users"],
     ["👤", "Customers", "Search profiles & history", "customers"],
+    ["📊", "Analytics", "Which models and orders perform best", "analytics"],
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
   model_manager: [
     ["➕", "Add Model", "Create a new style", "models"],
     ["🧥", "View Models", "Browse & edit the catalog", "viewmodels"],
+    ["📊", "Analytics", "Which models and orders perform best", "analytics"],
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
 };
@@ -552,19 +554,22 @@ export default function App() {
           ? <ProjectsPage projects={projects} collaborators={projectCollaborators} allUsers={allUsers} session={profile} refresh={refresh} flash={flash} tasks={projectTasks} projectModels={projectModels} models={config.models} />
           : <ProjectsUnderConstruction />
       )}
-      {subpage !== "home" && subpage !== "projects" && profile.role === "sales" && (
+      {subpage === "analytics" && (profile.role === "admin" || profile.role === "model_manager") && (
+        <AnalyticsPage orders={orders} models={config.models} />
+      )}
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
-      {subpage !== "home" && subpage !== "projects" && profile.role === "production" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && profile.role === "production" && (
         <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
-      {subpage !== "home" && subpage !== "projects" && profile.role === "admin" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
-      {subpage !== "home" && subpage !== "projects" && profile.role === "model_manager" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && profile.role === "model_manager" && (
         <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} />
       )}
       {toast && (
@@ -1785,6 +1790,330 @@ function ProjectsUnderConstruction() {
       <div style={{ fontSize: 34, marginBottom: 12 }}>🚧</div>
       <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 8 }}>Projects — Under Construction</div>
       <div style={{ fontSize: 13.5, color: "#8a8a8a" }}>This module is still being worked on and isn't ready for regular use yet. Check back soon.</div>
+    </div>
+  );
+}
+
+/* ================= Analytics ================= */
+
+const ANALYTICS_RANGES = [["30", "Last 30 days"], ["90", "Last 90 days"], ["365", "Last 12 months"], ["all", "All time"]];
+const baseModelOf = (m) => (m || "").trim().toUpperCase().split("-")[0].trim();
+const isoDay = (d) => d.toISOString().slice(0, 10);
+const pctChange = (cur, prev) => (prev > 0 ? Math.round(((cur - prev) / prev) * 100) : null);
+const avgOf = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : null);
+
+function Trend({ cur, prev, hide }) {
+  const p = pctChange(cur, prev);
+  if (hide || p === null) return null;
+  const up = p >= 0;
+  return <span style={{ color: up ? "#2F8F46" : "#C1302B", fontSize: 11.5, fontWeight: 700 }}>{up ? "▲" : "▼"} {Math.abs(p)}%</span>;
+}
+
+function KpiTile({ label, value, sub }) {
+  return (
+    <div style={{ ...cardStyle, padding: "14px 16px" }}>
+      <div style={{ fontSize: 11, color: "#8a8a8a", letterSpacing: "0.04em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 700, margin: "4px 0 2px", fontFamily: F.display }}>{value}</div>
+      <div style={{ fontSize: 11.5, color: "#8a8a8a", minHeight: 16 }}>{sub}</div>
+    </div>
+  );
+}
+
+function ACard({ title, note, children }) {
+  return (
+    <div style={cardStyle}>
+      <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: note ? 2 : 12 }}>{title}</div>
+      {note && <div style={{ fontSize: 11, color: "#8a8a8a", marginBottom: 12 }}>{note}</div>}
+      {children}
+    </div>
+  );
+}
+
+function BarList({ rows, color }) {
+  if (!rows.length) return <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No data for this selection.</div>;
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      {rows.map((r) => (
+        <div key={r.label}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 2, gap: 8 }}>
+            <span>{r.label}</span>
+            <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>{r.value}{r.sub ? <span style={{ fontWeight: 500, marginLeft: 8 }}>{r.sub}</span> : null}</span>
+          </div>
+          <div style={{ height: 7, background: "#EEF0F2", borderRadius: 4 }}>
+            <div style={{ width: `${(r.value / max) * 100}%`, height: "100%", background: color || "#1A1A1A", borderRadius: 4 }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MonthBars({ rows }) {
+  if (!rows.length) return <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No data for this selection.</div>;
+  const max = Math.max(1, ...rows.map((r) => r.n));
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 150, overflowX: "auto", paddingBottom: 2 }}>
+      {rows.map((r) => (
+        <div key={r.month} title={`${r.month}: ${r.n} orders`} style={{ flex: "1 0 16px", display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", height: "100%" }}>
+          <div style={{ fontSize: 8.5, color: "#5a5a5a", marginBottom: 2 }}>{r.n}</div>
+          <div style={{ width: "100%", height: `${(r.n / max) * 100}%`, background: "#3B6FA0", borderRadius: "2px 2px 0 0", minHeight: 1 }} />
+          <div style={{ fontSize: 8.5, color: "#8a8a8a", marginTop: 3, whiteSpace: "nowrap" }}>{r.month.slice(2)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AnalyticsPage({ orders, models }) {
+  const [range, setRange] = useState("90");
+  const [source, setSource] = useState("all");
+  const [legacy, setLegacy] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+
+  const now = new Date();
+  const toDay = isoDay(now);
+  const days = range === "all" ? null : parseInt(range, 10);
+  const fromDay = days ? isoDay(new Date(now.getTime() - (days - 1) * 86400000)) : "2000-01-01";
+  const fromMs = new Date(fromDay + "T00:00:00").getTime();
+  const toMs = now.getTime();
+  const spanMs = toMs - fromMs;
+
+  const newCur = useMemo(() => orders.filter((o) => { const t = new Date(o.createdAt).getTime(); return t >= fromMs && t <= toMs; }), [orders, range]); // eslint-disable-line
+  const extraMobiles = useMemo(() => (source === "all" ? newCur.map((o) => (o.mobile || "").trim()).filter((m) => m.length >= 6) : []), [newCur, source]);
+
+  useEffect(() => {
+    if (source === "new") { setLoading(false); return; }
+    setLoading(true); setErr("");
+    supabase.rpc("analytics_legacy", { p_from: fromDay, p_to: toDay, p_extra_mobiles: extraMobiles }).then(({ data, error }) => {
+      if (error) setErr(error.message); else setLegacy(data);
+      setLoading(false);
+    });
+  }, [range, source, newCur]); // eslint-disable-line
+
+  const nw = useMemo(() => {
+    const prevOrders = range === "all" ? [] : orders.filter((o) => { const t = new Date(o.createdAt).getTime(); return t >= fromMs - spanMs - 1 && t < fromMs; });
+    const hist = (o, prefix) => { const h = (o.history || []).find((x) => (x.note || "").startsWith(prefix)); return h ? new Date(h.at).getTime() : null; };
+    const has = (o, prefix) => (o.history || []).some((x) => (x.note || "").startsWith(prefix));
+    const prevByModel = {};
+    prevOrders.forEach((o) => { const k = baseModelOf(o.model); if (k) prevByModel[k] = (prevByModel[k] || 0) + 1; });
+    const modelMap = {}, funnel = {}, branch = {}, seller = {}, monthly = {}, category = {}, cust = {};
+    const prodAll = [], turnAll = [];
+    let rejected = 0, returned = 0, onTime = 0, dueDelivered = 0;
+    newCur.forEach((o) => {
+      const k = baseModelOf(o.model) || "(none)";
+      const m = modelMap[k] || (modelMap[k] = { model: k, orders: 0, rejected: 0, returned: 0, prodDays: [] });
+      m.orders++;
+      if (has(o, "Job Rejected")) { m.rejected++; rejected++; }
+      if (has(o, "Job Returned")) { m.returned++; returned++; }
+      const a = hist(o, "Job In Process"), b = hist(o, "Job Completed");
+      if (a && b && b >= a) { const d = (b - a) / 86400000; m.prodDays.push(d); prodAll.push(d); }
+      const dl = hist(o, "Delivered");
+      if (dl) {
+        turnAll.push((dl - new Date(o.createdAt).getTime()) / 86400000);
+        if (o.deliveryDate) { dueDelivered++; if (dl <= new Date(o.deliveryDate + "T23:59:59").getTime()) onTime++; }
+      }
+      funnel[o.status] = (funnel[o.status] || 0) + 1;
+      if (o.branch) branch[o.branch] = (branch[o.branch] || 0) + 1;
+      if (o.preparedBy) seller[o.preparedBy] = (seller[o.preparedBy] || 0) + 1;
+      const mk = (o.createdAt || "").slice(0, 7); if (mk) monthly[mk] = (monthly[mk] || 0) + 1;
+      const cat = (models.find((x) => baseModelOf(x.modelNo) === k) || {}).category; if (cat) category[cat] = (category[cat] || 0) + 1;
+      const mob = (o.mobile || "").trim();
+      if (mob.length >= 6) cust[mob] = { name: o.name, n: ((cust[mob] || {}).n || 0) + 1 };
+    });
+    const todayStart = new Date(toDay + "T00:00:00").getTime();
+    const overdue = orders
+      .filter((o) => o.deliveryDate && o.status !== "delivered" && new Date(o.deliveryDate + "T23:59:59").getTime() < todayStart)
+      .sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate));
+    const dormant = models.filter((m) => !newCur.some((o) => baseModelOf(o.model) === baseModelOf(m.modelNo)));
+    return {
+      total: newCur.length, prevCount: prevOrders.length, prevByModel, modelMap, funnel, branch, seller, monthly, category, cust,
+      rejectRate: newCur.length ? Math.round((rejected / newCur.length) * 100) : null,
+      returnRate: newCur.length ? Math.round((returned / newCur.length) * 100) : null,
+      avgProd: avgOf(prodAll), avgTurn: avgOf(turnAll),
+      onTimePct: dueDelivered ? Math.round((onTime / dueDelivered) * 100) : null,
+      inProduction: (funnel.job_in_process || 0) + (funnel.job_return_in_process || 0),
+      overdue, dormant,
+    };
+  }, [orders, models, newCur, range]); // eslint-disable-line
+
+  const useOld = source !== "new" && legacy;
+  const useNew = source !== "old";
+  const total = (useOld ? legacy.total : 0) + (useNew ? nw.total : 0);
+  const prevTotal = (useOld ? legacy.prev_total : 0) + (useNew ? nw.prevCount : 0);
+  const hideTrend = range === "all";
+
+  let customers, repeat;
+  if (source === "new") {
+    const vals = Object.values(nw.cust);
+    customers = vals.length; repeat = vals.filter((c) => c.n >= 2).length;
+  } else if (legacy) { customers = legacy.customers; repeat = legacy.repeat_customers; }
+
+  // Top models (merged)
+  const modelMerge = {};
+  if (useOld) legacy.top_models.forEach((r) => { modelMerge[r.model] = { model: r.model, orders: r.orders, prev: r.prev_orders }; });
+  if (useNew) Object.values(nw.modelMap).forEach((r) => {
+    if (r.model === "(none)") return;
+    const e = modelMerge[r.model] || (modelMerge[r.model] = { model: r.model, orders: 0, prev: 0 });
+    e.orders += r.orders; e.prev += nw.prevByModel[r.model] || 0;
+  });
+  const topModels = Object.values(modelMerge).sort((a, b) => b.orders - a.orders).slice(0, 12);
+
+  // Monthly (merged)
+  const monthMerge = {};
+  if (useOld) legacy.monthly.forEach((r) => { monthMerge[r.month] = (monthMerge[r.month] || 0) + r.n; });
+  if (useNew) Object.entries(nw.monthly).forEach(([m, n]) => { monthMerge[m] = (monthMerge[m] || 0) + n; });
+  const monthly = Object.entries(monthMerge).sort((a, b) => a[0].localeCompare(b[0])).map(([month, n]) => ({ month, n }));
+
+  const verdict = (m) => {
+    if (m.orders < 3) return { text: "Not enough data yet", color: "#8a8a8a" };
+    const rr = (m.returned / m.orders) * 100, rj = (m.rejected / m.orders) * 100;
+    if (rr >= 20 || rj >= 20) return { text: "Needs attention", color: "#C1302B" };
+    if (rr <= 5 && rj <= 5) return { text: "Performing well", color: "#2F8F46" };
+    return { text: "OK", color: "#D98E2B" };
+  };
+  const healthRows = Object.values(nw.modelMap).filter((m) => m.model !== "(none)").sort((a, b) => b.orders - a.orders).slice(0, 15);
+  const pill = (active) => ({ padding: "6px 14px", fontSize: 12, border: "1px solid " + (active ? "#1A1A1A" : "#DDE1E7"), borderRadius: 14, cursor: "pointer", background: active ? "#1A1A1A" : "#fff", color: active ? "#fff" : "#1A1A1A" });
+
+  return (
+    <div style={{ maxWidth: 1250, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 16 }}>ANALYTICS</h2>
+
+      <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 20, flexWrap: "wrap", marginBottom: 20 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          {ANALYTICS_RANGES.map(([k, l]) => <button key={k} style={pill(range === k)} onClick={() => setRange(k)}>{l}</button>)}
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {[["all", "Old + New"], ["old", "Old system"], ["new", "New system"]].map(([k, l]) => <button key={k} style={pill(source === k)} onClick={() => setSource(k)}>{l}</button>)}
+        </div>
+      </div>
+
+      {err && <div style={{ color: "#C1302B", fontSize: 13, textAlign: "center", marginBottom: 14 }}>Couldn't load old-system data: {err}</div>}
+      {loading && source !== "new" && <div style={{ textAlign: "center", color: "#8a8a8a", fontSize: 13, marginBottom: 14 }}>Crunching numbers…</div>}
+      {source !== "new" && legacy && legacy.total === 0 && range === "all" && (
+        <div style={{ textAlign: "center", color: "#8a8a8a", fontSize: 12.5, marginBottom: 14 }}>No old-system data found — make sure legacy_order_stats has been imported.</div>
+      )}
+
+      {/* KPI row */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, marginBottom: 16 }}>
+        <KpiTile label="Orders" value={total.toLocaleString()} sub={<>{!hideTrend && <Trend cur={total} prev={prevTotal} />} {!hideTrend && prevTotal > 0 ? " vs previous period" : ""}</>} />
+        <KpiTile label="Active customers" value={customers != null ? customers.toLocaleString() : "—"} sub={customers ? `${Math.round((repeat / customers) * 100)}% ordered more than once` : ""} />
+        {source !== "new" && legacy && <KpiTile label="Avg planned lead time" value={legacy.avg_lead_days != null ? `${legacy.avg_lead_days} d` : "—"} sub="order date → delivery date (old system)" />}
+        {useNew && <KpiTile label="Avg actual turnaround" value={nw.avgTurn != null ? `${nw.avgTurn.toFixed(1)} d` : "—"} sub="created → delivered (new system)" />}
+        {useNew && <KpiTile label="In production now" value={nw.inProduction} sub="new-system orders being worked on" />}
+        {useNew && <KpiTile label="On-time delivery" value={nw.onTimePct != null ? `${nw.onTimePct}%` : "—"} sub={`${nw.overdue.length} order(s) overdue right now`} />}
+        {useNew && <KpiTile label="Rejected / returned" value={nw.rejectRate != null ? `${nw.rejectRate}% / ${nw.returnRate}%` : "—"} sub="share of new-system orders" />}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: 16, marginBottom: 16 }}>
+        <ACard title="Top models" note="Colour variants are grouped under one base model; placeholder model B000 is excluded. Arrows compare with the previous period of the same length.">
+          <BarList color="#1A1A1A" rows={topModels.map((m) => ({
+            label: m.model, value: m.orders,
+            sub: (
+              <>
+                <Trend cur={m.orders} prev={m.prev} hide={hideTrend} />
+                {!hideTrend && m.orders >= 5 && m.prev > 0 && pctChange(m.orders, m.prev) >= 50 ? <span style={{ marginLeft: 6, color: "#D98E2B", fontWeight: 700 }}>🔥 rising</span> : null}
+                {!hideTrend && m.orders >= 5 && m.prev === 0 ? <span style={{ marginLeft: 6, color: "#3B6FA0", fontWeight: 700 }}>✨ new</span> : null}
+              </>
+            ),
+          }))} />
+        </ACard>
+
+        <ACard title="Orders over time" note="Monthly order volume — good for spotting busy and quiet seasons.">
+          <MonthBars rows={monthly} />
+        </ACard>
+      </div>
+
+      {useNew && (
+        <div style={{ ...cardStyle, marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 2 }}>Model health (new system)</div>
+          <div style={{ fontSize: 11, color: "#8a8a8a", marginBottom: 12 }}>A model is "going great" when it sells AND rarely gets rejected by production or returned by the showroom. Needs at least 3 orders for a verdict.</div>
+          {healthRows.length === 0 ? <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No new-system orders in this period yet.</div> : (
+            <table>
+              <thead><tr style={{ borderBottom: "2px solid #1A1A1A", fontSize: 12, textAlign: "left" }}>
+                <th style={{ padding: "7px 8px" }}>Model</th><th style={{ padding: "7px 8px" }}>Orders</th><th style={{ padding: "7px 8px" }}>Rejected</th>
+                <th style={{ padding: "7px 8px" }}>Returned</th><th style={{ padding: "7px 8px" }}>Avg production</th><th style={{ padding: "7px 8px" }}>Verdict</th>
+              </tr></thead>
+              <tbody>
+                {healthRows.map((m) => {
+                  const v = verdict(m);
+                  return (
+                    <tr key={m.model} style={{ borderBottom: "1px solid #E5E5E5", fontSize: 12.5 }}>
+                      <td style={{ padding: "7px 8px", fontWeight: 600 }}>{m.model}</td>
+                      <td style={{ padding: "7px 8px" }}>{m.orders}</td>
+                      <td style={{ padding: "7px 8px" }}>{m.rejected} ({Math.round((m.rejected / m.orders) * 100)}%)</td>
+                      <td style={{ padding: "7px 8px" }}>{m.returned} ({Math.round((m.returned / m.orders) * 100)}%)</td>
+                      <td style={{ padding: "7px 8px" }}>{avgOf(m.prodDays) != null ? `${avgOf(m.prodDays).toFixed(1)} d` : "—"}</td>
+                      <td style={{ padding: "7px 8px", color: v.color, fontWeight: 700 }}>{v.text}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16, marginBottom: 16 }}>
+        {source !== "new" && legacy && (
+          <ACard title="Garment type mix (old system)">
+            <BarList color="#3B6FA0" rows={legacy.garment_mix.map((g) => ({ label: g.label, value: g.n }))} />
+          </ACard>
+        )}
+        {useNew && (
+          <ACard title="Category mix (new system)" note="From each model's catalog category.">
+            <BarList color="#3B6FA0" rows={Object.entries(nw.category).sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value }))} />
+          </ACard>
+        )}
+        {source !== "new" && legacy && (
+          <ACard title="Tailor / master workload (old system)">
+            <BarList color="#2F8F46" rows={legacy.masters.map((g) => ({ label: g.label, value: g.n }))} />
+          </ACard>
+        )}
+        {useNew && (
+          <ACard title="Orders by branch (new system)">
+            <BarList color="#2F8F46" rows={Object.entries(nw.branch).sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value }))} />
+          </ACard>
+        )}
+        {useNew && (
+          <ACard title="Sales leaderboard (new system)">
+            <BarList color="#D98E2B" rows={Object.entries(nw.seller).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([label, value]) => ({ label, value }))} />
+          </ACard>
+        )}
+        {useNew && (
+          <ACard title="Order pipeline (new system)" note="Where this period's orders currently sit.">
+            <BarList color="#1A1A1A" rows={Object.entries(nw.funnel).sort((a, b) => b[1] - a[1]).map(([k, value]) => ({ label: (STATUS[k] || {}).label || k, value }))} />
+          </ACard>
+        )}
+        <ACard title="Top customers" note={source === "new" ? "By number of orders (new system)." : "By number of orders (old system data)."}>
+          <BarList color="#1A1A1A" rows={
+            (source === "new"
+              ? Object.entries(nw.cust).sort((a, b) => b[1].n - a[1].n).slice(0, 10).map(([m, c]) => ({ label: `${c.name || m}`, value: c.n }))
+              : (legacy ? legacy.top_customers.map((c) => ({ label: c.name || c.mobile, value: c.orders })) : []))
+          } />
+        </ACard>
+      </div>
+
+      {useNew && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: 16, marginBottom: 16 }}>
+          <ACard title={`Overdue orders (${nw.overdue.length})`} note="Past their delivery date and not yet delivered.">
+            {nw.overdue.length === 0 ? <div style={{ fontSize: 12.5, color: "#2F8F46" }}>Nothing overdue. 🎉</div> : nw.overdue.slice(0, 10).map((o) => (
+              <div key={o.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "6px 0", borderBottom: "1px solid #E5E5E5" }}>
+                <span><span className="mono">{o.jobOrderNo}</span> · {o.name} · {o.model}</span>
+                <span style={{ color: "#C1302B", fontWeight: 700 }}>due {fmtDate(o.deliveryDate)}</span>
+              </div>
+            ))}
+          </ACard>
+          <ACard title={`Catalog models with no orders (${nw.dormant.length})`} note="Styles in your catalog nobody has ordered in this period — candidates to promote, rework, or retire.">
+            {nw.dormant.length === 0 ? <div style={{ fontSize: 12.5, color: "#2F8F46" }}>Every catalog model has orders.</div> : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {nw.dormant.slice(0, 30).map((m) => <span key={m.id} style={{ background: "#EEF0F2", border: "1px solid #C9CDD3", borderRadius: 12, padding: "3px 10px", fontSize: 12 }}>{m.modelNo}</span>)}
+              </div>
+            )}
+          </ACard>
+        </div>
+      )}
     </div>
   );
 }
