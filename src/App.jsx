@@ -191,6 +191,35 @@ function nearestSize(customerM, sizes) {
   return best;
 }
 
+const cutTagsOf = (model) => (model.possibleCuts ? model.possibleCuts.split(",").map((c) => c.trim()).filter(Boolean) : []);
+const toNum = (v) => { const n = parseFloat(v); return isNaN(n) ? null : n; };
+const rowsForCut = (sizes, cut) => {
+  const exact = sizes.filter((s) => (s.cut || null) === (cut || null));
+  if (exact.length) return exact;
+  const general = sizes.filter((s) => !s.cut);
+  return general.length ? general : sizes;
+};
+const calcFromRow = (row) => Object.fromEntries(
+  Object.entries(row.measurements || {}).map(([k, v]) => [k, toNum(v)]).filter(([, v]) => v !== null)
+);
+const calcToStrings = (calc) => Object.fromEntries(
+  Object.entries(calc || {}).filter(([, v]) => v !== null && v !== "" && v !== undefined).map(([k, v]) => [k, String(v)])
+);
+// Suggest a size: per field, compare the customer's value as-is AND halved against the chart (chart values for
+// chest/waist/hips are usually half-circumference), and take whichever is closer.
+const suggestSize = (customerM, rows) => {
+  let best = null, bestScore = Infinity;
+  rows.forEach((row) => {
+    let score = 0, count = 0;
+    CORE_FIT_FIELDS.forEach((f) => {
+      const c = toNum(customerM[f]), b = toNum(row.measurements && row.measurements[f]);
+      if (c !== null && b !== null) { score += Math.min(Math.abs(c - b), Math.abs(c / 2 - b)); count++; }
+    });
+    if (count > 0 && score / count < bestScore) { bestScore = score / count; best = row; }
+  });
+  return best || rows.find((r) => r.size_label === "Medium") || rows[0] || null;
+};
+
 function computeDeltas(fields, customerM, baseM) {
   const out = {};
   fields.forEach(([k]) => {
@@ -398,7 +427,7 @@ function dbToOrder(r) {
     measurements: r.measurements || {}, sheilaType: r.sheila_type, abayaOption: r.abaya_option,
     buttonTill: r.button_till, deliveryDate: r.delivery_date, attachmentUrl: r.attachment_url,
     comments: r.comments, status: r.status, history: r.history || [],
-    createdAt: r.created_at, updatedAt: r.updated_at,
+    createdAt: r.created_at, updatedAt: r.updated_at, cut: r.cut,
   };
 }
 function orderFieldsToDb(f) {
@@ -517,6 +546,7 @@ export default function App() {
     setRequirementItems((reqItems || []).map((r) => ({
       id: r.id, profileId: r.profile_id, model: r.model, recommendedSize: r.recommended_size,
       deltas: r.deltas, notes: r.notes, jobOrderId: r.job_order_id, createdAt: r.created_at,
+      calculated: r.calculated || {}, cut: r.cut,
     })));
     setProjects(projs || []);
     setProjectCollaborators(collabs || []);
@@ -922,12 +952,12 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       let jobOrderId = null;
       if (createOrders) {
         const now = new Date().toISOString();
-        const fitNote = `Selected size: ${it.size}.${it.notes ? " Notes: " + it.notes : ""}`;
+        const fitNote = `${it.cut ? `Cut: ${it.cut}. ` : ""}Size: ${it.size}.${it.notes ? " Notes: " + it.notes : ""}`;
         const vIdx = validItems.indexOf(it);
         const { data: order } = await supabase.from("job_orders").insert({
           job_order_no: jobNumbers[vIdx], name: customer.name, mobile: customer.mobile, order_type: "New",
           model: it.model, item: ITEM_TYPES[0], prepared_by: session.name, branch,
-          measurements: suggestionMeasurements(measurements, it.deltas), delivery_date: deliveryDate || null,
+          measurements: calcToStrings(it.calc), cut: it.cut || null, delivery_date: deliveryDate || null,
           comments: fitNote, status: "job_created",
           history: [{ note: "Job order created from customer requirement", by: session.name, at: now }],
         }).select().single();
@@ -936,7 +966,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
         if (order) notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a requirement`, "job_order");
       }
       await supabase.from("requirement_items").insert({
-        profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: it.deltas || {},
+        profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: {}, calculated: it.calc || {}, cut: it.cut || null,
         notes: it.notes || null, job_order_id: jobOrderId,
       });
     }
@@ -949,11 +979,12 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     const branch = row.profile.branch || (session.role === "admin" ? "Admin" : session.branch || "");
     const [jobNo] = await nextJobOrderNumbers(1);
     const now = new Date().toISOString();
-    const fitNote = `Selected size: ${row.recommendedSize || "—"}.${row.notes ? " Notes: " + row.notes : ""}`;
+    const fitNote = `${row.cut ? `Cut: ${row.cut}. ` : ""}Selected size: ${row.recommendedSize || "—"}.${row.notes ? " Notes: " + row.notes : ""}`;
     const { data: order, error } = await supabase.from("job_orders").insert({
       job_order_no: jobNo, name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model,
       item: ITEM_TYPES[0], prepared_by: session.name, branch,
-      measurements: suggestionMeasurements(row.profile.measurements, row.deltas),
+      measurements: row.calculated && Object.keys(row.calculated).length ? calcToStrings(row.calculated) : suggestionMeasurements(row.profile.measurements, row.deltas),
+      cut: row.cut || null,
       comments: fitNote, status: "job_created",
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
@@ -1494,31 +1525,41 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     }
   };
 
+  const [lightbox, setLightbox] = useState(null);
+
   const addItem = async () => {
     const model = config.models.find((m) => m.modelNo === pickModel);
     if (!model) return;
     const { data: sizes } = await supabase.from("model_sizes").select("*").eq("model_id", model.id);
-    if (!sizes || sizes.length === 0) {
-      setItems((it) => [...it, { model: pickModel, photoUrl: model.photoUrl, sizes: [], notes: "", error: "No size chart saved for this model yet — add one in Admin > Add/Remove Model." }]);
-      return;
+    const allSizes = sizes || [];
+    const cuts = cutTagsOf(model);
+    const cut = cuts[0] || null;
+    const base = { model: pickModel, modelId: model.id, photoUrl: model.photoUrl, customFields: model.customFields || [], cuts, cut, notes: "" };
+    if (allSizes.length === 0) {
+      setItems((it) => [...it, { ...base, sizes: [], error: "No size chart saved for this model yet — add one under View Models." }]);
+    } else {
+      const best = suggestSize(measurements, rowsForCut(allSizes, cut));
+      setItems((it) => [...it, { ...base, sizes: allSizes, size: best.size_label, auto: best.size_label, calc: calcFromRow(best) }]);
     }
-    const best = nearestSize(measurements, sizes);
-    if (!best) {
-      setItems((it) => [...it, { model: pickModel, photoUrl: model.photoUrl, sizes, notes: "", error: "Enter shoulder / chest / waist / hips first to compute a match." }]);
-      return;
-    }
-    setItems((it) => [...it, { model: pickModel, photoUrl: model.photoUrl, sizes, size: best.size_label, auto: best.size_label, notes: "", deltas: computeDeltas(FITTING_FIELDS, measurements, best.measurements) }]);
+    setPickModel("");
   };
-  const changeItemSize = (idx, sizeLabel) => {
-    setItems((prev) => prev.map((it, i) => {
-      if (i !== idx) return it;
-      const sizeObj = it.sizes.find((s) => s.size_label === sizeLabel);
-      if (!sizeObj) return it;
-      return { ...it, size: sizeLabel, deltas: computeDeltas(FITTING_FIELDS, measurements, sizeObj.measurements) };
-    }));
-  };
-  const setItemDelta = (idx, key, newDelta) => setItems((prev) => prev.map((it, i) => i !== idx ? it : { ...it, deltas: { ...it.deltas, [key]: newDelta } }));
-  const setItemNotes = (idx, text) => setItems((prev) => prev.map((it, i) => i !== idx ? it : { ...it, notes: text }));
+  const changeItemCut = (idx, cut) => setItems((prev) => prev.map((it, i) => {
+    if (i !== idx) return it;
+    const best = suggestSize(measurements, rowsForCut(it.sizes, cut));
+    return best ? { ...it, cut, size: best.size_label, auto: best.size_label, calc: calcFromRow(best) } : { ...it, cut };
+  }));
+  const changeItemSize = (idx, label) => setItems((prev) => prev.map((it, i) => {
+    if (i !== idx) return it;
+    const row = rowsForCut(it.sizes, it.cut).find((s) => s.size_label === label);
+    return row ? { ...it, size: label, calc: calcFromRow(row) } : it;
+  }));
+  const setItemCalc = (idx, key, value) => setItems((prev) => prev.map((it, i) => {
+    if (i !== idx) return it;
+    const calc = { ...it.calc };
+    if (value === null || value === undefined || isNaN(value)) delete calc[key]; else calc[key] = value;
+    return { ...it, calc };
+  }));
+  const setItemNotes = (idx, text) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, notes: text })));
   const removeItem = (idx) => setItems((it) => it.filter((_, i) => i !== idx));
   const customerValid = customer.name.trim() && customer.mobile.trim();
 
@@ -1608,79 +1649,84 @@ function RequirementForm({ config, session, onCancel, onSave }) {
       </div>
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "20px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>ITEMS</div>
-      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginBottom: 16 }}>
+
+      {items.length === 0 && <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 12 }}>No items yet — pick a model below and click "+ Add Item".</div>}
+
+      {items.map((it, idx) => {
+        const labelOf = (k) => (FITTING_FIELDS.find(([x]) => x === k) || (it.customFields || []).map((c) => [c.key, c.label]).find(([x]) => x === k) || [k, k])[1];
+        const rowKeys = it.calc ? [...FITTING_FIELDS.map(([k]) => k), ...(it.customFields || []).map((c) => c.key)].filter((k) => it.calc[k] != null) : [];
+        const sizeRows = it.sizes ? rowsForCut(it.sizes, it.cut) : [];
+        return (
+          <div key={idx} style={{ border: "1px solid #C9CDD3", borderRadius: 6, padding: 16, marginBottom: 14, display: "flex", gap: 22, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div style={{ width: 150, flexShrink: 0 }}>
+              <div onClick={() => it.photoUrl && setLightbox(it.photoUrl)} style={{ cursor: it.photoUrl ? "zoom-in" : "default" }}>
+                <ModelThumb model={{ id: it.modelId, photoUrl: it.photoUrl, modelNo: it.model }} size={150} />
+              </div>
+              <div style={{ fontWeight: 700, fontSize: 14, marginTop: 8, textAlign: "center" }}>{it.model}</div>
+            </div>
+
+            <div style={{ flex: 1, minWidth: 320 }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 16, flexWrap: "wrap", marginBottom: 10 }}>
+                {it.cuts && it.cuts.length >= 2 ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 12, color: "#8a8a8a" }}>Cut:</span>
+                    <select value={it.cut || ""} onChange={(e) => changeItemCut(idx, e.target.value)} style={{ ...inputStyle, width: 150, padding: "4px 6px" }}>
+                      {it.cuts.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                ) : it.cuts && it.cuts.length === 1 ? (
+                  <div style={{ fontSize: 12.5 }}><span style={{ color: "#8a8a8a" }}>Cut:</span> <strong>{it.cuts[0]}</strong></div>
+                ) : null}
+                {!it.error && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 12, color: "#8a8a8a" }}>Size:</span>
+                    <select value={it.size} onChange={(e) => changeItemSize(idx, e.target.value)} style={{ ...inputStyle, width: 150, padding: "4px 6px" }}>
+                      {sizeRows.map((s) => <option key={s.id} value={s.size_label}>{s.size_label}{s.size_label === it.auto ? " (suggested)" : ""}</option>)}
+                    </select>
+                  </div>
+                )}
+                <a className="link" style={{ color: "#C1302B" }} onClick={() => removeItem(idx)}>Remove</a>
+              </div>
+
+              {it.error ? <div style={{ color: "#C1302B", fontSize: 13 }}>{it.error}</div> : (
+                <table>
+                  <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer Fitted Measurement</th><th>Calculated Measurement</th></tr></thead>
+                  <tbody>
+                    {rowKeys.map((k) => (
+                      <tr key={k} style={{ fontSize: 13 }}>
+                        <td style={{ padding: "3px 0" }}>{labelOf(k)}</td>
+                        <td>{measurements[k] || "—"}</td>
+                        <td style={{ fontWeight: 700 }}><EditableCell value={it.calc[k]} onCommit={(v) => setItemCalc(idx, k, v)} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              <div style={{ marginTop: 10 }}>
+                <Field label="Special Requirements / Notes for this item">
+                  <textarea style={{ ...inputStyle, minHeight: 50 }} value={it.notes} onChange={(e) => setItemNotes(idx, e.target.value)} placeholder="Anything specific to this item…" />
+                </Field>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Add-item bar — sits BELOW the items, so the next item is always one click away */}
+      <div style={{ border: "1px dashed #C9CDD3", borderRadius: 6, padding: 14, marginBottom: 16, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+        {pickModel && (() => { const m = config.models.find((mm) => mm.modelNo === pickModel); return m ? <ModelThumb model={m} size={56} style={{ borderRadius: 3 }} /> : null; })()}
         <div>
           <div style={label13}>Model</div>
-          <select style={{ ...inputStyle, width: 200 }} value={pickModel} onChange={(e) => setPickModel(e.target.value)}>
+          <select style={{ ...inputStyle, width: 220 }} value={pickModel} onChange={(e) => setPickModel(e.target.value)}>
             <option value="">Select a model…</option>
-            {config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}</option>)}
+            {config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}{m.styleName ? ` — ${m.styleName}` : ""}</option>)}
           </select>
         </div>
-        <button onClick={addItem} disabled={!pickModel} style={{ background: pickModel ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>+ Add Item</button>
+        {pickModel && (() => { const m = config.models.find((mm) => mm.modelNo === pickModel); return m && m.possibleCuts ? <div style={{ fontSize: 12, color: "#8a8a8a", alignSelf: "flex-end", paddingBottom: 8 }}>Cuts: {m.possibleCuts}</div> : null; })()}
+        <button onClick={addItem} disabled={!pickModel} style={{ background: pickModel ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, alignSelf: "flex-end" }}>+ Add Item</button>
       </div>
-
-      {pickModel && (() => {
-        const m = config.models.find((mm) => mm.modelNo === pickModel);
-        return m ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16, border: "1px solid #E5E5E5", padding: 10 }}>
-            <ModelThumb model={m} size={70} style={{ borderRadius: 3 }} />
-            <div style={{ fontSize: 13 }}><strong>{m.modelNo}</strong><br />{m.possibleCuts}</div>
-          </div>
-        ) : null;
-      })()}
-
-      {items.map((it, idx) => (
-        <div key={idx} style={{ border: "1px solid #C9CDD3", padding: 14, marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              {it.photoUrl && <img src={it.photoUrl} alt={it.model} style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 3 }} />}
-              <strong>{it.model}</strong>
-            </div>
-            {!it.error && (
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 12, color: "#8a8a8a" }}>Size:</span>
-                <select value={it.size} onChange={(e) => changeItemSize(idx, e.target.value)} style={{ ...inputStyle, width: 130, padding: "4px 6px" }}>
-                  {it.sizes.map((s) => <option key={s.id} value={s.size_label}>{s.size_label}{s.size_label === it.auto ? " (auto match)" : ""}</option>)}
-                </select>
-              </div>
-            )}
-            <a className="link" style={{ color: "#C1302B" }} onClick={() => removeItem(idx)}>Remove</a>
-          </div>
-          {it.error ? <div style={{ color: "#C1302B", fontSize: 13 }}>{it.error}</div> : (
-            FITTING_FIELDS.filter(([k]) => it.deltas[k] != null).length === 0 ? (
-              <div style={{ fontSize: 13, color: "#8a8a8a" }}>This model's size chart doesn't have matching values for anything entered yet.</div>
-            ) : (
-              <table>
-                <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer</th><th>Difference</th><th>Suggestion</th></tr></thead>
-                <tbody>
-                  {FITTING_FIELDS.filter(([k]) => it.deltas[k] != null).map(([k, l]) => {
-                    const customerVal = parseFloat(measurements[k]);
-                    const diff = it.deltas[k];
-                    const suggestion = (diff != null && !isNaN(customerVal)) ? +(customerVal + diff).toFixed(1) : null;
-                    return (
-                      <tr key={k} style={{ fontSize: 13 }}>
-                        <td>{l}</td>
-                        <td>{measurements[k] || "—"}</td>
-                        <td style={{ color: diff > 0 ? "#2F8F46" : diff < 0 ? "#C1302B" : "#1A1A1A", fontWeight: 600 }}>
-                          <EditableCell value={diff} onCommit={(newDiff) => setItemDelta(idx, k, newDiff)} />
-                        </td>
-                        <td style={{ fontWeight: 700 }}>
-                          <EditableCell value={suggestion} onCommit={(newSugg) => setItemDelta(idx, k, newSugg == null || isNaN(customerVal) ? null : +(newSugg - customerVal).toFixed(1))} />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )
-          )}
-          <div style={{ marginTop: 10 }}>
-            <Field label="Special Requirements / Notes for this item">
-              <textarea style={{ ...inputStyle, minHeight: 50 }} value={it.notes} onChange={(e) => setItemNotes(idx, e.target.value)} placeholder="Anything specific to this item…" />
-            </Field>
-          </div>
-        </div>
-      ))}
+      {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
 
       <div style={{ marginTop: 16, maxWidth: 260 }}>
         <Field label="Delivery Date"><input type="date" style={inputStyle} value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} /></Field>
@@ -1755,27 +1801,43 @@ function RequirementDetail({ row, onClose }) {
         <div style={{ marginTop: 14, fontSize: 13.5, display: "grid", gap: 4 }}>
           <div><strong>Model:</strong> {row.model}</div>
           <div><strong>Size:</strong> {row.recommendedSize || "—"}</div>
+          <div><strong>Cut:</strong> {row.cut || "—"}</div>
           <div><strong>Date:</strong> {fmtDate(row.createdAt)}</div>
           <div><strong>Job Order:</strong> {row.order ? row.order.jobOrderNo : "Not created yet"}</div>
           {row.notes && <div><strong>Notes:</strong> {row.notes}</div>}
         </div>
 
         <div style={{ fontWeight: 700, fontSize: 12.5, margin: "16px 0 6px" }}>MEASUREMENTS & COMPUTED DIFFERENCE</div>
-        <table>
-          <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer</th><th>Difference</th><th>Suggestion</th></tr></thead>
-          <tbody>
-            {FITTING_FIELDS.filter(([k]) => row.deltas && row.deltas[k] != null).map(([k, l]) => {
-              const c = parseFloat(p.measurements?.[k]);
-              const d = row.deltas[k];
-              const s = (d != null && !isNaN(c)) ? +(c + d).toFixed(1) : null;
-              return (
+        {row.calculated && Object.keys(row.calculated).length > 0 ? (
+          <table>
+            <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer Fitted Measurement</th><th>Calculated Measurement</th></tr></thead>
+            <tbody>
+              {Object.entries(row.calculated).map(([k, v]) => (
                 <tr key={k} style={{ fontSize: 13 }}>
-                  <td>{l}</td><td>{p.measurements?.[k] || "—"}</td><td>{d > 0 ? "+" : ""}{d}</td><td style={{ fontWeight: 700 }}>{s ?? "—"}</td>
+                  <td>{(ALL_MEASURE_FIELDS.find(([x]) => x === k) || [k, k.replace(/^custom_/, "").replace(/_/g, " ")])[1]}</td>
+                  <td>{p.measurements?.[k] || "—"}</td>
+                  <td style={{ fontWeight: 700 }}>{v}</td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <table>
+            <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer</th><th>Difference</th><th>Suggestion</th></tr></thead>
+            <tbody>
+              {FITTING_FIELDS.filter(([k]) => row.deltas && row.deltas[k] != null).map(([k, l]) => {
+                const c = parseFloat(p.measurements?.[k]);
+                const d = row.deltas[k];
+                const s = (d != null && !isNaN(c)) ? +(c + d).toFixed(1) : null;
+                return (
+                  <tr key={k} style={{ fontSize: 13 }}>
+                    <td>{l}</td><td>{p.measurements?.[k] || "—"}</td><td>{d > 0 ? "+" : ""}{d}</td><td style={{ fontWeight: 700 }}>{s ?? "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
 
         <div style={{ fontWeight: 700, fontSize: 12.5, margin: "18px 0 6px" }}>CUSTOMER SIGNATURE</div>
         {p.signature_url ? <img src={p.signature_url} alt="signature" style={{ border: "1px solid #E5E5E5", maxWidth: "100%", background: "#fff" }} /> : <div style={{ fontSize: 13, color: "#8a8a8a" }}>No signature captured for this profile.</div>}
@@ -2715,7 +2777,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
         {!edit ? (
           <div style={{ marginTop: 16 }}>
             <Row l="Mobile" v={order.mobile} /><Row l="Order Type" v={order.orderType} />
-            <Row l="Model" v={order.model} /><Row l="Item" v={order.item} />
+            <Row l="Model" v={order.model} /><Row l="Cut" v={order.cut || "—"} /><Row l="Item" v={order.item} />
             <Row l="Prepared By" v={order.preparedBy} /><Row l="Branch" v={order.branch} />
             <Row l="Delivery Date" v={fmtDate(order.deliveryDate)} />
             <Row l="Sheila Type" v={order.sheilaType} /><Row l="Abaya Option" v={order.abayaOption} />
@@ -3363,12 +3425,12 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       let jobOrderId = null;
       if (createOrders) {
         const now = new Date().toISOString();
-        const fitNote = `Selected size: ${it.size}.${it.notes ? " Notes: " + it.notes : ""}`;
+        const fitNote = `${it.cut ? `Cut: ${it.cut}. ` : ""}Size: ${it.size}.${it.notes ? " Notes: " + it.notes : ""}`;
         const vIdx = validItems.indexOf(it);
         const { data: order } = await supabase.from("job_orders").insert({
           job_order_no: jobNumbers[vIdx], name: customer.name, mobile: customer.mobile, order_type: "New",
           model: it.model, item: ITEM_TYPES[0], prepared_by: session.name, branch,
-          measurements: suggestionMeasurements(measurements, it.deltas), delivery_date: deliveryDate || null,
+          measurements: calcToStrings(it.calc), cut: it.cut || null, delivery_date: deliveryDate || null,
           comments: fitNote, status: "job_created",
           history: [{ note: `Job order created from customer requirement by Admin (${session.name})`, by: session.name, at: now }],
         }).select().single();
@@ -3377,7 +3439,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
         if (order) notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a requirement`, "job_order");
       }
       await supabase.from("requirement_items").insert({
-        profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: it.deltas || {},
+        profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: {}, calculated: it.calc || {}, cut: it.cut || null,
         notes: it.notes || null, job_order_id: jobOrderId,
       });
     }
@@ -3390,11 +3452,12 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     const branch = row.profile.branch || (session.role === "admin" ? "Admin" : session.branch || "");
     const [jobNo] = await nextJobOrderNumbers(1);
     const now = new Date().toISOString();
-    const fitNote = `Selected size: ${row.recommendedSize || "—"}.${row.notes ? " Notes: " + row.notes : ""}`;
+    const fitNote = `${row.cut ? `Cut: ${row.cut}. ` : ""}Selected size: ${row.recommendedSize || "—"}.${row.notes ? " Notes: " + row.notes : ""}`;
     const { data: order, error } = await supabase.from("job_orders").insert({
       job_order_no: jobNo, name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model,
       item: ITEM_TYPES[0], prepared_by: session.name, branch,
-      measurements: suggestionMeasurements(row.profile.measurements, row.deltas),
+      measurements: row.calculated && Object.keys(row.calculated).length ? calcToStrings(row.calculated) : suggestionMeasurements(row.profile.measurements, row.deltas),
+      cut: row.cut || null,
       comments: fitNote, status: "job_created",
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
