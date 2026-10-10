@@ -3584,9 +3584,18 @@ const runCalc = (entry, fitted) => {
     let v = null;
     if (rule.src === "fixed") v = add;
     else {
-      const c = toNum(fitted[k]);
-      const mult = toNum(rule.mult);
-      if (c !== null) v = c * (mult === null ? 1 : mult) + add;
+      const part = (val, d) => { const c = toNum(val); const dv = toNum(d); return c === null ? null : c / (dv ? dv : 1); };
+      let first;
+      if (rule.div == null && rule.mult != null) { const c = toNum(fitted[k]); const m = toNum(rule.mult); first = c === null ? null : c * (m === null ? 1 : m); }
+      else first = part(fitted[k], rule.div);
+      if (first !== null) {
+        v = first + add;
+        for (const ex of rule.extra || []) {
+          const p = part(fitted[ex.key], ex.div);
+          if (p === null) { v = null; break; }
+          v += p;
+        }
+      }
     }
     if (v !== null) out[k] = +applyRounding(v, entry.round).toFixed(2);
   });
@@ -3610,18 +3619,33 @@ function CalculationSection({ cuts, formula, setFormula, models, currentModelId,
   const current = cuts.includes(active) ? active : cuts[0] || "General";
   const entry = (formula && formula[current]) || { rows: {}, round: "0" };
   const allFields = [...FITTING_FIELDS, ...(customFields || []).map((c) => [c.key, c.label])];
+  const labelOfKey = (k) => (allFields.find(([x]) => x === k) || [k, k])[1];
   const keys = Object.keys(entry.rows || {});
   const rowFields = allFields.filter(([k]) => keys.includes(k));
   const unused = allFields.filter(([k]) => !keys.includes(k));
   const results = runCalc(entry, test);
+  const newRule = () => ({ src: "fitted", div: "1", add: "0", extra: [] });
+  const formulaText = (k, r) => r.src === "fixed"
+    ? `${r.add || 0} (fixed)`
+    : [`${labelOfKey(k)} ÷ ${r.div || 1}`, ...(r.extra || []).map((e) => `${labelOfKey(e.key)} ÷ ${e.div || 1}`)].join(" + ") + ` + ${r.add || 0}`;
+
+  const usedKeys = new Set();
+  keys.forEach((k) => { const r = entry.rows[k]; if (r.src !== "fixed") { usedKeys.add(k); (r.extra || []).forEach((e) => usedKeys.add(e.key)); } });
+  const testFields = allFields.filter(([k]) => usedKeys.has(k));
 
   const update = (next) => setFormula({ ...(formula || {}), [current]: next });
   const setRow = (k, patch) => update({ ...entry, rows: { ...entry.rows, [k]: { ...entry.rows[k], ...patch } } });
-  const addRow = (k) => update({ ...entry, rows: { ...entry.rows, [k]: { src: "fitted", mult: "1", add: "0" } } });
+  const addRow = (k) => update({ ...entry, rows: { ...entry.rows, [k]: newRule() } });
   const removeRow = (k) => { const rows = { ...entry.rows }; delete rows[k]; update({ ...entry, rows }); };
+  const addExtra = (k) => {
+    const other = (allFields.find(([fk]) => fk !== k) || [""])[0];
+    setRow(k, { extra: [...(entry.rows[k].extra || []), { key: other, div: "1" }] });
+  };
+  const setExtra = (k, i, patch) => setRow(k, { extra: entry.rows[k].extra.map((e, j) => (j === i ? { ...e, ...patch } : e)) });
+  const removeExtra = (k, i) => setRow(k, { extra: entry.rows[k].extra.filter((_, j) => j !== i) });
   const addCommon = () => {
     const rows = { ...(entry.rows || {}) };
-    DEFAULT_TEMPLATE_ROWS.forEach((k) => { if (!rows[k]) rows[k] = { src: "fitted", mult: "1", add: "0" }; });
+    DEFAULT_TEMPLATE_ROWS.forEach((k) => { if (!rows[k]) rows[k] = newRule(); });
     update({ ...entry, rows });
   };
   const addCustom = () => {
@@ -3629,7 +3653,7 @@ function CalculationSection({ cuts, formula, setFormula, models, currentModelId,
     if (!label) return;
     const key = "custom_" + label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
     if (onAddCustomField) onAddCustomField({ key, label });
-    update({ ...entry, rows: { ...(entry.rows || {}), [key]: { src: "fitted", mult: "1", add: "0" } } });
+    update({ ...entry, rows: { ...(entry.rows || {}), [key]: newRule() } });
     setCustomLabel(""); setAddingCustom(false);
   };
 
@@ -3649,7 +3673,7 @@ function CalculationSection({ cuts, formula, setFormula, models, currentModelId,
   };
 
   const th = { padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A", textAlign: "left" };
-  const td = { padding: "5px 8px", fontSize: 12.5 };
+  const td = { padding: "6px 8px", fontSize: 12.5 };
   const small = { ...inputStyle, width: 70, padding: "4px 6px", fontSize: 12.5 };
 
   return (
@@ -3690,73 +3714,97 @@ function CalculationSection({ cuts, formula, setFormula, models, currentModelId,
           <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 6 }}>No calculation for {current} yet.</div>
           {!readOnly && <button type="button" onClick={addCommon} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "6px 12px", fontSize: 12 }}>+ Start with common measurements</button>}
         </div>
+      ) : readOnly ? (
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+          <thead><tr style={{ background: "#F7F7F5" }}><th style={th}>Measurement</th><th style={th}>Calculation</th></tr></thead>
+          <tbody>
+            {rowFields.map(([k, l]) => (
+              <tr key={k} style={{ borderBottom: "1px solid #E5E5E5" }}><td style={td}>{l}</td><td style={td}>{formulaText(k, entry.rows[k])}</td></tr>
+            ))}
+          </tbody>
+        </table>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
-            <thead><tr style={{ background: "#F7F7F5" }}>
-              <th style={th}>Measurement</th><th style={th}>Based on</th><th style={th}>Multiply by</th><th style={th}>Then add</th>
-              {!readOnly && <th style={th}>Test (fitted)</th>}{!readOnly && <th style={th}>Result</th>}{!readOnly && <th style={th}></th>}
-            </tr></thead>
-            <tbody>
-              {rowFields.map(([k, l]) => {
-                const r = entry.rows[k];
-                return (
-                  <tr key={k} style={{ borderBottom: "1px solid #E5E5E5" }}>
-                    <td style={td}>{l}</td>
-                    {readOnly ? (
-                      <>
-                        <td style={td}>{r.src === "fixed" ? "Fixed value" : "Fitted measurement"}</td>
-                        <td style={td}>{r.src === "fixed" ? "—" : `× ${r.mult}`}</td>
-                        <td style={td}>{r.src === "fixed" ? r.add : `+ ${r.add}`}</td>
-                      </>
-                    ) : (
-                      <>
-                        <td style={td}>
-                          <select value={r.src} onChange={(e) => setRow(k, { src: e.target.value })} style={{ ...inputStyle, width: 160, padding: "4px 6px", fontSize: 12.5 }}>
-                            <option value="fitted">Fitted measurement</option>
-                            <option value="fixed">Fixed value</option>
-                          </select>
-                        </td>
-                        <td style={td}><input value={r.mult} disabled={r.src === "fixed"} onChange={(e) => setRow(k, { mult: e.target.value })} style={small} /></td>
-                        <td style={td}><input value={r.add} onChange={(e) => setRow(k, { add: e.target.value })} style={small} /></td>
-                        <td style={td}>{r.src === "fixed" ? "—" : <input value={test[k] || ""} onChange={(e) => setTest((t) => ({ ...t, [k]: e.target.value }))} style={small} />}</td>
-                        <td style={{ ...td, fontWeight: 700 }}>{results[k] != null ? results[k] : "—"}</td>
-                        <td style={td}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => removeRow(k)}>×</a></td>
-                      </>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {!readOnly && keys.length > 0 && (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {unused.length > 0 && (
-            <>
-              <select value={addingKey} onChange={(e) => setAddingKey(e.target.value)} style={{ ...inputStyle, width: 170 }}>
-                <option value="">+ Add measurement…</option>
-                {unused.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-              </select>
-              <button type="button" disabled={!addingKey} onClick={() => { addRow(addingKey); setAddingKey(""); }} style={{ background: addingKey ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add</button>
-            </>
-          )}
-          {addingCustom ? (
-            <>
-              <input value={customLabel} onChange={(e) => setCustomLabel(e.target.value)} placeholder="New measurement name…" style={{ ...inputStyle, width: 170 }} />
-              <button type="button" onClick={addCustom} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add</button>
-              <button type="button" onClick={() => { setAddingCustom(false); setCustomLabel(""); }} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "7px 12px", fontSize: 12 }}>Cancel</button>
-            </>
-          ) : (
-            <button type="button" onClick={() => setAddingCustom(true)} style={{ background: "#fff", border: "1px dashed #C9CDD3", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>+ Custom Measurement</button>
-          )}
-          <span style={{ fontSize: 12, color: "#5a5a5a", marginLeft: 8 }}>Round to</span>
-          <select value={entry.round || "0"} onChange={(e) => update({ ...entry, round: e.target.value })} style={{ ...inputStyle, width: 120 }}>
-            <option value="0">no rounding</option><option value="0.25">nearest 0.25</option><option value="0.5">nearest 0.5</option><option value="1">nearest 1</option>
-          </select>
-        </div>
+        <>
+          <div style={{ background: "#F7F7F5", borderRadius: 4, padding: 10, marginBottom: 10 }}>
+            <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 6 }}>Test with a sample customer's fitted measurements</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {testFields.length === 0 ? <span style={{ fontSize: 12, color: "#8a8a8a" }}>Nothing to test yet.</span> : testFields.map(([k, l]) => (
+                <div key={k}>
+                  <div style={{ fontSize: 10.5, color: "#8a8a8a" }}>{l}</div>
+                  <input value={test[k] || ""} onChange={(e) => setTest((t) => ({ ...t, [k]: e.target.value }))} style={{ ...small, width: 64 }} />
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+              <thead><tr style={{ background: "#F7F7F5" }}>
+                <th style={th}>Measurement</th><th style={th}>Based on</th><th style={th}>Divide by</th><th style={th}>Then add</th><th style={th}>Result</th><th style={th}></th>
+              </tr></thead>
+              <tbody>
+                {rowFields.map(([k, l]) => {
+                  const r = entry.rows[k];
+                  return (
+                    <tr key={k} style={{ borderBottom: "1px solid #E5E5E5", verticalAlign: "top" }}>
+                      <td style={td}>{l}</td>
+                      <td style={td}>
+                        <select value={r.src} onChange={(e) => setRow(k, { src: e.target.value })} style={{ ...inputStyle, width: 170, padding: "4px 6px", fontSize: 12.5 }}>
+                          <option value="fitted">Fitted measurement</option>
+                          <option value="fixed">Fixed value</option>
+                        </select>
+                        {r.src === "fitted" && (
+                          <div style={{ marginTop: 6 }}>
+                            {(r.extra || []).map((ex, i) => (
+                              <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4, fontSize: 12 }}>
+                                <span>+</span>
+                                <select value={ex.key} onChange={(e) => setExtra(k, i, { key: e.target.value })} style={{ ...inputStyle, width: 140, padding: "3px 6px", fontSize: 12 }}>
+                                  {allFields.map(([fk, fl]) => <option key={fk} value={fk}>{fl}</option>)}
+                                </select>
+                                <span>÷</span>
+                                <input value={ex.div} onChange={(e) => setExtra(k, i, { div: e.target.value })} style={{ ...small, width: 50 }} />
+                                <a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => removeExtra(k, i)}>×</a>
+                              </div>
+                            ))}
+                            <a className="link" style={{ fontSize: 11.5 }} onClick={() => addExtra(k)}>+ Add another measurement</a>
+                          </div>
+                        )}
+                        <div style={{ fontSize: 11, color: "#8a8a8a", marginTop: 4 }}>= {formulaText(k, r)}</div>
+                      </td>
+                      <td style={td}><input value={r.div == null ? "1" : r.div} disabled={r.src === "fixed"} onChange={(e) => setRow(k, { div: e.target.value })} style={small} /></td>
+                      <td style={td}><input value={r.add} onChange={(e) => setRow(k, { add: e.target.value })} style={small} /></td>
+                      <td style={{ ...td, fontWeight: 700 }}>{results[k] != null ? results[k] : "—"}</td>
+                      <td style={td}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => removeRow(k)}>Remove</a></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {unused.length > 0 && (
+              <>
+                <select value={addingKey} onChange={(e) => setAddingKey(e.target.value)} style={{ ...inputStyle, width: 170 }}>
+                  <option value="">+ Add measurement…</option>
+                  {unused.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+                <button type="button" disabled={!addingKey} onClick={() => { addRow(addingKey); setAddingKey(""); }} style={{ background: addingKey ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add</button>
+              </>
+            )}
+            {addingCustom ? (
+              <>
+                <input value={customLabel} onChange={(e) => setCustomLabel(e.target.value)} placeholder="New measurement name…" style={{ ...inputStyle, width: 170 }} />
+                <button type="button" onClick={addCustom} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add</button>
+                <button type="button" onClick={() => { setAddingCustom(false); setCustomLabel(""); }} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "7px 12px", fontSize: 12 }}>Cancel</button>
+              </>
+            ) : (
+              <button type="button" onClick={() => setAddingCustom(true)} style={{ background: "#fff", border: "1px dashed #C9CDD3", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>+ Custom Measurement</button>
+            )}
+            <span style={{ fontSize: 12, color: "#5a5a5a", marginLeft: 8 }}>Round to</span>
+            <select value={entry.round || "0"} onChange={(e) => update({ ...entry, round: e.target.value })} style={{ ...inputStyle, width: 120 }}>
+              <option value="0">no rounding</option><option value="0.25">nearest 0.25</option><option value="0.5">nearest 0.5</option><option value="1">nearest 1</option>
+            </select>
+          </div>
+        </>
       )}
       {readOnly && keys.length > 0 && entry.round && entry.round !== "0" && <div style={{ fontSize: 11.5, color: "#8a8a8a" }}>Rounded to the nearest {entry.round}.</div>}
     </div>
