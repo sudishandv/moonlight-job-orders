@@ -238,6 +238,21 @@ const buildCalc = (model, cut, sizes, fitted) => {
   return { calc, formulaKeys: Object.keys(formulaCalc), fittedKeys };
 };
 
+// Rank the chart sizes by how close they are to the calculated values (best first).
+// Only measurements that exist in BOTH the item and that size's chart row are compared.
+const nearestSizes = (calc, sizes, cut) => {
+  const scored = rowsForCut(sizes || [], cut).map((row) => {
+    let sum = 0, n = 0;
+    Object.entries(calc).forEach(([k, v]) => {
+      const b = toNum(row.measurements && row.measurements[k]);
+      if (b !== null) { sum += Math.abs(v - b); n++; }
+    });
+    return { row, label: row.size_label, gap: n ? sum / n : null, n };
+  }).filter((s) => s.gap !== null);
+  scored.sort((a, b) => a.gap - b.gap);
+  return scored;
+};
+
 function computeDeltas(fields, customerM, baseM) {
   const out = {};
   fields.forEach(([k]) => {
@@ -971,7 +986,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       let jobOrderId = null;
       if (createOrders) {
         const now = new Date().toISOString();
-        const fitNote = `${it.cut ? `Cut: ${it.cut}. ` : ""}${it.size ? `Size: ${it.size}.` : ""}${it.notes ? " Notes: " + it.notes : ""}`;
+        const fitNote = `${it.cut ? `Cut: ${it.cut}. ` : ""}${it.size ? `Nearest size: ${it.size}.` : ""}${it.notes ? " Notes: " + it.notes : ""}`;
         const vIdx = validItems.indexOf(it);
         const { data: order } = await supabase.from("job_orders").insert({
           job_order_no: jobNumbers[vIdx], name: customer.name, mobile: customer.mobile, order_type: "New",
@@ -998,7 +1013,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     const branch = row.profile.branch || (session.role === "admin" ? "Admin" : session.branch || "");
     const [jobNo] = await nextJobOrderNumbers(1);
     const now = new Date().toISOString();
-    const fitNote = `${row.cut ? `Cut: ${row.cut}. ` : ""}${row.recommendedSize ? `Size: ${row.recommendedSize}.` : ""}${row.notes ? " Notes: " + row.notes : ""}`;
+    const fitNote = `${row.cut ? `Cut: ${row.cut}. ` : ""}${row.recommendedSize ? `Nearest size: ${row.recommendedSize}.` : ""}${row.notes ? " Notes: " + row.notes : ""}`;
     const { data: order, error } = await supabase.from("job_orders").insert({
       job_order_no: jobNo, name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model,
       item: ITEM_TYPES[0], prepared_by: session.name, branch,
@@ -1589,7 +1604,11 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const save = async (createOrders) => {
     setSaving(true);
     const signatureUrl = await uploadSignature();
-    await onSave(customer, measurements, items.map((it) => ({ ...it, calc: itemView(it).calc, size: null })), deliveryDate, signatureUrl, createOrders);
+    await onSave(customer, measurements, items.map((it) => {
+      const v = itemView(it);
+      const nb = nearestSizes(v.calc, it.sizes, it.cut)[0];
+      return { ...it, calc: v.calc, size: nb ? nb.label : null };
+    }), deliveryDate, signatureUrl, createOrders);
     setSaving(false);
   };
 
@@ -1666,6 +1685,9 @@ function RequirementForm({ config, session, onCancel, onSave }) {
 
       {items.map((it, idx) => {
         const view = itemView(it);
+        const near = nearestSizes(view.calc, it.sizes, it.cut);
+        const best = near[0] || null;
+        const next = near[1] || null;
         const labelOf = (k) => (FITTING_FIELDS.find(([x]) => x === k) || (it.customFields || []).map((c) => [c.key, c.label]).find(([x]) => x === k) || [k, k])[1];
         const rowKeys = [...FITTING_FIELDS.map(([k]) => k), ...(it.customFields || []).map((c) => c.key)].filter((k) => view.calc[k] != null);
         return (
@@ -1696,7 +1718,10 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                 <div style={{ fontSize: 13, color: "#C1302B" }}>Fill in the customer's fitting measurements above — they'll appear here.</div>
               ) : (
                 <table>
-                  <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer Fitted Measurement</th><th>Calculated Measurement</th></tr></thead>
+                  <thead><tr style={{ fontSize: 12, textAlign: "left" }}>
+                    <th>Measurement</th><th>Customer Fitted Measurement</th><th>Calculated Measurement</th>
+                    {best && <th>Size chart — {best.label}</th>}
+                  </tr></thead>
                   <tbody>
                     {rowKeys.map((k) => (
                       <tr key={k} style={{ fontSize: 13 }}>
@@ -1706,11 +1731,24 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                           <EditableCell value={view.calc[k]} onCommit={(v) => setItemCalc(idx, k, v)} />
                           {view.fittedKeys.includes(k) && (it.overrides || {})[k] === undefined && <span style={{ fontWeight: 400, fontSize: 10.5, color: "#8a8a8a", marginLeft: 6 }}>as fitted</span>}
                         </td>
+                        {best && (() => {
+                          const cv = toNum(best.row.measurements && best.row.measurements[k]);
+                          const off = cv !== null && Math.abs(view.calc[k] - cv) >= 1;
+                          return <td style={{ color: off ? "#D98E2B" : "#5a5a5a", fontWeight: off ? 700 : 400 }}>{cv !== null ? cv : "—"}</td>;
+                        })()}
                       </tr>
                     ))}
                   </tbody>
                 </table>
               )}
+              {best ? (
+                <div style={{ marginTop: 8, padding: "8px 10px", background: "#F2F7F3", border: "1px solid #CFE3D4", borderRadius: 4, fontSize: 12.5 }}>
+                  <strong>Nearest size: {best.label}</strong> <span style={{ color: "#5a5a5a" }}>(average difference {best.gap.toFixed(1)})</span>
+                  {next && <span style={{ color: "#5a5a5a" }}> · next closest: {next.label} ({next.gap.toFixed(1)})</span>}
+                </div>
+              ) : (it.sizes && it.sizes.length > 0 ? (
+                <div style={{ marginTop: 8, fontSize: 12, color: "#8a8a8a" }}>No size to compare yet — the size chart has no values for these measurements.</div>
+              ) : null)}
               <div style={{ fontSize: 11, color: "#8a8a8a", marginTop: 4 }}>
                 {view.formulaKeys.length > 0 ? "Rows with a calculation are calculated; the rest are the customer's fitted measurements." : "No calculation set up for this model — values are the customer's fitted measurements."}
               </div>
@@ -3451,7 +3489,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       let jobOrderId = null;
       if (createOrders) {
         const now = new Date().toISOString();
-        const fitNote = `${it.cut ? `Cut: ${it.cut}. ` : ""}${it.size ? `Size: ${it.size}.` : ""}${it.notes ? " Notes: " + it.notes : ""}`;
+        const fitNote = `${it.cut ? `Cut: ${it.cut}. ` : ""}${it.size ? `Nearest size: ${it.size}.` : ""}${it.notes ? " Notes: " + it.notes : ""}`;
         const vIdx = validItems.indexOf(it);
         const { data: order } = await supabase.from("job_orders").insert({
           job_order_no: jobNumbers[vIdx], name: customer.name, mobile: customer.mobile, order_type: "New",
@@ -3478,7 +3516,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     const branch = row.profile.branch || (session.role === "admin" ? "Admin" : session.branch || "");
     const [jobNo] = await nextJobOrderNumbers(1);
     const now = new Date().toISOString();
-    const fitNote = `${row.cut ? `Cut: ${row.cut}. ` : ""}${row.recommendedSize ? `Size: ${row.recommendedSize}.` : ""}${row.notes ? " Notes: " + row.notes : ""}`;
+    const fitNote = `${row.cut ? `Cut: ${row.cut}. ` : ""}${row.recommendedSize ? `Nearest size: ${row.recommendedSize}.` : ""}${row.notes ? " Notes: " + row.notes : ""}`;
     const { data: order, error } = await supabase.from("job_orders").insert({
       job_order_no: jobNo, name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model,
       item: ITEM_TYPES[0], prepared_by: session.name, branch,
