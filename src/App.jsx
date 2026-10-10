@@ -1720,7 +1720,6 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                 <table>
                   <thead><tr style={{ fontSize: 12, textAlign: "left" }}>
                     <th>Measurement</th><th>Customer Fitted Measurement</th><th>Calculated Measurement</th>
-                    {best && <th>Size chart — {best.label}</th>}
                   </tr></thead>
                   <tbody>
                     {rowKeys.map((k) => (
@@ -1731,11 +1730,6 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                           <EditableCell value={view.calc[k]} onCommit={(v) => setItemCalc(idx, k, v)} />
                           {view.fittedKeys.includes(k) && (it.overrides || {})[k] === undefined && <span style={{ fontWeight: 400, fontSize: 10.5, color: "#8a8a8a", marginLeft: 6 }}>as fitted</span>}
                         </td>
-                        {best && (() => {
-                          const cv = toNum(best.row.measurements && best.row.measurements[k]);
-                          const off = cv !== null && Math.abs(view.calc[k] - cv) >= 1;
-                          return <td style={{ color: off ? "#D98E2B" : "#5a5a5a", fontWeight: off ? 700 : 400 }}>{cv !== null ? cv : "—"}</td>;
-                        })()}
                       </tr>
                     ))}
                   </tbody>
