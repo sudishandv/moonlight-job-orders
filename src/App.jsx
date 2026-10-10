@@ -3614,7 +3614,6 @@ function CalculationSection({ cuts, formula, setFormula, models, currentModelId,
   const [addingKey, setAddingKey] = useState("");
   const [customLabel, setCustomLabel] = useState("");
   const [addingCustom, setAddingCustom] = useState(false);
-  const [test, setTest] = useState({});
 
   const current = cuts.includes(active) ? active : cuts[0] || "General";
   const entry = (formula && formula[current]) || { rows: {}, round: "0" };
@@ -3623,15 +3622,10 @@ function CalculationSection({ cuts, formula, setFormula, models, currentModelId,
   const keys = Object.keys(entry.rows || {});
   const rowFields = allFields.filter(([k]) => keys.includes(k));
   const unused = allFields.filter(([k]) => !keys.includes(k));
-  const results = runCalc(entry, test);
   const newRule = () => ({ src: "fitted", div: "1", add: "0", extra: [] });
   const formulaText = (k, r) => r.src === "fixed"
     ? `${r.add || 0} (fixed)`
     : [`${labelOfKey(k)} ÷ ${r.div || 1}`, ...(r.extra || []).map((e) => `${labelOfKey(e.key)} ÷ ${e.div || 1}`)].join(" + ") + ` + ${r.add || 0}`;
-
-  const usedKeys = new Set();
-  keys.forEach((k) => { const r = entry.rows[k]; if (r.src !== "fixed") { usedKeys.add(k); (r.extra || []).forEach((e) => usedKeys.add(e.key)); } });
-  const testFields = allFields.filter(([k]) => usedKeys.has(k));
 
   const update = (next) => setFormula({ ...(formula || {}), [current]: next });
   const setRow = (k, patch) => update({ ...entry, rows: { ...entry.rows, [k]: { ...entry.rows[k], ...patch } } });
@@ -3725,21 +3719,10 @@ function CalculationSection({ cuts, formula, setFormula, models, currentModelId,
         </table>
       ) : (
         <>
-          <div style={{ background: "#F7F7F5", borderRadius: 4, padding: 10, marginBottom: 10 }}>
-            <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 6 }}>Test with a sample customer's fitted measurements</div>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              {testFields.length === 0 ? <span style={{ fontSize: 12, color: "#8a8a8a" }}>Nothing to test yet.</span> : testFields.map(([k, l]) => (
-                <div key={k}>
-                  <div style={{ fontSize: 10.5, color: "#8a8a8a" }}>{l}</div>
-                  <input value={test[k] || ""} onChange={(e) => setTest((t) => ({ ...t, [k]: e.target.value }))} style={{ ...small, width: 64 }} />
-                </div>
-              ))}
-            </div>
-          </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
               <thead><tr style={{ background: "#F7F7F5" }}>
-                <th style={th}>Measurement</th><th style={th}>Based on</th><th style={th}>Divide by</th><th style={th}>Then add</th><th style={th}>Result</th><th style={th}></th>
+                <th style={th}>Measurement</th><th style={th}>Based on</th><th style={th}>Divide by</th><th style={th}>Then add</th><th style={th}></th>
               </tr></thead>
               <tbody>
                 {rowFields.map(([k, l]) => {
@@ -3772,7 +3755,6 @@ function CalculationSection({ cuts, formula, setFormula, models, currentModelId,
                       </td>
                       <td style={td}><input value={r.div == null ? "1" : r.div} disabled={r.src === "fixed"} onChange={(e) => setRow(k, { div: e.target.value })} style={small} /></td>
                       <td style={td}><input value={r.add} onChange={(e) => setRow(k, { add: e.target.value })} style={small} /></td>
-                      <td style={{ ...td, fontWeight: 700 }}>{results[k] != null ? results[k] : "—"}</td>
                       <td style={td}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => removeRow(k)}>Remove</a></td>
                     </tr>
                   );
