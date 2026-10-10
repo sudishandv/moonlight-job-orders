@@ -450,6 +450,7 @@ function dbToModel(r) {
     productType: r.product_type, season: r.season, description: r.description,
     createdBy: r.created_by, createdAt: r.created_at, updatedBy: r.updated_by, updatedAt: r.updated_at,
     customFields: r.custom_fields || [],
+    cuttingFormula: r.cutting_formula || {},
   };
 }
 function modelToDb(f) {
@@ -952,7 +953,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       let jobOrderId = null;
       if (createOrders) {
         const now = new Date().toISOString();
-        const fitNote = `${it.cut ? `Cut: ${it.cut}. ` : ""}Size: ${it.size}.${it.notes ? " Notes: " + it.notes : ""}`;
+        const fitNote = `${it.cut ? `Cut: ${it.cut}. ` : ""}${it.size ? `Size: ${it.size}.` : ""}${it.notes ? " Notes: " + it.notes : ""}`;
         const vIdx = validItems.indexOf(it);
         const { data: order } = await supabase.from("job_orders").insert({
           job_order_no: jobNumbers[vIdx], name: customer.name, mobile: customer.mobile, order_type: "New",
@@ -979,7 +980,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     const branch = row.profile.branch || (session.role === "admin" ? "Admin" : session.branch || "");
     const [jobNo] = await nextJobOrderNumbers(1);
     const now = new Date().toISOString();
-    const fitNote = `${row.cut ? `Cut: ${row.cut}. ` : ""}Selected size: ${row.recommendedSize || "—"}.${row.notes ? " Notes: " + row.notes : ""}`;
+    const fitNote = `${row.cut ? `Cut: ${row.cut}. ` : ""}${row.recommendedSize ? `Size: ${row.recommendedSize}.` : ""}${row.notes ? " Notes: " + row.notes : ""}`;
     const { data: order, error } = await supabase.from("job_orders").insert({
       job_order_no: jobNo, name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model,
       item: ITEM_TYPES[0], prepared_by: session.name, branch,
@@ -1534,19 +1535,25 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     const allSizes = sizes || [];
     const cuts = cutTagsOf(model);
     const cut = cuts[0] || null;
-    const base = { model: pickModel, modelId: model.id, photoUrl: model.photoUrl, customFields: model.customFields || [], cuts, cut, notes: "" };
-    if (allSizes.length === 0) {
-      setItems((it) => [...it, { ...base, sizes: [], error: "No size chart saved for this model yet — add one under View Models." }]);
+    const base = { model: pickModel, modelId: model.id, modelObj: model, photoUrl: model.photoUrl, customFields: model.customFields || [], cuts, cut, notes: "", sizes: allSizes };
+    const entry = calcEntryFor(model, cut);
+    if (calcHasRows(entry)) {
+      setItems((it) => [...it, { ...base, source: "formula", calc: runCalc(entry, measurements) }]);
+    } else if (allSizes.length === 0) {
+      setItems((it) => [...it, { ...base, source: "chart", error: "No calculation or size chart saved for this model yet — add one under View Models." }]);
     } else {
       const best = suggestSize(measurements, rowsForCut(allSizes, cut));
-      setItems((it) => [...it, { ...base, sizes: allSizes, size: best.size_label, auto: best.size_label, calc: calcFromRow(best) }]);
+      setItems((it) => [...it, { ...base, source: "chart", size: best.size_label, auto: best.size_label, calc: calcFromRow(best) }]);
     }
     setPickModel("");
   };
   const changeItemCut = (idx, cut) => setItems((prev) => prev.map((it, i) => {
     if (i !== idx) return it;
+    const entry = calcEntryFor(it.modelObj, cut);
+    if (calcHasRows(entry)) return { ...it, cut, source: "formula", size: null, error: undefined, calc: runCalc(entry, measurements) };
     const best = suggestSize(measurements, rowsForCut(it.sizes, cut));
-    return best ? { ...it, cut, size: best.size_label, auto: best.size_label, calc: calcFromRow(best) } : { ...it, cut };
+    if (!best) return { ...it, cut, source: "chart", calc: {}, error: "No calculation or size chart for this cut yet." };
+    return { ...it, cut, source: "chart", size: best.size_label, auto: best.size_label, calc: calcFromRow(best), error: undefined };
   }));
   const changeItemSize = (idx, label) => setItems((prev) => prev.map((it, i) => {
     if (i !== idx) return it;
@@ -1677,7 +1684,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                 ) : it.cuts && it.cuts.length === 1 ? (
                   <div style={{ fontSize: 12.5 }}><span style={{ color: "#8a8a8a" }}>Cut:</span> <strong>{it.cuts[0]}</strong></div>
                 ) : null}
-                {!it.error && (
+                {it.source === "chart" && !it.error && (
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <span style={{ fontSize: 12, color: "#8a8a8a" }}>Size:</span>
                     <select value={it.size} onChange={(e) => changeItemSize(idx, e.target.value)} style={{ ...inputStyle, width: 150, padding: "4px 6px" }}>
@@ -1702,6 +1709,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                   </tbody>
                 </table>
               )}
+              {!it.error && <div style={{ fontSize: 11, color: "#8a8a8a", marginTop: 4 }}>{it.source === "formula" ? "Calculated from the model's calculation" : "From the model's size chart (no calculation set up yet)"}</div>}
 
               <div style={{ marginTop: 10 }}>
                 <Field label="Special Requirements / Notes for this item">
@@ -2906,7 +2914,8 @@ function ModelManagerPanel({ config, refresh, flash, session, subpage, setSubpag
   return <ManageModels config={config} refresh={refresh} flash={flash} session={session} />;
 }
 
-function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
+function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, session }) {
+  const [formula, setFormula] = useState(model.cuttingFormula || {});
   const [images, setImages] = useState([]);
   const [colors, setColors] = useState([]);
   const [sizes, setSizes] = useState([]);
@@ -2930,6 +2939,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
       sideFinishing: model.sideFinishing || "", sleeveOpenFinishing: model.sleeveOpenFinishing || "", armHoleFinishing: model.armHoleFinishing || "",
       bottomFinishing: model.bottomFinishing || "",
     });
+    setFormula(model.cuttingFormula || {});
     setEditingModel(true);
   };
 
@@ -2942,7 +2952,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
       season: coreForm.season, description: coreForm.description, possible_cuts: coreForm.possibleCuts, main_fabric_code: coreForm.mainFabricCode,
       inner_fabric_code: coreForm.innerFabricCode, other_fabric: coreForm.otherFabric, size_range: coreForm.sizeRange, requirements: coreForm.requirements,
       side_finishing: coreForm.sideFinishing, sleeve_open_finishing: coreForm.sleeveOpenFinishing, arm_hole_finishing: coreForm.armHoleFinishing,
-      bottom_finishing: coreForm.bottomFinishing, updated_at: new Date().toISOString(), updated_by: session.name,
+      bottom_finishing: coreForm.bottomFinishing, cutting_formula: formula, updated_at: new Date().toISOString(), updated_by: session.name,
     }).eq("id", model.id);
     setSavingCore(false);
     if (error) { flash("Error: " + error.message); return; }
@@ -2965,6 +2975,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
   };
 
   useEffect(loadReadOnlyData, [model.id]);
+  useEffect(() => { setFormula(model.cuttingFormula || {}); }, [model.id]); // eslint-disable-line
 
   const removeModel = async () => {
     await supabase.from("models").delete().eq("id", model.id);
@@ -3182,6 +3193,17 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
         </div>
       )}
 
+      <div style={{ ...cardStyle, marginTop: 20 }}>
+        <CalculationSection
+          cuts={cutTagsOf(model).length ? cutTagsOf(model) : ["General"]}
+          formula={formula} setFormula={setFormula}
+          models={models} currentModelId={model.id}
+          customFields={model.customFields}
+          onAddCustomField={async (f) => { const ex = model.customFields || []; if (ex.some((x) => x.key === f.key)) return; await supabase.from("models").update({ custom_fields: [...ex, f] }).eq("id", model.id); await refresh(); }}
+          readOnly={!(canEdit && editingModel)}
+        />
+      </div>
+
       <div style={{ marginTop: 20 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>SIZE MEASUREMENTS</div>
         {(canEdit && editingModel) ? <ModelSizes model={model} refresh={refresh} flash={flash} /> : <ReadOnlySizeTables model={model} sizes={sizes} />}
@@ -3190,7 +3212,7 @@ function ModelDetailPage({ model, canEdit, refresh, flash, onBack, session }) {
       {editingModel && (
         <div style={{ display: "flex", gap: 10, marginTop: 24, paddingTop: 20, borderTop: "1px solid #E5E5E5" }}>
           <button disabled={savingCore} onClick={saveCoreEdits} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontSize: 13.5, fontWeight: 700 }}>Save Changes</button>
-          <button onClick={() => { setEditingModel(false); loadReadOnlyData(); }} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 22px", fontSize: 13.5, fontWeight: 700 }}>Done Editing</button>
+          <button onClick={() => { setEditingModel(false); setFormula(model.cuttingFormula || {}); loadReadOnlyData(); }} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 22px", fontSize: 13.5, fontWeight: 700 }}>Done Editing</button>
         </div>
       )}
       {savingCore && <LoadingOverlay text="Saving changes…" />}
@@ -3227,7 +3249,7 @@ function ModelBrowser({ models, canEdit, refresh, flash, session }) {
 
   if (selectedId) {
     const current = models.find((m) => m.id === selectedId);
-    if (current) return <ModelDetailPage model={current} canEdit={canEdit} refresh={refresh} flash={flash} session={session} onBack={() => setSelectedId(null)} />;
+    if (current) return <ModelDetailPage model={current} models={models} canEdit={canEdit} refresh={refresh} flash={flash} session={session} onBack={() => setSelectedId(null)} />;
   }
 
   return (
@@ -3425,7 +3447,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       let jobOrderId = null;
       if (createOrders) {
         const now = new Date().toISOString();
-        const fitNote = `${it.cut ? `Cut: ${it.cut}. ` : ""}Size: ${it.size}.${it.notes ? " Notes: " + it.notes : ""}`;
+        const fitNote = `${it.cut ? `Cut: ${it.cut}. ` : ""}${it.size ? `Size: ${it.size}.` : ""}${it.notes ? " Notes: " + it.notes : ""}`;
         const vIdx = validItems.indexOf(it);
         const { data: order } = await supabase.from("job_orders").insert({
           job_order_no: jobNumbers[vIdx], name: customer.name, mobile: customer.mobile, order_type: "New",
@@ -3452,7 +3474,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     const branch = row.profile.branch || (session.role === "admin" ? "Admin" : session.branch || "");
     const [jobNo] = await nextJobOrderNumbers(1);
     const now = new Date().toISOString();
-    const fitNote = `${row.cut ? `Cut: ${row.cut}. ` : ""}Selected size: ${row.recommendedSize || "—"}.${row.notes ? " Notes: " + row.notes : ""}`;
+    const fitNote = `${row.cut ? `Cut: ${row.cut}. ` : ""}${row.recommendedSize ? `Size: ${row.recommendedSize}.` : ""}${row.notes ? " Notes: " + row.notes : ""}`;
     const { data: order, error } = await supabase.from("job_orders").insert({
       job_order_no: jobNo, name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model,
       item: ITEM_TYPES[0], prepared_by: session.name, branch,
@@ -3550,6 +3572,196 @@ function ManageList({ title, items, fields, onAdd, onRemove }) {
 const CORE_DEFAULT_ROWS = ["shoulder", "chest", "waist", "hips", "sleeveLength", "length"];
 const DEFAULT_TEMPLATE_SIZES = ["Small", "Medium", "Large", "X-Large"];
 const DEFAULT_TEMPLATE_ROWS = ["shoulder", "chest", "sleeveLength", "sleeveOpen", "armhole", "length", "bottom"];
+
+const calcHasRows = (entry) => !!(entry && entry.rows && Object.keys(entry.rows).length > 0);
+const calcRowKeys = (entry) => (calcHasRows(entry) ? Object.keys(entry.rows) : []);
+const anyCalc = (formula) => Object.values(formula || {}).some(calcHasRows);
+const applyRounding = (v, r) => { const n = parseFloat(r); return n > 0 ? Math.round(v / n) * n : v; };
+const runCalc = (entry, fitted) => {
+  const out = {};
+  Object.entries((entry && entry.rows) || {}).forEach(([k, rule]) => {
+    const add = toNum(rule.add) || 0;
+    let v = null;
+    if (rule.src === "fixed") v = add;
+    else {
+      const c = toNum(fitted[k]);
+      const mult = toNum(rule.mult);
+      if (c !== null) v = c * (mult === null ? 1 : mult) + add;
+    }
+    if (v !== null) out[k] = +applyRounding(v, entry.round).toFixed(2);
+  });
+  return out;
+};
+const calcEntryFor = (model, cut) => {
+  const f = (model && model.cuttingFormula) || {};
+  const key = cut || cutTagsOf(model)[0] || "General";
+  return f[key] || f["General"] || null;
+};
+
+function CalculationSection({ cuts, formula, setFormula, models, currentModelId, customFields, onAddCustomField, readOnly }) {
+  const [active, setActive] = useState(cuts[0] || "General");
+  const [loadModelId, setLoadModelId] = useState("");
+  const [loadCut, setLoadCut] = useState("");
+  const [addingKey, setAddingKey] = useState("");
+  const [customLabel, setCustomLabel] = useState("");
+  const [addingCustom, setAddingCustom] = useState(false);
+  const [test, setTest] = useState({});
+
+  const current = cuts.includes(active) ? active : cuts[0] || "General";
+  const entry = (formula && formula[current]) || { rows: {}, round: "0" };
+  const allFields = [...FITTING_FIELDS, ...(customFields || []).map((c) => [c.key, c.label])];
+  const keys = Object.keys(entry.rows || {});
+  const rowFields = allFields.filter(([k]) => keys.includes(k));
+  const unused = allFields.filter(([k]) => !keys.includes(k));
+  const results = runCalc(entry, test);
+
+  const update = (next) => setFormula({ ...(formula || {}), [current]: next });
+  const setRow = (k, patch) => update({ ...entry, rows: { ...entry.rows, [k]: { ...entry.rows[k], ...patch } } });
+  const addRow = (k) => update({ ...entry, rows: { ...entry.rows, [k]: { src: "fitted", mult: "1", add: "0" } } });
+  const removeRow = (k) => { const rows = { ...entry.rows }; delete rows[k]; update({ ...entry, rows }); };
+  const addCommon = () => {
+    const rows = { ...(entry.rows || {}) };
+    DEFAULT_TEMPLATE_ROWS.forEach((k) => { if (!rows[k]) rows[k] = { src: "fitted", mult: "1", add: "0" }; });
+    update({ ...entry, rows });
+  };
+  const addCustom = () => {
+    const label = customLabel.trim();
+    if (!label) return;
+    const key = "custom_" + label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    if (onAddCustomField) onAddCustomField({ key, label });
+    update({ ...entry, rows: { ...(entry.rows || {}), [key]: { src: "fitted", mult: "1", add: "0" } } });
+    setCustomLabel(""); setAddingCustom(false);
+  };
+
+  const loadableModels = (models || []).filter((m) => m.id !== currentModelId && anyCalc(m.cuttingFormula));
+  const sourceModel = loadableModels.find((m) => m.id === loadModelId);
+  const sourceCuts = sourceModel ? Object.keys(sourceModel.cuttingFormula).filter((c) => calcHasRows(sourceModel.cuttingFormula[c])) : [];
+  const doLoad = () => {
+    const src = sourceModel && sourceModel.cuttingFormula[loadCut];
+    if (!calcHasRows(src)) return;
+    if (keys.length > 0 && !window.confirm(`Replace the current ${current} calculation with ${sourceModel.modelNo} (${loadCut})?`)) return;
+    Object.keys(src.rows).filter((k) => k.startsWith("custom_")).forEach((k) => {
+      const f = (sourceModel.customFields || []).find((c) => c.key === k);
+      if (f && !(customFields || []).some((c) => c.key === k) && onAddCustomField) onAddCustomField(f);
+    });
+    update(JSON.parse(JSON.stringify(src)));
+    setLoadModelId(""); setLoadCut("");
+  };
+
+  const th = { padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A", textAlign: "left" };
+  const td = { padding: "5px 8px", fontSize: 12.5 };
+  const small = { ...inputStyle, width: 70, padding: "4px 6px", fontSize: 12.5 };
+
+  return (
+    <div>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>CALCULATION</div>
+      <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 12 }}>How the cutting measurement is worked out from the customer's fitted measurement, for each cut. Add this first — the size chart unlocks once a calculation exists.</div>
+
+      {cuts.length > 1 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+          {cuts.map((c) => (
+            <button key={c} type="button" onClick={() => setActive(c)} style={{ padding: "6px 14px", fontSize: 12, borderRadius: 14, cursor: "pointer", border: "1px solid " + (c === current ? "#1A1A1A" : "#DDE1E7"), background: c === current ? "#1A1A1A" : "#fff", color: c === current ? "#fff" : "#1A1A1A" }}>
+              {c}{calcHasRows(formula && formula[c]) ? " ✓" : ""}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {!readOnly && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12, padding: 10, background: "#F7F7F5", borderRadius: 4 }}>
+          <span style={{ fontSize: 12, fontWeight: 700 }}>Load calculation:</span>
+          <select value={loadModelId} onChange={(e) => { setLoadModelId(e.target.value); setLoadCut(""); }} style={{ ...inputStyle, width: 190 }}>
+            <option value="">From model number…</option>
+            {loadableModels.map((m) => <option key={m.id} value={m.id}>{m.modelNo}{m.styleName ? ` — ${m.styleName}` : ""}</option>)}
+          </select>
+          {sourceModel && (
+            <select value={loadCut} onChange={(e) => setLoadCut(e.target.value)} style={{ ...inputStyle, width: 150 }}>
+              <option value="">Which cut…</option>
+              {sourceCuts.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
+          <button type="button" onClick={doLoad} disabled={!loadCut} style={{ background: loadCut ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>Load</button>
+          {loadableModels.length === 0 && <span style={{ fontSize: 11.5, color: "#8a8a8a" }}>No other model has a calculation yet.</span>}
+        </div>
+      )}
+
+      {keys.length === 0 ? (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 6 }}>No calculation for {current} yet.</div>
+          {!readOnly && <button type="button" onClick={addCommon} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "6px 12px", fontSize: 12 }}>+ Start with common measurements</button>}
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+            <thead><tr style={{ background: "#F7F7F5" }}>
+              <th style={th}>Measurement</th><th style={th}>Based on</th><th style={th}>Multiply by</th><th style={th}>Then add</th>
+              {!readOnly && <th style={th}>Test (fitted)</th>}{!readOnly && <th style={th}>Result</th>}{!readOnly && <th style={th}></th>}
+            </tr></thead>
+            <tbody>
+              {rowFields.map(([k, l]) => {
+                const r = entry.rows[k];
+                return (
+                  <tr key={k} style={{ borderBottom: "1px solid #E5E5E5" }}>
+                    <td style={td}>{l}</td>
+                    {readOnly ? (
+                      <>
+                        <td style={td}>{r.src === "fixed" ? "Fixed value" : "Fitted measurement"}</td>
+                        <td style={td}>{r.src === "fixed" ? "—" : `× ${r.mult}`}</td>
+                        <td style={td}>{r.src === "fixed" ? r.add : `+ ${r.add}`}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td style={td}>
+                          <select value={r.src} onChange={(e) => setRow(k, { src: e.target.value })} style={{ ...inputStyle, width: 160, padding: "4px 6px", fontSize: 12.5 }}>
+                            <option value="fitted">Fitted measurement</option>
+                            <option value="fixed">Fixed value</option>
+                          </select>
+                        </td>
+                        <td style={td}><input value={r.mult} disabled={r.src === "fixed"} onChange={(e) => setRow(k, { mult: e.target.value })} style={small} /></td>
+                        <td style={td}><input value={r.add} onChange={(e) => setRow(k, { add: e.target.value })} style={small} /></td>
+                        <td style={td}>{r.src === "fixed" ? "—" : <input value={test[k] || ""} onChange={(e) => setTest((t) => ({ ...t, [k]: e.target.value }))} style={small} />}</td>
+                        <td style={{ ...td, fontWeight: 700 }}>{results[k] != null ? results[k] : "—"}</td>
+                        <td style={td}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => removeRow(k)}>×</a></td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!readOnly && keys.length > 0 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {unused.length > 0 && (
+            <>
+              <select value={addingKey} onChange={(e) => setAddingKey(e.target.value)} style={{ ...inputStyle, width: 170 }}>
+                <option value="">+ Add measurement…</option>
+                {unused.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+              <button type="button" disabled={!addingKey} onClick={() => { addRow(addingKey); setAddingKey(""); }} style={{ background: addingKey ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add</button>
+            </>
+          )}
+          {addingCustom ? (
+            <>
+              <input value={customLabel} onChange={(e) => setCustomLabel(e.target.value)} placeholder="New measurement name…" style={{ ...inputStyle, width: 170 }} />
+              <button type="button" onClick={addCustom} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Add</button>
+              <button type="button" onClick={() => { setAddingCustom(false); setCustomLabel(""); }} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "7px 12px", fontSize: 12 }}>Cancel</button>
+            </>
+          ) : (
+            <button type="button" onClick={() => setAddingCustom(true)} style={{ background: "#fff", border: "1px dashed #C9CDD3", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>+ Custom Measurement</button>
+          )}
+          <span style={{ fontSize: 12, color: "#5a5a5a", marginLeft: 8 }}>Round to</span>
+          <select value={entry.round || "0"} onChange={(e) => update({ ...entry, round: e.target.value })} style={{ ...inputStyle, width: 120 }}>
+            <option value="0">no rounding</option><option value="0.25">nearest 0.25</option><option value="0.5">nearest 0.5</option><option value="1">nearest 1</option>
+          </select>
+        </div>
+      )}
+      {readOnly && keys.length > 0 && entry.round && entry.round !== "0" && <div style={{ fontSize: 11.5, color: "#8a8a8a" }}>Rounded to the nearest {entry.round}.</div>}
+    </div>
+  );
+}
 
 function SizeMeasurementGrid({ sizes, onChangeCell, onCellBlur, onAddSize, onRemoveSize, onRemoveRow, readOnly, customFields, onAddCustomField, initialRows }) {
   const [extraRows, setExtraRows] = useState(() => initialRows || []);
@@ -3714,9 +3926,10 @@ function ModelSizes({ model, refresh, flash }) {
   const [addingCutTable, setAddingCutTable] = useState(false);
   const [newCutChoice, setNewCutChoice] = useState("");
   const [duplicateFrom, setDuplicateFrom] = useState("");
+  const [loaded, setLoaded] = useState(false);
 
-  const load = () => supabase.from("model_sizes").select("*").eq("model_id", model.id).then(({ data }) => setSizes(data || []));
-  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+  const load = () => supabase.from("model_sizes").select("*").eq("model_id", model.id).then(({ data }) => { setSizes(data || []); setLoaded(true); });
+  useEffect(() => { setLoaded(false); load(); }, [model.id]); // eslint-disable-line
 
   const changeCell = (cut, sizeLabel, key, value) => {
     setSizes((prev) => prev.map((s) => (s.cut || null) === (cut || null) && s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
@@ -3752,7 +3965,9 @@ function ModelSizes({ model, refresh, flash }) {
   const cutTags = model.possibleCuts ? model.possibleCuts.split(",").map((c) => c.trim()).filter(Boolean) : [];
   const cutGroups = Array.from(new Set(sizes.map((s) => s.cut || null)));
   const groupsToShow = cutGroups.length > 0 ? cutGroups : [null];
-  const availableCutsToAdd = cutTags.filter((c) => !cutGroups.includes(c));
+  const hasSizeData = sizes.some((s) => Object.values(s.measurements || {}).some((v) => v !== "" && v != null));
+  const locked = loaded && !hasSizeData && !anyCalc(model.cuttingFormula);
+  const availableCutsToAdd = cutTags.filter((c) => !cutGroups.includes(c) && (hasSizeData || calcHasRows((model.cuttingFormula || {})[c])));
 
   const addCutTable = async () => {
     if (!newCutChoice) return;
@@ -3770,6 +3985,10 @@ function ModelSizes({ model, refresh, flash }) {
     setAddingCutTable(false); setNewCutChoice(""); setDuplicateFrom("");
     load(); flash(`Size table added for ${newCutChoice}`);
   };
+
+  if (locked) return (
+    <div style={{ fontSize: 13, color: "#8a8a8a", padding: "10px 0" }}>🔒 Add this model's calculation first — the size chart unlocks once a calculation exists.</div>
+  );
 
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #C9CDD3" }}>
@@ -3994,6 +4213,7 @@ function ManageModels({ config, refresh, flash, session }) {
   const [pendingSizes, setPendingSizes] = useState(() =>
     DEFAULT_TEMPLATE_SIZES.map((label) => ({ size_label: label, measurements: Object.fromEntries(DEFAULT_TEMPLATE_ROWS.map((k) => [k, ""])), cut: null }))
   );
+  const [pendingFormula, setPendingFormula] = useState({});
   const [pendingCustomFields, setPendingCustomFields] = useState([]);
   const addPendingCustomField = (field) => setPendingCustomFields((f) => [...f, field]);
   const changePendingCell = (sizeLabel, key, value) => setPendingSizes((prev) => prev.map((s) => s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
@@ -4007,7 +4227,7 @@ function ManageModels({ config, refresh, flash, session }) {
   const cutTags = form.possibleCuts ? form.possibleCuts.split(",").map((c) => c.trim()).filter(Boolean) : [];
   const cutGroups = Array.from(new Set(pendingSizes.map((s) => s.cut || null)));
   const groupsToShow = cutGroups.length > 0 ? cutGroups : [null];
-  const availableCutsToAdd = cutTags.filter((c) => !cutGroups.includes(c));
+  const availableCutsToAdd = cutTags.filter((c) => !cutGroups.includes(c) && calcHasRows(pendingFormula[c]));
 
   const changePendingCellForCut = (cut, sizeLabel, key, value) =>
     setPendingSizes((prev) => prev.map((s) => (s.cut || null) === (cut || null) && s.size_label === sizeLabel ? { ...s, measurements: { ...s.measurements, [key]: value } } : s));
@@ -4038,6 +4258,7 @@ function ManageModels({ config, refresh, flash, session }) {
     payload.category = form.category === "__other__" ? (form.customCategory || "") : form.category;
     payload.product_type = form.productType === "__other__" ? (form.customProductType || "") : form.productType;
     payload.custom_fields = pendingCustomFields;
+    payload.cutting_formula = pendingFormula;
     const { data: inserted, error } = await supabase.from("models").insert(payload).select().single();
     if (error) { flash("Error: " + error.message); setCreating(false); return; }
     notify(session, `${session.name} created a new model: ${inserted.model_no}`, "model");
@@ -4119,6 +4340,7 @@ function ManageModels({ config, refresh, flash, session }) {
     setForm(blank); setPhotoFiles({}); setPendingColors([]); setPendingFabrics([]); setPendingTrims([]); setPendingPatterns([]); setPendingMaterials([]); setPendingManpower([]); setPendingDocuments([]);
     setPendingSizes(DEFAULT_TEMPLATE_SIZES.map((label) => ({ size_label: label, measurements: Object.fromEntries(DEFAULT_TEMPLATE_ROWS.map((k) => [k, ""])), cut: null })));
     setPendingCustomFields([]);
+    setPendingFormula({});
     setAddingCutTable(false); setNewCutChoice(""); setDuplicateFrom("");
     setCreating(false);
     await refresh();
@@ -4422,45 +4644,60 @@ function ManageModels({ config, refresh, flash, session }) {
         <FileButton label="Upload Sketch or Document" accept="image/*,.pdf,.doc,.docx" onChange={addPendingDocument} />
       </div>
 
+      <div style={{ ...cardStyle, marginBottom: 16 }}>
+        <CalculationSection
+          cuts={cutTags.length ? cutTags : ["General"]}
+          formula={pendingFormula} setFormula={setPendingFormula}
+          models={config.models} currentModelId={null}
+          customFields={pendingCustomFields} onAddCustomField={addPendingCustomField}
+        />
+      </div>
+
       <div style={{ ...cardStyle, marginBottom: 20 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>SIZE MEASUREMENTS</div>
-        {groupsToShow.map((cut) => (
-          <div key={cut || "general"} style={{ marginBottom: 20 }}>
-            {cutTags.length > 1 && <div style={{ fontSize: 12, fontWeight: 700, color: "#3B6FA0", marginBottom: 6 }}>{cut || "General"}</div>}
-            <SizeMeasurementGrid
-              sizes={pendingSizes.filter((s) => (s.cut || null) === cut)}
-              onChangeCell={(sizeLabel, key, value) => changePendingCellForCut(cut, sizeLabel, key, value)}
-              onAddSize={(label) => addPendingSizeForCut(cut, label)}
-              onRemoveSize={(label) => removePendingSizeForCut(cut, label)}
-              customFields={pendingCustomFields}
-              onAddCustomField={addPendingCustomField}
-              initialRows={cut === (groupsToShow[0] || null) ? DEFAULT_TEMPLATE_ROWS : []}
-            />
-          </div>
-        ))}
+        {!anyCalc(pendingFormula) ? (
+          <div style={{ fontSize: 13, color: "#8a8a8a", padding: "10px 0" }}>🔒 Add the calculation above first — the size chart unlocks once a calculation exists.</div>
+        ) : (
+          <>
+            {groupsToShow.map((cut) => (
+              <div key={cut || "general"} style={{ marginBottom: 20 }}>
+                {cutTags.length > 1 && <div style={{ fontSize: 12, fontWeight: 700, color: "#3B6FA0", marginBottom: 6 }}>{cut || "General"}</div>}
+                <SizeMeasurementGrid
+                  sizes={pendingSizes.filter((s) => (s.cut || null) === cut)}
+                  onChangeCell={(sizeLabel, key, value) => changePendingCellForCut(cut, sizeLabel, key, value)}
+                  onAddSize={(label) => addPendingSizeForCut(cut, label)}
+                  onRemoveSize={(label) => removePendingSizeForCut(cut, label)}
+                  customFields={pendingCustomFields}
+                  onAddCustomField={addPendingCustomField}
+                  initialRows={calcRowKeys(pendingFormula[cut || cutTags[0] || "General"]).length ? calcRowKeys(pendingFormula[cut || cutTags[0] || "General"]) : DEFAULT_TEMPLATE_ROWS}
+                />
+              </div>
+            ))}
 
-        {cutTags.length > 1 && (
-          addingCutTable ? (
-            <div style={{ border: "1px solid #C9CDD3", borderRadius: 6, padding: 12, marginTop: 10 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>ADD SIZE TABLE FOR ANOTHER CUT</div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-                <select value={newCutChoice} onChange={(e) => setNewCutChoice(e.target.value)} style={{ ...inputStyle, width: 160 }}>
-                  <option value="">Select cut…</option>
-                  {availableCutsToAdd.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <select value={duplicateFrom} onChange={(e) => setDuplicateFrom(e.target.value)} style={{ ...inputStyle, width: 240 }}>
-                  <option value="">Start blank (Small–X-Large template)</option>
-                  {groupsToShow.map((c) => <option key={c || "general"} value={c || "__none__"}>Duplicate values from {c || "General"}</option>)}
-                </select>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={addCutTable} disabled={!newCutChoice} style={{ background: newCutChoice ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>Add Table</button>
-                <button onClick={() => setAddingCutTable(false)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "7px 14px", fontSize: 12 }}>Cancel</button>
-              </div>
-            </div>
-          ) : availableCutsToAdd.length > 0 && (
-            <button onClick={() => setAddingCutTable(true)} style={{ background: "#fff", border: "1px dashed #C9CDD3", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700, marginTop: 10 }}>+ Add Size Table for Another Cut</button>
-          )
+            {cutTags.length > 1 && (
+              addingCutTable ? (
+                <div style={{ border: "1px solid #C9CDD3", borderRadius: 6, padding: 12, marginTop: 10 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>ADD SIZE TABLE FOR ANOTHER CUT</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                    <select value={newCutChoice} onChange={(e) => setNewCutChoice(e.target.value)} style={{ ...inputStyle, width: 160 }}>
+                      <option value="">Select cut…</option>
+                      {availableCutsToAdd.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <select value={duplicateFrom} onChange={(e) => setDuplicateFrom(e.target.value)} style={{ ...inputStyle, width: 240 }}>
+                      <option value="">Start blank (Small–X-Large template)</option>
+                      {groupsToShow.map((c) => <option key={c || "general"} value={c || "__none__"}>Duplicate values from {c || "General"}</option>)}
+                    </select>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={addCutTable} disabled={!newCutChoice} style={{ background: newCutChoice ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 12, fontWeight: 700 }}>Add Table</button>
+                    <button onClick={() => setAddingCutTable(false)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "7px 14px", fontSize: 12 }}>Cancel</button>
+                  </div>
+                </div>
+              ) : availableCutsToAdd.length > 0 && (
+                <button onClick={() => setAddingCutTable(true)} style={{ background: "#fff", border: "1px dashed #C9CDD3", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700, marginTop: 10 }}>+ Add Size Table for Another Cut</button>
+              )
+            )}
+          </>
         )}
       </div>
 
