@@ -220,6 +220,24 @@ const suggestSize = (customerM, rows) => {
   return best || rows.find((r) => r.size_label === "Medium") || rows[0] || null;
 };
 
+const buildCalc = (model, cut, sizes, fitted) => {
+  const entry = calcEntryFor(model, cut);
+  const formulaCalc = calcHasRows(entry) ? runCalc(entry, fitted) : {};
+  const chartKeys = new Set();
+  rowsForCut(sizes || [], cut).forEach((row) => Object.entries(row.measurements || {}).forEach(([k, v]) => { if (toNum(v) !== null) chartKeys.add(k); }));
+  const pointKeys = new Set([...Object.keys((entry && entry.rows) || {}), ...chartKeys]);
+  const calc = {};
+  const fittedKeys = [];
+  pointKeys.forEach((k) => {
+    if (formulaCalc[k] !== undefined) calc[k] = formulaCalc[k];
+    else { const f = toNum(fitted[k]); if (f !== null) { calc[k] = f; fittedKeys.push(k); } }
+  });
+  if (pointKeys.size === 0) {
+    FITTING_FIELDS_GENERAL.forEach(([k]) => { const f = toNum(fitted[k]); if (f !== null) { calc[k] = f; fittedKeys.push(k); } });
+  }
+  return { calc, formulaKeys: Object.keys(formulaCalc), fittedKeys };
+};
+
 function computeDeltas(fields, customerM, baseM) {
   const out = {};
   fields.forEach(([k]) => {
@@ -1532,40 +1550,27 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     const model = config.models.find((m) => m.modelNo === pickModel);
     if (!model) return;
     const { data: sizes } = await supabase.from("model_sizes").select("*").eq("model_id", model.id);
-    const allSizes = sizes || [];
     const cuts = cutTagsOf(model);
-    const cut = cuts[0] || null;
-    const base = { model: pickModel, modelId: model.id, modelObj: model, photoUrl: model.photoUrl, customFields: model.customFields || [], cuts, cut, notes: "", sizes: allSizes };
-    const entry = calcEntryFor(model, cut);
-    if (calcHasRows(entry)) {
-      setItems((it) => [...it, { ...base, source: "formula", calc: runCalc(entry, measurements) }]);
-    } else if (allSizes.length === 0) {
-      setItems((it) => [...it, { ...base, source: "chart", error: "No calculation or size chart saved for this model yet — add one under View Models." }]);
-    } else {
-      const best = suggestSize(measurements, rowsForCut(allSizes, cut));
-      setItems((it) => [...it, { ...base, source: "chart", size: best.size_label, auto: best.size_label, calc: calcFromRow(best) }]);
-    }
+    setItems((it) => [...it, {
+      model: pickModel, modelId: model.id, modelObj: model, photoUrl: model.photoUrl,
+      customFields: model.customFields || [], cuts, cut: cuts[0] || null, notes: "", sizes: sizes || [], overrides: {},
+    }]);
     setPickModel("");
   };
-  const changeItemCut = (idx, cut) => setItems((prev) => prev.map((it, i) => {
-    if (i !== idx) return it;
-    const entry = calcEntryFor(it.modelObj, cut);
-    if (calcHasRows(entry)) return { ...it, cut, source: "formula", size: null, error: undefined, calc: runCalc(entry, measurements) };
-    const best = suggestSize(measurements, rowsForCut(it.sizes, cut));
-    if (!best) return { ...it, cut, source: "chart", calc: {}, error: "No calculation or size chart for this cut yet." };
-    return { ...it, cut, source: "chart", size: best.size_label, auto: best.size_label, calc: calcFromRow(best), error: undefined };
-  }));
-  const changeItemSize = (idx, label) => setItems((prev) => prev.map((it, i) => {
-    if (i !== idx) return it;
-    const row = rowsForCut(it.sizes, it.cut).find((s) => s.size_label === label);
-    return row ? { ...it, size: label, calc: calcFromRow(row) } : it;
-  }));
+  const changeItemCut = (idx, cut) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, cut, overrides: {} })));
   const setItemCalc = (idx, key, value) => setItems((prev) => prev.map((it, i) => {
     if (i !== idx) return it;
-    const calc = { ...it.calc };
-    if (value === null || value === undefined || isNaN(value)) delete calc[key]; else calc[key] = value;
-    return { ...it, calc };
+    const clear = value === null || value === undefined || isNaN(value);
+    return { ...it, overrides: { ...(it.overrides || {}), [key]: clear ? null : value } };
   }));
+
+  // What an item currently shows: live calculation + the customer's fitted values, then any manual edits on top.
+  const itemView = (it) => {
+    const b = buildCalc(it.modelObj, it.cut, it.sizes, measurements);
+    const calc = { ...b.calc };
+    Object.entries(it.overrides || {}).forEach(([k, v]) => { if (v === null) delete calc[k]; else calc[k] = v; });
+    return { ...b, calc };
+  };
   const setItemNotes = (idx, text) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, notes: text })));
   const removeItem = (idx) => setItems((it) => it.filter((_, i) => i !== idx));
   const customerValid = customer.name.trim() && customer.mobile.trim();
@@ -1584,7 +1589,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const save = async (createOrders) => {
     setSaving(true);
     const signatureUrl = await uploadSignature();
-    await onSave(customer, measurements, items, deliveryDate, signatureUrl, createOrders);
+    await onSave(customer, measurements, items.map((it) => ({ ...it, calc: itemView(it).calc, size: null })), deliveryDate, signatureUrl, createOrders);
     setSaving(false);
   };
 
@@ -1660,9 +1665,9 @@ function RequirementForm({ config, session, onCancel, onSave }) {
       {items.length === 0 && <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 12 }}>No items yet — pick a model below and click "+ Add Item".</div>}
 
       {items.map((it, idx) => {
+        const view = itemView(it);
         const labelOf = (k) => (FITTING_FIELDS.find(([x]) => x === k) || (it.customFields || []).map((c) => [c.key, c.label]).find(([x]) => x === k) || [k, k])[1];
-        const rowKeys = it.calc ? [...FITTING_FIELDS.map(([k]) => k), ...(it.customFields || []).map((c) => c.key)].filter((k) => it.calc[k] != null) : [];
-        const sizeRows = it.sizes ? rowsForCut(it.sizes, it.cut) : [];
+        const rowKeys = [...FITTING_FIELDS.map(([k]) => k), ...(it.customFields || []).map((c) => c.key)].filter((k) => view.calc[k] != null);
         return (
           <div key={idx} style={{ border: "1px solid #C9CDD3", borderRadius: 6, padding: 16, marginBottom: 14, display: "flex", gap: 22, alignItems: "flex-start", flexWrap: "wrap" }}>
             <div style={{ width: 150, flexShrink: 0 }}>
@@ -1684,18 +1689,12 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                 ) : it.cuts && it.cuts.length === 1 ? (
                   <div style={{ fontSize: 12.5 }}><span style={{ color: "#8a8a8a" }}>Cut:</span> <strong>{it.cuts[0]}</strong></div>
                 ) : null}
-                {it.source === "chart" && !it.error && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ fontSize: 12, color: "#8a8a8a" }}>Size:</span>
-                    <select value={it.size} onChange={(e) => changeItemSize(idx, e.target.value)} style={{ ...inputStyle, width: 150, padding: "4px 6px" }}>
-                      {sizeRows.map((s) => <option key={s.id} value={s.size_label}>{s.size_label}{s.size_label === it.auto ? " (suggested)" : ""}</option>)}
-                    </select>
-                  </div>
-                )}
                 <a className="link" style={{ color: "#C1302B" }} onClick={() => removeItem(idx)}>Remove</a>
               </div>
 
-              {it.error ? <div style={{ color: "#C1302B", fontSize: 13 }}>{it.error}</div> : (
+              {rowKeys.length === 0 ? (
+                <div style={{ fontSize: 13, color: "#C1302B" }}>Fill in the customer's fitting measurements above — they'll appear here.</div>
+              ) : (
                 <table>
                   <thead><tr style={{ fontSize: 12, textAlign: "left" }}><th>Measurement</th><th>Customer Fitted Measurement</th><th>Calculated Measurement</th></tr></thead>
                   <tbody>
@@ -1703,13 +1702,18 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                       <tr key={k} style={{ fontSize: 13 }}>
                         <td style={{ padding: "3px 0" }}>{labelOf(k)}</td>
                         <td>{measurements[k] || "—"}</td>
-                        <td style={{ fontWeight: 700 }}><EditableCell value={it.calc[k]} onCommit={(v) => setItemCalc(idx, k, v)} /></td>
+                        <td style={{ fontWeight: 700 }}>
+                          <EditableCell value={view.calc[k]} onCommit={(v) => setItemCalc(idx, k, v)} />
+                          {view.fittedKeys.includes(k) && (it.overrides || {})[k] === undefined && <span style={{ fontWeight: 400, fontSize: 10.5, color: "#8a8a8a", marginLeft: 6 }}>as fitted</span>}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               )}
-              {!it.error && <div style={{ fontSize: 11, color: "#8a8a8a", marginTop: 4 }}>{it.source === "formula" ? "Calculated from the model's calculation" : "From the model's size chart (no calculation set up yet)"}</div>}
+              <div style={{ fontSize: 11, color: "#8a8a8a", marginTop: 4 }}>
+                {view.formulaKeys.length > 0 ? "Rows with a calculation are calculated; the rest are the customer's fitted measurements." : "No calculation set up for this model — values are the customer's fitted measurements."}
+              </div>
 
               <div style={{ marginTop: 10 }}>
                 <Field label="Special Requirements / Notes for this item">
