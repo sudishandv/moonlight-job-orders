@@ -287,10 +287,10 @@ function diffSummary(before, form, fileChanged) {
     name: before.name || "", mobile: before.mobile || "", orderType: before.orderType || "New",
     model: before.model || "", item: before.item || ITEM_TYPES[0], branch: before.branch || "",
     sheilaType: before.sheilaType || SHEILA_TYPES[0], abayaOption: normAbaya(before.abayaOption),
-    buttonFrom: before.buttonFrom || "", buttonTill: before.buttonTill || "", additionalRequirements: before.additionalRequirements || "",
+    buttonFrom: before.buttonFrom || "", buttonTill: before.buttonTill || "", additionalRequirements: before.additionalRequirements || "", color: before.color || "",
     deliveryDate: before.deliveryDate || "", comments: before.comments || "",
   };
-  const simpleMap = { name: "Name", mobile: "Mobile", orderType: "Order Type", model: "Model", item: "Item", branch: "Branch", sheilaType: "Sheila Type", abayaOption: "Abaya Option", buttonFrom: "Button start from", buttonTill: "Button till", additionalRequirements: "Additional Requirements", deliveryDate: "Delivery Date", comments: "Comments" };
+  const simpleMap = { name: "Name", mobile: "Mobile", orderType: "Order Type", model: "Model", item: "Item", branch: "Branch", sheilaType: "Sheila Type", abayaOption: "Abaya Option", buttonFrom: "Button start from", buttonTill: "Button till", additionalRequirements: "Additional Requirements", color: "Colour", deliveryDate: "Delivery Date", comments: "Comments" };
   Object.entries(simpleMap).forEach(([k, label]) => {
     const oldV = norm[k] || "—", newV = (k === "abayaOption" ? normAbaya(form[k]) : form[k]) || "—";
     if (oldV !== newV) changed.push(`${label} (${oldV} → ${newV})`);
@@ -558,7 +558,7 @@ function dbToOrder(r) {
     id: r.id, invoiceNo: r.invoice_no, jobOrderNo: r.job_order_no, name: r.name, mobile: r.mobile, orderType: r.order_type,
     model: r.model, item: r.item, preparedBy: r.prepared_by, branch: r.branch,
     measurements: r.measurements || {}, sheilaType: r.sheila_type, abayaOption: r.abaya_option,
-    buttonFrom: r.button_from, buttonTill: r.button_till, additionalRequirements: r.additional_requirements, attachments: r.attachments || [], deliveryDate: r.delivery_date, attachmentUrl: r.attachment_url,
+    buttonFrom: r.button_from, buttonTill: r.button_till, additionalRequirements: r.additional_requirements, attachments: r.attachments || [], color: r.color, colorSwatch: r.color_swatch, deliveryDate: r.delivery_date, attachmentUrl: r.attachment_url,
     comments: r.comments, status: r.status, history: r.history || [],
     createdAt: r.created_at, updatedAt: r.updated_at, cut: r.cut,
   };
@@ -683,6 +683,7 @@ export default function App() {
       calculated: r.calculated || {}, cut: r.cut,
       abayaOption: r.abaya_option, buttonFrom: r.button_from, buttonTill: r.button_till,
       additionalRequirements: r.additional_requirements, attachments: r.attachments || [],
+      color: r.color, colorSwatch: r.color_swatch,
     })));
     setProjects(projs || []);
     setProjectCollaborators(collabs || []);
@@ -882,6 +883,35 @@ function Field({ label, children }) {
 const ABAYA_OPTIONS = ["Normal", "Full button with fabric", "Full button without fabric", "Half button", "Button start from and till"];
 const BUTTON_RANGE = "Button start from and till";
 
+function ColorPicker({ colors, value, onChange, disabled }) {
+  if (!colors || colors.length === 0) return null;
+  return (
+    <div>
+      <div style={label13}>Colour {!value && !disabled && <span style={{ color: "#C1302B" }}>— please choose</span>}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+        {colors.map((c) => {
+          const selected = value === c.color_name;
+          return (
+            <div
+              key={c.id}
+              onClick={() => !disabled && onChange({ name: c.color_name, swatch: c.swatch_url || "" })}
+              style={{ width: 84, textAlign: "center", cursor: disabled ? "default" : "pointer" }}
+            >
+              <div style={{ position: "relative", width: 76, height: 76, margin: "0 auto", borderRadius: 6, overflow: "hidden", background: "#F2F2F2", border: selected ? "3px solid #1A1A1A" : "1px solid #DDE1E7", boxSizing: "border-box" }}>
+                {c.swatch_url
+                  ? <img src={c.swatch_url} alt={c.color_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#8a8a8a" }}>No photo</div>}
+                {selected && <div style={{ position: "absolute", top: 3, right: 3, background: "#1A1A1A", color: "#fff", borderRadius: 10, width: 18, height: 18, fontSize: 12, lineHeight: "18px", fontWeight: 700 }}>✓</div>}
+              </div>
+              <div style={{ fontSize: 11.5, marginTop: 4, fontWeight: selected ? 700 : 400 }}>{c.color_name}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 const ADDITIONAL_REQ_OPTIONS = [
   "Add Pockets", "Remove Pockets",
   "Add Shoulder Pads", "Remove Shoulder Pads",
@@ -1071,6 +1101,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       measurements: form.measurements, sheila_type: form.sheilaType,
       abaya_option: form.abayaOption || "Normal", button_from: form.buttonFrom || null, button_till: form.buttonTill || null,
       additional_requirements: form.additionalRequirements || null, attachments: form.attachments || [],
+      color: form.color || null, color_swatch: form.colorSwatch || null,
       delivery_date: form.deliveryDate || null,
       attachment_url: attachmentUrl || form.attachmentNote || null, comments: form.comments,
       status: "job_created", history: [{ note: "Job order created by Sales", by: session.name, at: now }],
@@ -1104,6 +1135,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       model: form.model, item: form.item, branch: form.branch, measurements: form.measurements,
       sheila_type: form.sheilaType, abaya_option: form.abayaOption || "Normal", button_from: form.buttonFrom || null, button_till: form.buttonTill || null,
       additional_requirements: form.additionalRequirements || null, attachments: form.attachments || [],
+      color: form.color || null, color_swatch: form.colorSwatch || null,
       delivery_date: form.deliveryDate || null, attachment_url: attachmentUrl, comments: form.comments,
       history, updated_at: now,
     }).eq("id", editingOrderId);
@@ -1154,6 +1186,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
           measurements: calcToStrings(it.calc), cut: it.cut || null, delivery_date: deliveryDate || null,
           abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
           additional_requirements: it.additionalRequirements || null, attachments: it.attachments || [],
+          color: it.color || null, color_swatch: it.colorSwatch || null,
           comments: fitNote, status: "job_created",
           history: [{ note: "Job order created from customer requirement", by: session.name, at: now }],
         }).select().single();
@@ -1165,6 +1198,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
         profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: {}, calculated: it.calc || {}, cut: it.cut || null,
         abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
         additional_requirements: it.additionalRequirements || null, attachments: it.attachments || [],
+        color: it.color || null, color_swatch: it.colorSwatch || null,
         notes: it.notes || null, job_order_id: jobOrderId,
       });
     }
@@ -1185,6 +1219,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       cut: row.cut || null,
       abaya_option: row.abayaOption || "Normal", button_from: row.buttonFrom || null, button_till: row.buttonTill || null,
       additional_requirements: row.additionalRequirements || null, attachments: row.attachments || [],
+      color: row.color || null, color_swatch: row.colorSwatch || null,
       comments: fitNote, status: "job_created",
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
@@ -1258,12 +1293,14 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
     measurements: { ...Object.fromEntries(ALL_MEASURE_FIELDS.map(([k]) => [k, ""])), ...(initialOrder.measurements || {}) },
     sheilaType: initialOrder.sheilaType || SHEILA_TYPES[0], abayaOption: normAbaya(initialOrder.abayaOption),
     additionalRequirements: initialOrder.additionalRequirements || "", attachments: initialOrder.attachments || [],
+    color: initialOrder.color || "", colorSwatch: initialOrder.colorSwatch || "",
     buttonFrom: initialOrder.buttonFrom || "", buttonTill: initialOrder.buttonTill || "", deliveryDate: initialOrder.deliveryDate || "", comments: initialOrder.comments || "",
   } : {
     name: "", mobile: "", invoiceNo: "", orderType: "New", model: config.models[0]?.modelNo || "",
     item: ITEM_TYPES[0], branch: session.branch || config.branches[0]?.name || "",
     measurements: Object.fromEntries(ALL_MEASURE_FIELDS.map(([k]) => [k, ""])),
     sheilaType: SHEILA_TYPES[0], abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: "", attachments: [],
+    color: "", colorSwatch: "",
     deliveryDate: "", comments: "",
   });
   const [file, setFile] = useState(null);
@@ -1276,6 +1313,12 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
   const setMeasure = (k) => (e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }));
   const model = config.models.find((m) => m.modelNo === form.model);
   const valid = form.name.trim() && form.mobile.trim();
+
+  const [modelColors, setModelColors] = useState([]);
+  useEffect(() => {
+    if (!model) { setModelColors([]); return; }
+    supabase.from("model_colors").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setModelColors(data || []));
+  }, [model?.id]); // eslint-disable-line
 
   useEffect(() => {
     if (!model) { setModelSizes([]); return; }
@@ -1307,10 +1350,15 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
         <Field label="Date"><input style={inputStyle} value={isEdit ? fmtDate(initialOrder.createdAt) : fmtDate(new Date())} disabled /></Field>
         <Field label="Job Order No"><input style={inputStyle} value={isEdit ? (initialOrder.jobOrderNo || "—") : "Auto-generated on save"} disabled /></Field>
         <Field label="Order Type"><select style={inputStyle} value={form.orderType} onChange={set("orderType")} disabled={readOnly}>{ORDER_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
-        <Field label="Model"><select style={inputStyle} value={form.model} onChange={set("model")} disabled={readOnly}>{config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}</option>)}</select></Field>
+        <Field label="Model"><select style={inputStyle} value={form.model} onChange={(e) => setForm((f) => ({ ...f, model: e.target.value, color: "", colorSwatch: "" }))} disabled={readOnly}>{config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}</option>)}</select></Field>
         <Field label="Select Item"><select style={inputStyle} value={form.item} onChange={set("item")} disabled={readOnly}>{ITEM_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
         <Field label="Prepared By"><input style={inputStyle} value={isEdit ? initialOrder.preparedBy : session.name} disabled /></Field>
         <Field label="Branch"><select style={inputStyle} value={form.branch} onChange={set("branch")} disabled={readOnly}>{config.branches.map((b) => <option key={b.id} value={b.name}>{b.name}</option>)}</select></Field>
+      </div>
+
+      <div style={{ margin: "0 0 16px" }}>
+        <ColorPicker colors={modelColors} value={form.color} disabled={readOnly}
+          onChange={(v) => setForm((f) => ({ ...f, color: v.name, colorSwatch: v.swatch }))} />
       </div>
 
       {!readOnly && modelSizes.length > 0 && (
@@ -1737,11 +1785,13 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   };
 
   const [lightbox, setLightbox] = useState(null);
+  const [formMsg, setFormMsg] = useState("");
 
   const addItem = async () => {
     const model = config.models.find((m) => m.modelNo === pickModel);
     if (!model) return;
     const { data: sizes } = await supabase.from("model_sizes").select("*").eq("model_id", model.id);
+    const { data: colors } = await supabase.from("model_colors").select("*").eq("model_id", model.id).order("created_at");
     const cuts = cutTagsOf(model);
     let photoUrl = model.photoUrl;
     if (!photoUrl) {
@@ -1752,6 +1802,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
       model: pickModel, modelId: model.id, modelObj: model, photoUrl,
       customFields: model.customFields || [], cuts, cut: cuts[0] || null, notes: "", sizes: sizes || [], overrides: {},
       abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: "", attachments: [],
+      colors: colors || [], color: (colors || []).length === 1 ? colors[0].color_name : "", colorSwatch: (colors || []).length === 1 ? (colors[0].swatch_url || "") : "",
     }]);
     setPickModel("");
   };
@@ -1770,6 +1821,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     return { ...b, calc };
   };
   const setItemNotes = (idx, text) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, notes: text })));
+  const setItemColor = (idx, v) => { setFormMsg(""); setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, color: v.name, colorSwatch: v.swatch }))); };
   const setItemAttachments = (idx, files) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, attachments: files })));
   const setItemAdditional = (idx, v) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, additionalRequirements: resolveAdditional(it.additionalRequirements, v) })));
   const setItemAbaya = (idx, v) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, abayaOption: v.option, buttonFrom: v.from, buttonTill: v.till })));
@@ -1788,6 +1840,12 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   };
 
   const save = async (createOrders) => {
+    const missingColor = items.filter((it) => !it.error && it.colors && it.colors.length > 0 && !it.color);
+    if (createOrders && missingColor.length > 0) {
+      setFormMsg(`Please choose a colour for: ${missingColor.map((m) => m.model).join(", ")}`);
+      return;
+    }
+    setFormMsg("");
     setSaving(true);
     const signatureUrl = await uploadSignature();
     await onSave(customer, measurements, items.map((it) => {
@@ -1902,6 +1960,10 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                 <a className="link" style={{ color: "#C1302B" }} onClick={() => removeItem(idx)}>Remove</a>
               </div>
 
+              <div style={{ marginBottom: 14 }}>
+                <ColorPicker colors={it.colors} value={it.color} onChange={(v) => setItemColor(idx, v)} />
+              </div>
+
               {rowKeys.length === 0 ? (
                 <div style={{ fontSize: 13, color: "#C1302B" }}>Fill in the customer's fitting measurements above — they'll appear here.</div>
               ) : (
@@ -1984,6 +2046,8 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         {!signed && <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 4 }}>Required before creating a job order (optional if only saving the profile).</div>}
       </div>
 
+      {formMsg && <div className="no-print" role="alert" style={{ background: "#FDECEC", color: "#C1302B", border: "1px solid #F0B8B8", borderRadius: 4, padding: "10px 12px", fontSize: 13, marginTop: 16, textAlign: "center" }}>{formMsg}</div>}
+
       <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 22 }}>
         <button disabled={!customerValid || saving} onClick={() => save(false)} style={{ background: customerValid ? "#1A1A1A" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save Profile</button>
         <button disabled={!customerValid || items.length === 0 || !signed || saving} onClick={() => save(true)} style={{ background: (customerValid && items.length > 0 && signed) ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save & Create Job Order(s)</button>
@@ -2048,6 +2112,7 @@ function RequirementDetail({ row, onClose }) {
           <div><strong>Model:</strong> {row.model}</div>
           <div><strong>Size:</strong> {row.recommendedSize || "—"}</div>
           <div><strong>Cut:</strong> {row.cut || "—"}</div>
+          <div><strong>Colour:</strong> {row.color || "—"}</div>
           <div><strong>Abaya Option:</strong> {row.abayaOption || "—"}{row.abayaOption === BUTTON_RANGE ? ` (${row.buttonFrom || "—"} to ${row.buttonTill || "—"})` : ""}</div>
           <div><strong>Additional Requirements:</strong> {row.additionalRequirements || "—"}</div>
           <div style={{ marginTop: 8 }}><strong>Attachments:</strong> <AttachmentGallery files={row.attachments} /></div>
@@ -3026,7 +3091,14 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
         {!edit ? (
           <div style={{ marginTop: 16 }}>
             <Row l="Mobile" v={order.mobile} /><Row l="Order Type" v={order.orderType} />
-            <Row l="Model" v={order.model} /><Row l="Cut" v={order.cut || "—"} /><Row l="Item" v={order.item} />
+            <Row l="Model" v={order.model} />
+            <Row l="Colour" v={order.color ? (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                {order.colorSwatch && <img src={order.colorSwatch} alt="" style={{ width: 28, height: 28, borderRadius: 4, objectFit: "cover", border: "1px solid #E5E5E5" }} />}
+                {order.color}
+              </span>
+            ) : "—"} />
+            <Row l="Cut" v={order.cut || "—"} /><Row l="Item" v={order.item} />
             <Row l="Prepared By" v={order.preparedBy} /><Row l="Branch" v={order.branch} />
             <Row l="Delivery Date" v={fmtDate(order.deliveryDate)} />
             <Row l="Sheila Type" v={order.sheilaType} /><Row l="Abaya Option" v={order.abayaOption ? abayaLabel(normAbaya(order.abayaOption)) + (normAbaya(order.abayaOption) === BUTTON_RANGE ? ` (${order.buttonFrom || "—"} to ${order.buttonTill || "—"})` : "") : "—"} />
@@ -3627,6 +3699,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       measurements: form.measurements, sheila_type: form.sheilaType,
       abaya_option: form.abayaOption || "Normal", button_from: form.buttonFrom || null, button_till: form.buttonTill || null,
       additional_requirements: form.additionalRequirements || null, attachments: form.attachments || [],
+      color: form.color || null, color_swatch: form.colorSwatch || null,
       delivery_date: form.deliveryDate || null,
       attachment_url: attachmentUrl || form.attachmentNote || null, comments: form.comments,
       status: "job_created", history: [{ note: `Job order created by Admin (${session.name})`, by: session.name, at: now }],
@@ -3660,6 +3733,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       model: form.model, item: form.item, branch: form.branch, measurements: form.measurements,
       sheila_type: form.sheilaType, abaya_option: form.abayaOption || "Normal", button_from: form.buttonFrom || null, button_till: form.buttonTill || null,
       additional_requirements: form.additionalRequirements || null, attachments: form.attachments || [],
+      color: form.color || null, color_swatch: form.colorSwatch || null,
       delivery_date: form.deliveryDate || null, attachment_url: attachmentUrl, comments: form.comments,
       history, updated_at: now,
     }).eq("id", editingOrderId);
@@ -3704,6 +3778,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
           measurements: calcToStrings(it.calc), cut: it.cut || null, delivery_date: deliveryDate || null,
           abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
           additional_requirements: it.additionalRequirements || null, attachments: it.attachments || [],
+          color: it.color || null, color_swatch: it.colorSwatch || null,
           comments: fitNote, status: "job_created",
           history: [{ note: `Job order created from customer requirement by Admin (${session.name})`, by: session.name, at: now }],
         }).select().single();
@@ -3715,6 +3790,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
         profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: {}, calculated: it.calc || {}, cut: it.cut || null,
         abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
         additional_requirements: it.additionalRequirements || null, attachments: it.attachments || [],
+        color: it.color || null, color_swatch: it.colorSwatch || null,
         notes: it.notes || null, job_order_id: jobOrderId,
       });
     }
@@ -3735,6 +3811,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       cut: row.cut || null,
       abaya_option: row.abayaOption || "Normal", button_from: row.buttonFrom || null, button_till: row.buttonTill || null,
       additional_requirements: row.additionalRequirements || null, attachments: row.attachments || [],
+      color: row.color || null, color_swatch: row.colorSwatch || null,
       comments: fitNote, status: "job_created",
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
