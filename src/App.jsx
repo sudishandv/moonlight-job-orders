@@ -321,6 +321,21 @@ function Lightbox({ src, alt, onClose }) {
   );
 }
 
+function ConfirmDialog({ title, children, confirmLabel, cancelLabel, busy, onConfirm, onCancel }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 24, maxWidth: 460, width: "100%", boxShadow: "0 12px 40px rgba(0,0,0,0.3)" }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 19, marginBottom: 10 }}>{title}</div>
+        <div style={{ fontSize: 14, color: "#3a3a3a", marginBottom: 20, lineHeight: 1.5 }}>{children}</div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={onCancel} disabled={busy} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 22px", fontSize: 14, fontWeight: 700 }}>{cancelLabel || "No"}</button>
+          <button onClick={onConfirm} disabled={busy} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontSize: 14, fontWeight: 700, opacity: busy ? 0.6 : 1 }}>{busy ? "Saving…" : (confirmLabel || "Yes")}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function VideoViewer({ src, onClose }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -1181,7 +1196,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       }).select().single();
       profile = result.data; pErr = result.error;
     }
-    if (pErr) { flash("Error: " + pErr.message); return; }
+    if (pErr) { flash("Error: " + pErr.message); return false; }
 
     const validItems = items.filter((it) => !it.error);
     const jobNumbers = createOrders && validItems.length > 0 ? await nextJobOrderNumbers(validItems.length) : [];
@@ -1219,7 +1234,9 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     }
     await refresh();
     if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
-    else { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
+    else if (createOrders) { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
+    else { flash(existing && existing.length > 0 ? "Profile updated" : "Profile created"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
+    return true;
   };
 
   const handleCreateOrderFromRow = async (row) => {
@@ -1767,7 +1784,9 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const [pickModel, setPickModel] = useState("");
   const [deliveryDate, setDeliveryDate] = useState("");
   const [signed, setSigned] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState(null);   // { createOrders, exists }
+  const [busy, setBusy] = useState(false);
+  const savingRef = React.useRef(false);
   const [loadMobile, setLoadMobile] = useState("");
   const [loadMsg, setLoadMsg] = useState("");
   const [legacyResults, setLegacyResults] = useState([]);
@@ -1862,21 +1881,39 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     return data.publicUrl;
   };
 
-  const save = async (createOrders) => {
+  // Validate, then ask. Nothing is saved until the pop-up is confirmed.
+  const requestSave = async (createOrders) => {
     const missingColor = items.filter((it) => !it.error && it.colors && it.colors.length > 0 && !it.color);
     if (createOrders && missingColor.length > 0) {
       setFormMsg(`Please choose a colour for: ${missingColor.map((m) => m.model).join(", ")}`);
       return;
     }
     setFormMsg("");
-    setSaving(true);
-    const signatureUrl = await uploadSignature();
-    await onSave(customer, measurements, items.map((it) => {
-      const v = itemView(it);
-      const nb = nearestSizes(v.calc, it.sizes, it.cut)[0];
-      return { ...it, calc: v.calc, size: nb ? nb.label : null };
-    }), deliveryDate, signatureUrl, createOrders);
-    setSaving(false);
+    // Same lookup the save itself uses (handleSaveRequirement), so the pop-up can't say "new" while updating.
+    const { data: ex } = await supabase.from("customer_profiles").select("id").eq("mobile", customer.mobile).limit(1);
+    setConfirm({ createOrders, exists: !!(ex && ex.length) });
+  };
+
+  const doSave = async (createOrders) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setBusy(true);
+    try {
+      const signatureUrl = await uploadSignature();
+      const ok = await onSave(customer, measurements, items.map((it) => {
+        const v = itemView(it);
+        const nb = nearestSizes(v.calc, it.sizes, it.cut)[0];
+        return { ...it, calc: v.calc, size: nb ? nb.label : null };
+      }), deliveryDate, signatureUrl, createOrders);
+      setConfirm(null);
+      if (ok && !createOrders) {
+        setItems([]);   // saved to the Requirement List — clear them so a second click can't duplicate them
+        setLoadMsg("Profile saved — you can add items below.");
+      }
+    } finally {
+      savingRef.current = false;
+      setBusy(false);
+    }
   };
 
   return (
@@ -2071,10 +2108,35 @@ function RequirementForm({ config, session, onCancel, onSave }) {
       {formMsg && <div className="no-print" role="alert" style={{ background: "#FDECEC", color: "#C1302B", border: "1px solid #F0B8B8", borderRadius: 4, padding: "10px 12px", fontSize: 13, marginTop: 16, textAlign: "center" }}>{formMsg}</div>}
 
       <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 22 }}>
-        <button disabled={!customerValid || saving} onClick={() => save(false)} style={{ background: customerValid ? "#1A1A1A" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save Profile</button>
-        <button disabled={!customerValid || items.length === 0 || !signed || saving} onClick={() => save(true)} style={{ background: (customerValid && items.length > 0 && signed) ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save & Create Job Order(s)</button>
+        <button disabled={!customerValid || busy} onClick={() => requestSave(false)} style={{ background: customerValid ? "#1A1A1A" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save Profile</button>
+        <button disabled={!customerValid || items.length === 0 || !signed || busy} onClick={() => requestSave(true)} style={{ background: (customerValid && items.length > 0 && signed) ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Save & Create Job Order(s)</button>
         <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Cancel</button>
       </div>
+
+      {confirm && !confirm.createOrders && (
+        <ConfirmDialog
+          title={confirm.exists ? "Update profile?" : "Create new profile?"}
+          confirmLabel={confirm.exists ? "Yes, update profile" : "Yes, create profile"}
+          busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => doSave(false)}
+        >
+          {confirm.exists
+            ? <>{customer.name} ({customer.mobile}) already has a profile. This will replace her saved fitting measurements with the ones on this form.</>
+            : <>This will create a new profile for {customer.name} ({customer.mobile}).</>}
+          {items.filter((it) => !it.error).length > 0 && <div style={{ marginTop: 8, color: "#8a8a8a" }}>The {items.filter((it) => !it.error).length} item(s) on this form will also be saved to the Requirement List (no job orders created).</div>}
+        </ConfirmDialog>
+      )}
+      {confirm && confirm.createOrders && (
+        <ConfirmDialog
+          title={`Create ${items.filter((it) => !it.error).length} job order(s)?`}
+          confirmLabel="Yes, create job order(s)"
+          busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => doSave(true)}
+        >
+          <div>This will submit the job order(s) for {customer.name} ({customer.mobile}) and {confirm.exists ? "update her existing profile" : "create her profile"}.</div>
+          <ul style={{ margin: "10px 0 0 18px", padding: 0 }}>
+            {items.filter((it) => !it.error).map((it, i) => <li key={i}>{it.model}{it.cut ? ` — ${it.cut}` : ""}{it.color ? ` — ${it.color}` : ""}</li>)}
+          </ul>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
@@ -3780,7 +3842,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       }).select().single();
       profile = result.data; pErr = result.error;
     }
-    if (pErr) { flash("Error: " + pErr.message); return; }
+    if (pErr) { flash("Error: " + pErr.message); return false; }
 
     const validItems = items.filter((it) => !it.error);
     const jobNumbers = createOrders && validItems.length > 0 ? await nextJobOrderNumbers(validItems.length) : [];
@@ -3818,7 +3880,9 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     }
     await refresh();
     if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
-    else { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
+    else if (createOrders) { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
+    else { flash(existing && existing.length > 0 ? "Profile updated" : "Profile created"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
+    return true;
   };
 
   const handleCreateOrderFromRow = async (row) => {
