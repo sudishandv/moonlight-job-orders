@@ -884,6 +884,7 @@ const ABAYA_OPTIONS = ["Normal", "Full button with fabric", "Full button without
 const BUTTON_RANGE = "Button start from and till";
 
 function ColorPicker({ colors, value, onChange, disabled, center }) {
+  const [big, setBig] = useState(null);
   if (!colors || colors.length === 0) return null;
   return (
     <div>
@@ -895,6 +896,7 @@ function ColorPicker({ colors, value, onChange, disabled, center }) {
             <div
               key={c.id}
               onClick={() => !disabled && onChange({ name: c.color_name, swatch: c.swatch_url || "" })}
+              onDoubleClick={() => c.swatch_url && setBig(c)}
               style={{ width: 84, textAlign: "center", cursor: disabled ? "default" : "pointer" }}
             >
               <div style={{ position: "relative", width: 76, height: 76, margin: "0 auto", borderRadius: 6, overflow: "hidden", background: "#F2F2F2", border: selected ? "3px solid #1A1A1A" : "1px solid #DDE1E7", boxSizing: "border-box" }}>
@@ -902,12 +904,25 @@ function ColorPicker({ colors, value, onChange, disabled, center }) {
                   ? <img src={c.swatch_url} alt={c.color_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                   : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#8a8a8a" }}>No photo</div>}
                 {selected && <div style={{ position: "absolute", top: 3, right: 3, background: "#1A1A1A", color: "#fff", borderRadius: 10, width: 18, height: 18, fontSize: 12, lineHeight: "18px", fontWeight: 700 }}>✓</div>}
+                {c.swatch_url && (
+                  <div
+                    onClick={(e) => { e.stopPropagation(); setBig(c); }}
+                    title="View larger"
+                    style={{ position: "absolute", bottom: 3, right: 3, background: "rgba(255,255,255,0.92)", borderRadius: 10, width: 22, height: 22, lineHeight: "22px", textAlign: "center", fontSize: 12, cursor: "zoom-in", boxShadow: "0 1px 3px rgba(0,0,0,0.3)" }}
+                  >🔍</div>
+                )}
               </div>
               <div style={{ fontSize: 11.5, marginTop: 4, fontWeight: selected ? 700 : 400 }}>{c.color_name}</div>
             </div>
           );
         })}
       </div>
+      {big && (
+        <>
+          <Lightbox src={big.swatch_url} onClose={() => setBig(null)} />
+          <div style={{ position: "fixed", top: 18, left: 0, right: 0, textAlign: "center", color: "#fff", fontSize: 16, fontWeight: 700, zIndex: 1001, pointerEvents: "none" }}>{big.color_name}</div>
+        </>
+      )}
     </div>
   );
 }
