@@ -321,7 +321,7 @@ function Lightbox({ src, alt, onClose }) {
   );
 }
 
-function ConfirmDialog({ title, children, confirmLabel, cancelLabel, busy, onConfirm, onCancel }) {
+function ConfirmDialog({ title, children, confirmLabel, cancelLabel, busy, confirmDisabled, onConfirm, onCancel }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div style={{ background: "#fff", borderRadius: 8, padding: 24, maxWidth: 460, width: "100%", boxShadow: "0 12px 40px rgba(0,0,0,0.3)" }}>
@@ -329,7 +329,7 @@ function ConfirmDialog({ title, children, confirmLabel, cancelLabel, busy, onCon
         <div style={{ fontSize: 14, color: "#3a3a3a", marginBottom: 20, lineHeight: 1.5 }}>{children}</div>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <button onClick={onCancel} disabled={busy} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 22px", fontSize: 14, fontWeight: 700 }}>{cancelLabel || "No"}</button>
-          <button onClick={onConfirm} disabled={busy} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontSize: 14, fontWeight: 700, opacity: busy ? 0.6 : 1 }}>{busy ? "Saving…" : (confirmLabel || "Yes")}</button>
+          <button onClick={onConfirm} disabled={busy || confirmDisabled} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontSize: 14, fontWeight: 700, opacity: (busy || confirmDisabled) ? 0.4 : 1 }}>{busy ? "Saving…" : (confirmLabel || "Yes")}</button>
         </div>
       </div>
     </div>
@@ -1248,7 +1248,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       job_order_no: jobNo, name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model,
       item: ITEM_TYPES[0], prepared_by: session.name, branch,
       measurements: row.calculated && Object.keys(row.calculated).length ? calcToStrings(row.calculated) : suggestionMeasurements(row.profile.measurements, row.deltas),
-      cut: row.cut || null,
+      cut: row.cut || null, delivery_date: row.deliveryDate || null,
       abaya_option: row.abayaOption || "Normal", button_from: row.buttonFrom || null, button_till: row.buttonTill || null,
       additional_requirements: row.additionalRequirements || null, attachments: row.attachments || [],
       color: row.color || null, color_swatch: row.colorSwatch || null,
@@ -1336,6 +1336,7 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
     deliveryDate: "", comments: "",
   });
   const [file, setFile] = useState(null);
+  const [dateError, setDateError] = useState(false);
   const [modelSizes, setModelSizes] = useState([]);
   const [pickedCut, setPickedCut] = useState("");
   const [pickedSize, setPickedSize] = useState("");
@@ -1489,7 +1490,12 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-        <Field label="Delivery Date"><input type="date" style={inputStyle} value={form.deliveryDate} onChange={set("deliveryDate")} disabled={readOnly} /></Field>
+        <Field label={readOnly ? "Delivery Date" : "Delivery Date *"}>
+          <input type="date" value={form.deliveryDate} disabled={readOnly}
+            onChange={(e) => { setForm((f) => ({ ...f, deliveryDate: e.target.value })); setDateError(false); }}
+            style={{ ...inputStyle, borderColor: dateError ? "#C1302B" : undefined, borderWidth: dateError ? 2 : undefined }} />
+          {dateError && <div style={{ color: "#C1302B", fontSize: 12, marginTop: 4 }}>Please choose a delivery date.</div>}
+        </Field>
         <Field label="Attachment (photo/video reference)">
           {isEdit && initialOrder.attachmentUrl ? (
             <div style={{ fontSize: 12.5 }}>Current file: <a className="link" href={initialOrder.attachmentUrl} target="_blank" rel="noreferrer">View</a>{!readOnly && " — choose a new file below to replace it."}</div>
@@ -1502,7 +1508,7 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
       <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 20 }}>
         <button onClick={() => window.print()} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>PRINT / SAVE PDF</button>
         {!readOnly && (
-          <button disabled={!valid} onClick={() => onSubmit(form, file)} style={{ background: valid ? (isEdit ? "#2F8F46" : "#3B6FA0") : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>{isEdit ? "Save Changes" : "SUBMIT"}</button>
+          <button disabled={!valid} onClick={() => { if (!form.deliveryDate) { setDateError(true); return; } onSubmit(form, file); }} style={{ background: valid ? (isEdit ? "#2F8F46" : "#3B6FA0") : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>{isEdit ? "Save Changes" : "SUBMIT"}</button>
         )}
         <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>{readOnly ? "CLOSE" : "CANCEL"}</button>
       </div>
@@ -1784,6 +1790,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const [pickModel, setPickModel] = useState("");
   const [deliveryDate, setDeliveryDate] = useState("");
   const [signed, setSigned] = useState(false);
+  const [dateError, setDateError] = useState(false);
   const [confirm, setConfirm] = useState(null);   // { createOrders, exists }
   const [busy, setBusy] = useState(false);
   const savingRef = React.useRef(false);
@@ -1884,10 +1891,10 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   // Validate, then ask. Nothing is saved until the pop-up is confirmed.
   const requestSave = async (createOrders) => {
     const missingColor = items.filter((it) => !it.error && it.colors && it.colors.length > 0 && !it.color);
-    if (createOrders && missingColor.length > 0) {
-      setFormMsg(`Please choose a colour for: ${missingColor.map((m) => m.model).join(", ")}`);
-      return;
-    }
+    const problems = [];
+    if (createOrders && missingColor.length > 0) problems.push(`Please choose a colour for: ${missingColor.map((m) => m.model).join(", ")}`);
+    if (createOrders && !deliveryDate) { setDateError(true); problems.push("Please choose a delivery date."); }
+    if (problems.length > 0) { setFormMsg(problems.join(" ")); return; }
     setFormMsg("");
     // Same lookup the save itself uses (handleSaveRequirement), so the pop-up can't say "new" while updating.
     const { data: ex } = await supabase.from("customer_profiles").select("id").eq("mobile", customer.mobile).limit(1);
@@ -2096,7 +2103,12 @@ function RequirementForm({ config, session, onCancel, onSave }) {
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
 
       <div style={{ marginTop: 16, maxWidth: 260 }}>
-        <Field label="Delivery Date"><input type="date" style={inputStyle} value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} /></Field>
+        <Field label="Delivery Date *">
+          <input type="date" value={deliveryDate}
+            onChange={(e) => { setDeliveryDate(e.target.value); setDateError(false); setFormMsg(""); }}
+            style={{ ...inputStyle, width: 220, borderColor: dateError ? "#C1302B" : undefined, borderWidth: dateError ? 2 : undefined }} />
+        </Field>
+        {dateError && <div style={{ color: "#C1302B", fontSize: 12, marginTop: 4 }}>Delivery date is required to create a job order.</div>}
       </div>
 
       <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #E5E5E5" }}>
@@ -2143,6 +2155,8 @@ function RequirementForm({ config, session, onCancel, onSave }) {
 
 function RequirementsPage({ items, profiles, orders, canDelete, canCreateOrder, onCreateOrder, onDelete }) {
   const [selected, setSelected] = useState(null);
+  const [datePrompt, setDatePrompt] = useState(null);   // { row, date }
+  const askCreate = (row) => { if (row.deliveryDate) onCreateOrder(row); else setDatePrompt({ row, date: "" }); };
   const rows = items
     .map((it) => ({ ...it, profile: profiles.find((p) => p.id === it.profileId), order: orders.find((o) => o.id === it.jobOrderId) }))
     .filter((r) => r.profile);
@@ -2166,7 +2180,7 @@ function RequirementsPage({ items, profiles, orders, canDelete, canCreateOrder, 
                 <td style={{ padding: "9px 10px" }} className="mono">{r.order ? r.order.jobOrderNo : <span style={{ color: "#8a8a8a" }}>Not yet</span>}</td>
                 <td style={{ padding: "9px 10px", whiteSpace: "nowrap" }}>
                   <a className="link" onClick={() => setSelected(r)}>View</a>
-                  {!r.order && canCreateOrder && <a className="link" style={{ marginLeft: 10 }} onClick={() => onCreateOrder(r)}>Create Job Order</a>}
+                  {!r.order && canCreateOrder && <a className="link" style={{ marginLeft: 10 }} onClick={() => askCreate(r)}>Create Job Order</a>}
                   {canDelete && <a className="link" style={{ marginLeft: 10, color: "#C1302B" }} onClick={() => onDelete(r.id)}>Delete</a>}
                 </td>
               </tr>
@@ -2175,6 +2189,17 @@ function RequirementsPage({ items, profiles, orders, canDelete, canCreateOrder, 
         </table>
       )}
       {selected && <RequirementDetail row={selected} onClose={() => setSelected(null)} />}
+      {datePrompt && (
+        <ConfirmDialog
+          title="Delivery date needed" confirmLabel="Create job order"
+          confirmDisabled={!datePrompt.date}
+          onCancel={() => setDatePrompt(null)}
+          onConfirm={() => { onCreateOrder({ ...datePrompt.row, deliveryDate: datePrompt.date }); setDatePrompt(null); }}
+        >
+          <div style={{ marginBottom: 8 }}>This saved requirement has no delivery date. Choose one to create the job order.</div>
+          <input type="date" value={datePrompt.date} onChange={(e) => setDatePrompt((d) => ({ ...d, date: e.target.value }))} style={inputStyle} />
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
@@ -3894,7 +3919,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       job_order_no: jobNo, name: row.profile.name, mobile: row.profile.mobile, order_type: "New", model: row.model,
       item: ITEM_TYPES[0], prepared_by: session.name, branch,
       measurements: row.calculated && Object.keys(row.calculated).length ? calcToStrings(row.calculated) : suggestionMeasurements(row.profile.measurements, row.deltas),
-      cut: row.cut || null,
+      cut: row.cut || null, delivery_date: row.deliveryDate || null,
       abaya_option: row.abayaOption || "Normal", button_from: row.buttonFrom || null, button_till: row.buttonTill || null,
       additional_requirements: row.additionalRequirements || null, attachments: row.attachments || [],
       color: row.color || null, color_swatch: row.colorSwatch || null,
