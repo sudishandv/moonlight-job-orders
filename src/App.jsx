@@ -1317,7 +1317,13 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
   const [modelColors, setModelColors] = useState([]);
   useEffect(() => {
     if (!model) { setModelColors([]); return; }
-    supabase.from("model_colors").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setModelColors(data || []));
+    supabase.from("model_colors").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => {
+      const list = data || [];
+      setModelColors(list);
+      if (!isEdit && list.length > 0) {
+        setForm((f) => ({ ...f, color: list[0].color_name, colorSwatch: list[0].swatch_url || "" }));
+      }
+    });
   }, [model?.id]); // eslint-disable-line
 
   useEffect(() => {
@@ -1802,7 +1808,9 @@ function RequirementForm({ config, session, onCancel, onSave }) {
       model: pickModel, modelId: model.id, modelObj: model, photoUrl,
       customFields: model.customFields || [], cuts, cut: cuts[0] || null, notes: "", sizes: sizes || [], overrides: {},
       abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: "", attachments: [],
-      colors: colors || [], color: (colors || []).length === 1 ? colors[0].color_name : "", colorSwatch: (colors || []).length === 1 ? (colors[0].swatch_url || "") : "",
+      colors: colors || [],
+      color: (colors && colors[0] && colors[0].color_name) || "",
+      colorSwatch: (colors && colors[0] && colors[0].swatch_url) || "",
     }]);
     setPickModel("");
   };
