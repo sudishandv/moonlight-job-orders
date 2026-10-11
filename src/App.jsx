@@ -436,8 +436,18 @@ function AttachmentField({ files, onChange, disabled }) {
   );
 }
 
-async function notify(session, message, type) {
-  try { await supabase.from("notifications").insert({ message, type, created_by: session.name }); } catch (e) { /* non-critical, ignore */ }
+// `branch` limits which approved devices get the alert: omit it to use the signer's own branch, pass null for everyone.
+async function notify(session, message, type, branch) {
+  try {
+    const { data } = await supabase.from("notifications")
+      .insert({ message, type, created_by: session.name, branch: (branch !== undefined ? branch : session.branch) || null })
+      .select("id").single();
+    if (data) {
+      supabase.functions.invoke("push-service", {
+        body: { action: "notify", notification_id: data.id, exclude_device_token: localStorage.getItem(DEVICE_KEY) || undefined },
+      });   // fire and forget; the device that made the change is skipped
+    }
+  } catch (e) { /* non-critical, ignore */ }
 }
 
 function NotificationBell({ session, notifications, refreshNotifications }) {
@@ -485,7 +495,7 @@ function NotificationBell({ session, notifications, refreshNotifications }) {
   );
 }
 
-function DashboardMenu({ session, setSubpage, onLogout }) {
+function DashboardMenu({ session, setSubpage, onLogout, onLock }) {
   const [open, setOpen] = useState(false);
   const wrapperRef = React.useRef(null);
   const cards = ROLE_HOME_CARDS[session.role] || [];
@@ -518,10 +528,19 @@ function DashboardMenu({ session, setSubpage, onLogout }) {
           ))}
           <div style={{ borderTop: "1px solid #E5E5E5", margin: "4px 0" }} />
           {localStorage.getItem(DEVICE_KEY) && (
-            <div onClick={() => { setOpen(false); onLogout(); }} style={{ padding: "8px 10px", fontSize: 12.5, cursor: "pointer", borderRadius: 4 }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-              🔁 Switch user
-            </div>
+            <>
+              {session.role === "sales" && (
+                <div onClick={() => { setOpen(false); onLock && onLock(); }} style={{ padding: "8px 10px", fontSize: 12.5, cursor: "pointer", borderRadius: 4 }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>🔒 Lock now</div>
+              )}
+              <div onClick={async () => { setOpen(false); const r = await enableAlerts(); window.alert(r.ok ? "Lock-screen alerts are on for this device." : alertMsg(r.error)); }}
+                style={{ padding: "8px 10px", fontSize: 12.5, cursor: "pointer", borderRadius: 4 }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>🔔 Turn on lock-screen alerts</div>
+              <div onClick={() => { setOpen(false); onLogout(); }} style={{ padding: "8px 10px", fontSize: 12.5, cursor: "pointer", borderRadius: 4 }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+                🔁 Switch user
+              </div>
+            </>
           )}
           <div onClick={() => { setOpen(false); onLogout(); }} style={{ padding: "8px 10px", fontSize: 12.5, cursor: "pointer", borderRadius: 4, color: "#C1302B" }}
             onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
@@ -664,8 +683,15 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [toast, setToast] = useState(null);
   const [notifications, setNotifications] = useState([]);
+  const lastSeenNotifId = React.useRef(null);
 
-  const flash = (msg) => { setToast(msg); window.clearTimeout(flash._t); flash._t = window.setTimeout(() => setToast(null), 2400); };
+  const onTrustedDevice = !!localStorage.getItem(DEVICE_KEY);
+  const [locked, setLocked] = useState(() => !!localStorage.getItem(DEVICE_KEY) && localStorage.getItem("ml_locked") === "1");
+  const [idleMin, setIdleMin] = useState(() => parseInt(localStorage.getItem("ml_idle_min") || "2", 10));
+  const lock = useCallback(() => { localStorage.setItem("ml_locked", "1"); setLocked(true); }, []);
+  const unlock = useCallback(() => { localStorage.removeItem("ml_locked"); setLocked(false); }, []);
+
+  const flash =(msg) => { setToast(msg); window.clearTimeout(flash._t); flash._t = window.setTimeout(() => setToast(null), 2400); };
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
@@ -718,8 +744,11 @@ export default function App() {
 
   const loadNotifications = useCallback(async () => {
     const { data } = await supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(50);
+    const newest = data && data[0];
+    if (newest && lastSeenNotifId.current && newest.id !== lastSeenNotifId.current && newest.created_by !== profile?.name) playChime();
+    if (newest) lastSeenNotifId.current = newest.id;
     setNotifications(data || []);
-  }, []);
+  }, [profile?.name]);
 
   useEffect(() => {
     if (!profile) return;
@@ -728,15 +757,45 @@ export default function App() {
     return () => clearInterval(interval);
   }, [profile, loadNotifications]);
 
+  // Read this device's settings once signed in; register the service worker; keep the push subscription fresh.
+  useEffect(() => {
+    const token = localStorage.getItem(DEVICE_KEY);
+    if (!profile || !token) return;
+    pushService({ action: "info", device_token: token }).then(({ data, error }) => {
+      if (error === "untrusted_device") { localStorage.removeItem(DEVICE_KEY); return; }
+      if (data) { setIdleMin(data.idle_minutes); localStorage.setItem("ml_idle_min", String(data.idle_minutes)); }
+    });
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+    if ("Notification" in window && Notification.permission === "granted" && !(isIOS() && !isStandalone())) enableAlerts();
+  }, [profile?.id]); // eslint-disable-line
+
+  useEffect(() => { const h = () => unlockAudio(); window.addEventListener("pointerdown", h); return () => window.removeEventListener("pointerdown", h); }, []);
+
+  // Only Sales auto-locks (they unlock with a PIN); Production, Admin and Model Manager never lock.
+  useIdleLock(!!profile && onTrustedDevice && !locked && idleMin > 0 && profile.role === "sales", idleMin, lock);
+
+  // A non-Sales user can never be stuck behind a lock flag left over on the device.
+  useEffect(() => {
+    if (profile && profile.role !== "sales" && localStorage.getItem("ml_locked") === "1") { localStorage.removeItem("ml_locked"); setLocked(false); }
+  }, [profile?.role]); // eslint-disable-line
+
+  // The lock screen is an overlay on top of the app, so the form underneath keeps its state.
+  const withLock = (node) => (
+    <>
+      {node}
+      {profile && locked && onTrustedDevice && profile.role === "sales" && <LockScreen profile={profile} onUnlock={unlock} />}
+    </>
+  );
+
   if (session === undefined) return <Loading text="Loading…" />;
   if (!session) return <LoginGate />;
   if (profile === null) return <NoProfileScreen onSignOut={() => supabase.auth.signOut()} />;
-  if (!config || !orders || !profiles || !requirementItems || !projects || !projectCollaborators || !allUsers || !projectTasks || !projectModels) return <Loading text="Loading job orders…" />;
+  if (!config || !orders || !profiles || !requirementItems || !projects || !projectCollaborators || !allUsers || !projectTasks || !projectModels) return withLock(<Loading text="Loading job orders…" />);
 
   const refresh = loadAll;
 
-  return (
-    <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()} notifications={notifications} refreshNotifications={loadNotifications}>
+  return withLock(
+    <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()} onLock={lock} notifications={notifications} refreshNotifications={loadNotifications}>
       {subpage === "home" && <HomePage session={profile} setSubpage={setSubpage} />}
       {subpage === "projects" && (
         PROJECTS_ENABLED
@@ -805,7 +864,7 @@ function GlobalStyle() {
   );
 }
 
-function Shell({ session, subpage, setSubpage, onLogout, children, notifications, refreshNotifications }) {
+function Shell({ session, subpage, setSubpage, onLogout, onLock, children, notifications, refreshNotifications }) {
   const adminTabs = [
     ["records", "ALL RECORDS"], ["requirements", "ALL REQUIREMENTS"], ["branches", "ADD/REMOVE BRANCH"],
     ["models", "ADD MODEL"], ["viewmodels", "VIEW MODELS"], ["users", "ADD USERS"],
@@ -820,7 +879,7 @@ function Shell({ session, subpage, setSubpage, onLogout, children, notifications
         </div>
         <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.03em", display: "flex", gap: 14, alignItems: "center" }}>
           <span><span style={{ color: "#8a8a8a" }}>{session.name} ·</span> {ROLE_LABEL[session.role].toUpperCase()}</span>
-          <DashboardMenu session={session} setSubpage={setSubpage} onLogout={onLogout} />
+          <DashboardMenu session={session} setSubpage={setSubpage} onLogout={onLogout} onLock={onLock} />
           <NotificationBell session={session} notifications={notifications} refreshNotifications={refreshNotifications} />
         </div>
       </div>
@@ -1052,8 +1111,8 @@ const sha256Hex = async (s) => {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 };
-async function pinAuth(body) {
-  const { data, error } = await supabase.functions.invoke("pin-auth", { body });
+async function callFn(name, body) {
+  const { data, error } = await supabase.functions.invoke(name, { body });
   if (error) {
     let detail = {};
     try { detail = await error.context.json(); } catch (e) { /* no body */ }
@@ -1061,8 +1120,79 @@ async function pinAuth(body) {
   }
   return { data };
 }
+const pinAuth = (body) => callFn("pin-auth", body);
+const pushService = (body) => callFn("push-service", body);
 
-function PinLogin({ onFallback }) {
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+const urlBase64ToUint8Array = (b64) => {
+  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+};
+
+// "needs_install" | "unsupported" | "denied" | "off" | "on"
+async function alertsStatus() {
+  if (isIOS() && !isStandalone()) return "needs_install";
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return "unsupported";
+  if (Notification.permission === "denied") return "denied";
+  const reg = await navigator.serviceWorker.getRegistration();
+  const sub = reg ? await reg.pushManager.getSubscription() : null;
+  return sub && Notification.permission === "granted" ? "on" : "off";
+}
+async function enableAlerts() {
+  const token = localStorage.getItem(DEVICE_KEY);
+  if (!token) return { error: "not_trusted" };
+  if (isIOS() && !isStandalone()) return { error: "needs_install" };
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return { error: "unsupported" };
+  const perm = await Notification.requestPermission();      // must be called from a tap
+  if (perm !== "granted") return { error: "denied" };
+  const reg = await navigator.serviceWorker.register("/sw.js");
+  await navigator.serviceWorker.ready;
+  const info = await pushService({ action: "info", device_token: token });
+  if (info.error) return { error: info.error };
+  const sub = (await reg.pushManager.getSubscription()) ||
+    (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(info.data.vapid_public) }));
+  const saved = await pushService({ action: "subscribe", device_token: token, subscription: sub.toJSON() });
+  return saved.error ? { error: saved.error } : { ok: true };
+}
+const alertMsg = (e) => ({
+  needs_install: "On iPad: tap Share → Add to Home Screen, then open Moonlight from the Home Screen and try again.",
+  denied: "Alerts are blocked. Turn them on in iPad Settings → Notifications → Moonlight.",
+  unsupported: "This browser can't show lock-screen alerts. On iPad, update to iPadOS 16.4 or newer.",
+  not_trusted: "Only devices approved by an Admin can use alerts.",
+}[e] || "Couldn't turn on alerts. Please try again.");
+
+// Sound: browsers only allow it after one tap on the page.
+let audioCtx = null;
+const unlockAudio = () => { try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.state === "suspended") audioCtx.resume(); } catch (e) { /* ignore */ } };
+const playChime = () => {
+  if (!audioCtx || audioCtx.state !== "running") return;
+  [880, 1175].forEach((freq, i) => {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t0 = audioCtx.currentTime + i * 0.18;
+    o.type = "sine"; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.5);
+    o.connect(g); g.connect(audioCtx.destination); o.start(t0); o.stop(t0 + 0.55);
+  });
+};
+
+function useIdleLock(enabled, minutes, onLock) {
+  useEffect(() => {
+    if (!enabled) return;
+    let timer;
+    let last = Date.now();
+    const arm = () => { clearTimeout(timer); timer = setTimeout(onLock, minutes * 60000); };
+    const activity = () => { last = Date.now(); arm(); };
+    const onVisible = () => { if (document.visibilityState === "visible" && Date.now() - last >= minutes * 60000) onLock(); };
+    const evs = ["pointerdown", "keydown", "touchstart", "scroll", "mousemove"];
+    evs.forEach((e) => window.addEventListener(e, activity, { passive: true }));
+    document.addEventListener("visibilitychange", onVisible);   // iPads freeze timers while asleep
+    arm();
+    return () => { clearTimeout(timer); evs.forEach((e) => window.removeEventListener(e, activity)); document.removeEventListener("visibilitychange", onVisible); };
+  }, [enabled, minutes, onLock]);
+}
+
+function PinLogin({ onFallback, embedded, previousUser, onSuccess }) {
   const [users, setUsers] = useState(null);
   const [deviceLabel, setDeviceLabel] = useState("");
   const [picked, setPicked] = useState(null);
@@ -1091,10 +1221,14 @@ function PinLogin({ onFallback }) {
       else setMsg("Couldn't sign in. Try again, or use email & password.");
       setBusy(false); return;
     }
+    if (previousUser && picked.id === previousUser.id) {      // same person unlocking: keep the existing session — nothing to reload
+      setBusy(false); onSuccess && onSuccess(picked.id); return;
+    }
     let { error: vErr } = await supabase.auth.verifyOtp({ token_hash: data.token_hash, type: "magiclink" });
     if (vErr) ({ error: vErr } = await supabase.auth.verifyOtp({ token_hash: data.token_hash, type: "email" }));
-    if (vErr) { setMsg("Couldn't sign in. Try again."); setPin(""); }
+    if (vErr) { setMsg("Couldn't sign in. Try again."); setPin(""); setBusy(false); return; }
     setBusy(false);   // on success the app's auth listener takes over and this screen goes away
+    onSuccess && onSuccess(picked.id);
   };
 
   const press = (d) => { if (busy || pin.length >= 6) return; const next = pin + d; setPin(next); if (next.length === 6) submit(next); };
@@ -1111,13 +1245,17 @@ function PinLogin({ onFallback }) {
   const keyStyle = { width: 78, height: 78, borderRadius: 39, border: "1px solid #C9CDD3", background: "#fff", fontSize: 26, fontWeight: 600, cursor: "pointer" };
 
   return (
-    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, background: "#fff", fontFamily: F.body }}>
+    <div style={{ minHeight: embedded ? "100%" : "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, background: "#fff", fontFamily: F.body }}>
       <GlobalStyle />
-      <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 30, letterSpacing: "0.12em", textAlign: "center" }}>
-        MOONLIGHT
-        <div style={{ fontSize: 11, letterSpacing: "0.35em", fontWeight: 500, marginTop: -4 }}>CONCEPT</div>
-      </div>
-      <div style={{ fontSize: 13, color: "#8a8a8a", margin: "8px 0 28px" }}>{deviceLabel}</div>
+      {!embedded && (
+        <>
+          <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 30, letterSpacing: "0.12em", textAlign: "center" }}>
+            MOONLIGHT
+            <div style={{ fontSize: 11, letterSpacing: "0.35em", fontWeight: 500, marginTop: -4 }}>CONCEPT</div>
+          </div>
+          <div style={{ fontSize: 13, color: "#8a8a8a", margin: "8px 0 28px" }}>{deviceLabel}</div>
+        </>
+      )}
 
       {users === null ? <div style={{ color: "#8a8a8a" }}>Loading…</div> : !picked ? (
         <>
@@ -1142,6 +1280,11 @@ function PinLogin({ onFallback }) {
         <>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>{picked.name}</div>
           <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 18 }}>Enter your 6-digit PIN</div>
+          {previousUser && picked.id !== previousUser.id && (
+            <div style={{ fontSize: 12, color: "#C1302B", maxWidth: 300, textAlign: "center", marginBottom: 10 }}>
+              Not {previousUser.name}? Anything {previousUser.name} hadn't saved on this screen will be discarded.
+            </div>
+          )}
           <div style={{ display: "flex", gap: 14, marginBottom: 12 }}>
             {[0, 1, 2, 3, 4, 5].map((i) => <div key={i} style={{ width: 16, height: 16, borderRadius: 8, border: "2px solid #1A1A1A", background: i < pin.length ? "#1A1A1A" : "#fff" }} />)}
           </div>
@@ -1155,7 +1298,7 @@ function PinLogin({ onFallback }) {
           <a className="link" style={{ marginTop: 22, fontSize: 13 }} onClick={() => { setPicked(null); setPin(""); setMsg(""); }}>← Not you? Choose another name</a>
         </>
       )}
-      <a className="link" style={{ marginTop: 26, fontSize: 12.5, color: "#8a8a8a" }} onClick={onFallback}>Use email & password instead</a>
+      <a className="link" style={{ marginTop: 26, fontSize: 12.5, color: "#8a8a8a" }} onClick={onFallback}>{embedded ? "Sign out and use email & password" : "Use email & password instead"}</a>
     </div>
   );
 }
@@ -1164,6 +1307,71 @@ function LoginGate() {
   const [mode, setMode] = useState(localStorage.getItem(DEVICE_KEY) ? "pin" : "password");
   if (mode === "pin") return <PinLogin onFallback={() => setMode("password")} />;
   return <LoginScreen onUsePin={localStorage.getItem(DEVICE_KEY) ? () => setMode("pin") : null} />;
+}
+
+function LockScreen({ profile, onUnlock }) {
+  const [now, setNow] = useState(new Date());
+  const [feed, setFeed] = useState([]);
+  const [alerts, setAlerts] = useState("off");
+  const [note, setNote] = useState("");
+  const [label, setLabel] = useState("");
+  const seen = React.useRef(null);
+  const token = localStorage.getItem(DEVICE_KEY);
+
+  const loadFeed = async () => {
+    const { data } = await pushService({ action: "feed", device_token: token });
+    if (!data) return;
+    if (seen.current && data.items.some((i) => !seen.current.has(i.id))) playChime();
+    seen.current = new Set(data.items.map((i) => i.id));
+    setFeed(data.items);
+  };
+  useEffect(() => {
+    loadFeed(); alertsStatus().then(setAlerts);
+    pushService({ action: "info", device_token: token }).then(({ data }) => data && setLabel(data.label));
+    const clock = setInterval(() => setNow(new Date()), 15000);
+    const poll = setInterval(loadFeed, 15000);
+    const onMsg = (e) => { if (e.data && e.data.type === "push") loadFeed(); };   // a push just arrived — refresh straight away
+    if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", onMsg);
+    return () => { clearInterval(clock); clearInterval(poll); if (navigator.serviceWorker) navigator.serviceWorker.removeEventListener("message", onMsg); };
+  }, []); // eslint-disable-line
+
+  const turnOn = async () => { const r = await enableAlerts(); setAlerts(await alertsStatus()); setNote(r.error ? alertMsg(r.error) : ""); };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "#fff", overflowY: "auto", display: "flex", flexWrap: "wrap" }}>
+      <div style={{ flex: "1 1 380px", minWidth: 300, padding: "36px 32px", borderRight: "1px solid #E5E5E5" }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 64, lineHeight: 1 }}>{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+        <div style={{ fontSize: 15, color: "#5a5a5a", marginTop: 6 }}>{now.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" })}</div>
+        <div style={{ fontSize: 12.5, color: "#8a8a8a", marginTop: 2 }}>🔒 Locked · {label}</div>
+
+        <div style={{ margin: "22px 0 8px", fontWeight: 700, fontSize: 13, letterSpacing: "0.05em" }}>RECENT ACTIVITY</div>
+        <div style={{ maxHeight: "48vh", overflowY: "auto" }}>
+          {feed.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>Nothing yet.</div> : feed.map((n) => (
+            <div key={n.id} style={{ padding: "9px 0", borderBottom: "1px solid #F0F0F0" }}>
+              <div style={{ fontSize: 13.5 }}>{n.message}</div>
+              <div className="mono" style={{ fontSize: 11, color: "#8a8a8a", marginTop: 2 }}>{fmtDateTime(n.created_at)}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 18, fontSize: 12.5 }}>
+          {alerts === "on" && <span style={{ color: "#2F8F46" }}>🔔 Lock-screen alerts are on</span>}
+          {alerts === "off" && <button onClick={turnOn} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12.5, fontWeight: 700 }}>🔔 Turn on lock-screen alerts</button>}
+          {(alerts === "needs_install" || alerts === "denied" || alerts === "unsupported") && <span style={{ color: "#8a8a8a" }}>{alertMsg(alerts)}</span>}
+          {note && <div style={{ color: "#C1302B", marginTop: 6 }}>{note}</div>}
+          <div style={{ color: "#8a8a8a", marginTop: 8 }}>Tap anywhere once to enable the activity chime.</div>
+        </div>
+      </div>
+
+      <div style={{ flex: "1 1 420px", minWidth: 320 }}>
+        <PinLogin
+          embedded previousUser={profile}
+          onSuccess={(userId) => { if (userId === profile.id) onUnlock(); else { localStorage.removeItem("ml_locked"); window.location.reload(); } }}
+          onFallback={() => { onUnlock(); supabase.auth.signOut(); }}
+        />
+      </div>
+    </div>
+  );
 }
 
 /* ---------------- Records table (shared) ---------------- */
@@ -1270,7 +1478,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     };
     const { data, error } = await supabase.from("job_orders").insert(row).select().single();
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} created job order ${jobNo}`, "job_order");
+    notify(session, `${session.name} created job order ${jobNo}`, "job_order", row.branch);
     await refresh();
     setSubpage("records");
     setSelectedId(data.id);
@@ -1302,12 +1510,15 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       history, updated_at: now,
     }).eq("id", editingOrderId);
     if (error) { flash("Error: " + error.message); return; }
+    notify(session, `${session.name} edited order ${before?.jobOrderNo || ""} (${form.name}): ${changed.length ? changed.join(", ") : "no field changes"}`, "edit", form.branch || before?.branch);
     await refresh(); setSubpage("records"); setSelectedId(editingOrderId); flash("Job order updated");
   };
 
   const handleSaveFields = async (id, fields) => {
     const { error } = await supabase.from("job_orders").update({ ...orderFieldsToDb(fields), updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
+    const o = orders.find((x) => x.id === id);
+    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.name})`, "edit", o.branch);
     await refresh(); flash("Changes saved");
   };
 
@@ -1354,7 +1565,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
         }).select().single();
         jobOrderId = order?.id || null;
         lastOrderId = jobOrderId;
-        if (order) notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a requirement`, "job_order");
+        if (order) notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a requirement`, "job_order", branch);
       }
       await supabase.from("requirement_items").insert({
         profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: {}, calculated: it.calc || {}, cut: it.cut || null,
@@ -1367,7 +1578,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     await refresh();
     if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
     else if (createOrders) { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
-    else { flash(existing && existing.length > 0 ? "Profile updated" : "Profile created"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
+    else { const exists = existing && existing.length > 0; flash(exists ? "Profile updated" : "Profile created"); notify(session, `${session.name} ${exists ? "updated" : "created"} the profile of ${customer.name}`, "profile"); }
     return true;
   };
 
@@ -1388,21 +1599,22 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order");
+    notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order", branch);
     await supabase.from("requirement_items").update({ job_order_id: order.id }).eq("id", row.id);
     await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created");
   };
 
-  const runHistoryUpdate = async (id, status, note) => {
+  const runHistoryUpdate = async (id, status, note, comment) => {
     const current = orders.find((o) => o.id === id);
     const history = [...current.history, { note, by: session.name, at: new Date().toISOString() }];
     const { error } = await supabase.from("job_orders").update({ status, history, updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
+    notify(session, `${session.name}: ${STATUS[status].label} — order ${current.jobOrderNo} (${current.name})${comment ? " — " + comment : ""}`, "status", current.branch);
     await refresh(); flash(STATUS[status].label);
   };
 
-  const handleAction = (id, to, comment) => runHistoryUpdate(id, to, comment ? `${STATUS[to].label}: ${comment}` : STATUS[to].label);
-  const handleResubmit = (id) => runHistoryUpdate(id, "job_created", "Resubmitted to Production");
+  const handleAction = (id, to, comment) => runHistoryUpdate(id, to, comment ? `${STATUS[to].label}: ${comment}` : STATUS[to].label, comment);
+  const handleResubmit = (id) => runHistoryUpdate(id, "job_created", "Resubmitted to Production", "resubmitted to Production");
 
   if (subpage === "new") return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
   if (subpage === "editOrder") {
@@ -2768,6 +2980,7 @@ function PinsPage({ users, branches, session }) {
   const [myHash, setMyHash] = useState("");
   const [staffDialog, setStaffDialog] = useState(null);   // { device, selected }
   const [newStaff, setNewStaff] = useState([]);            // list chosen while approving a new device
+  const [subCounts, setSubCounts] = useState({});         // lock-screen alert subscriptions per device
 
   const load = async () => {
     const st = await pinAuth({ action: "pin-status" });
@@ -2776,6 +2989,8 @@ function PinsPage({ users, branches, session }) {
     setDevices(d || []);
     const { data: l } = await supabase.from("pin_login_log").select("*").order("created_at", { ascending: false }).limit(20);
     setLog(l || []);
+    const { data: subs } = await supabase.from("push_subscriptions").select("device_id");
+    setSubCounts((subs || []).reduce((m, x) => ({ ...m, [x.device_id]: (m[x.device_id] || 0) + 1 }), {}));
   };
   useEffect(() => {
     load();
@@ -2864,7 +3079,7 @@ function PinsPage({ users, branches, session }) {
         <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 12 }}>PIN login only works on devices approved here. Log in on the showroom iPad with an admin password, approve it, then log out. If you pick a branch, only that branch's salespeople show on its screen.</div>
         {devices.length > 0 && (
           <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 14 }}>
-            <thead><tr><th style={th}>Device</th><th style={th}>Branch</th><th style={th}>Staff on this device</th><th style={th}>Approved</th><th style={th}>Last used</th><th style={th}></th></tr></thead>
+            <thead><tr><th style={th}>Device</th><th style={th}>Branch</th><th style={th}>Staff on this device</th><th style={th}>Auto-lock</th><th style={th}>Alerts</th><th style={th}>Approved</th><th style={th}>Last used</th><th style={th}></th></tr></thead>
             <tbody>
               {devices.map((d) => (
                 <tr key={d.id}>
@@ -2875,6 +3090,17 @@ function PinsPage({ users, branches, session }) {
                       ? d.allowed_user_ids.map((id) => (users.find((u) => u.id === id) || {}).name).filter(Boolean).join(", ")
                       : <span style={{ color: "#8a8a8a" }}>Everyone (by branch rule)</span>}
                   </td>
+                  <td style={td}>
+                    <select value={d.idle_minutes ?? 2} style={{ ...inputStyle, width: 90, padding: "3px 6px" }}
+                      onChange={async (e) => {
+                        const { error } = await supabase.from("trusted_devices").update({ idle_minutes: parseInt(e.target.value, 10) }).eq("id", d.id);
+                        if (error) setMsg("Couldn't change auto-lock: " + error.message);
+                        load();
+                      }}>
+                      <option value={0}>Off</option><option value={1}>1 min</option><option value={2}>2 min</option><option value={3}>3 min</option><option value={5}>5 min</option><option value={10}>10 min</option>
+                    </select>
+                  </td>
+                  <td style={{ ...td, color: subCounts[d.id] ? "#2F8F46" : "#8a8a8a", fontWeight: 600 }}>{subCounts[d.id] ? "On" : "Off"}</td>
                   <td style={td}>{fmtDate(d.created_at)}</td><td style={td}>{d.last_used_at ? fmtDateTime(d.last_used_at) : "—"}</td>
                   <td style={td}>
                     <a className="link" style={{ marginRight: 14 }} onClick={() => setStaffDialog({ device: d, selected: d.allowed_user_ids || [] })}>Choose staff</a>
@@ -2886,7 +3112,11 @@ function PinsPage({ users, branches, session }) {
           </table>
         )}
         {myDeviceApproved ? (
-          <div style={{ fontSize: 13, color: "#2F8F46" }}>✓ This device is approved.</div>
+          <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: "#2F8F46" }}>✓ This device is approved.</span>
+            <button onClick={async () => { const r = await enableAlerts(); setMsg(r.ok ? "Lock-screen alerts are on for this device." : alertMsg(r.error)); load(); }}
+              style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12.5, fontWeight: 700 }}>🔔 Turn on lock-screen alerts</button>
+          </div>
         ) : (
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
             <div><div style={label13}>Name this device</div><input value={label} onChange={(e) => setLabel(e.target.value)} placeholder='e.g. "Al Waab iPad"' style={{ ...inputStyle, width: 220 }} /></div>
@@ -3436,6 +3666,7 @@ function CustomerDetail({ mobile, profiles, orders, session, refresh, onClose })
         branch: session.branch || (session.role === "admin" ? "Admin" : ""), created_by: session.name,
       });
     }
+    notify(session, `${session.name} updated ${form.name}'s fitted measurement`, "profile");
     setSaving(false);
     setEditing(false);
     await refresh();
@@ -3657,6 +3888,8 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
   const handleSaveFields = async (id, fields) => {
     const { error } = await supabase.from("job_orders").update({ ...orderFieldsToDb(fields), updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
+    const o = orders.find((x) => x.id === id);
+    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.name})`, "edit", o.branch);
     await refresh(); flash("Changes saved");
   };
   const handleAction = async (id, to, comment) => {
@@ -3665,6 +3898,7 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
     const history = [...current.history, { note, by: session.name, at: new Date().toISOString() }];
     const { error } = await supabase.from("job_orders").update({ status: to, history, updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
+    notify(session, `${session.name}: ${STATUS[to].label} — order ${current.jobOrderNo} (${current.name})${comment ? " — " + comment : ""}`, "status", current.branch);
     await refresh(); flash(STATUS[to].label);
   };
 
@@ -3733,6 +3967,7 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
     }).eq("id", model.id);
     setSavingCore(false);
     if (error) { flash("Error: " + error.message); return; }
+    notify(session, `${session.name} updated model ${model.modelNo}`, "model", null);
     setEditingModel(false);
     loadReadOnlyData();
     await refresh();
@@ -3756,6 +3991,7 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
 
   const removeModel = async () => {
     await supabase.from("models").delete().eq("id", model.id);
+    notify(session, `${session.name} deleted model ${model.modelNo}`, "model", null);
     await refresh();
     onBack();
   };
@@ -4126,17 +4362,24 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
   const selected = orders.find((o) => o.id === selectedId);
 
   const handleDeleteOrder = async (id) => {
+    const o = orders.find((x) => x.id === id);
     const { error } = await supabase.from("job_orders").delete().eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
+    if (o) notify(session, `${session.name} deleted order ${o.jobOrderNo} (${o.name})`, "delete", o.branch);
     setSelectedId(null); await refresh(); flash("Record deleted");
   };
   const handleDeleteRequirement = async (id) => {
+    const it = requirementItems.find((r) => r.id === id);
+    const cust = it && profiles.find((p) => p.id === it.profileId);
     await supabase.from("requirement_items").delete().eq("id", id);
+    notify(session, `${session.name} deleted a requirement for ${cust ? cust.name : "a customer"}`, "delete");
     await refresh(); flash("Requirement deleted");
   };
   const handleSaveFields = async (id, fields) => {
     const { error } = await supabase.from("job_orders").update({ ...orderFieldsToDb(fields), updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
+    const o = orders.find((x) => x.id === id);
+    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.name})`, "edit", o.branch);
     await refresh(); flash("Changes saved");
   };
 
@@ -4165,7 +4408,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     };
     const { data, error } = await supabase.from("job_orders").insert(row).select().single();
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} created job order ${jobNo}`, "job_order");
+    notify(session, `${session.name} created job order ${jobNo}`, "job_order", row.branch);
     await refresh();
     setSubpage("records");
     setSelectedId(data.id);
@@ -4197,6 +4440,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       history, updated_at: now,
     }).eq("id", editingOrderId);
     if (error) { flash("Error: " + error.message); return; }
+    notify(session, `${session.name} edited order ${before?.jobOrderNo || ""} (${form.name}): ${changed.length ? changed.join(", ") : "no field changes"}`, "edit", form.branch || before?.branch);
     await refresh(); setSubpage("records"); setSelectedId(editingOrderId); flash("Job order updated");
   };
 
@@ -4243,7 +4487,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
         }).select().single();
         jobOrderId = order?.id || null;
         lastOrderId = jobOrderId;
-        if (order) notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a requirement`, "job_order");
+        if (order) notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a requirement`, "job_order", branch);
       }
       await supabase.from("requirement_items").insert({
         profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: {}, calculated: it.calc || {}, cut: it.cut || null,
@@ -4256,7 +4500,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     await refresh();
     if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
     else if (createOrders) { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
-    else { flash(existing && existing.length > 0 ? "Profile updated" : "Profile created"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
+    else { const exists = existing && existing.length > 0; flash(exists ? "Profile updated" : "Profile created"); notify(session, `${session.name} ${exists ? "updated" : "created"} the profile of ${customer.name}`, "profile"); }
     return true;
   };
 
@@ -4277,7 +4521,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order");
+    notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order", branch);
     await supabase.from("requirement_items").update({ job_order_id: order.id }).eq("id", row.id);
     await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created");
   };
@@ -5170,7 +5414,12 @@ function ManageModels({ config, refresh, flash, session }) {
     flash("Model created" + (pendingColors.length || pendingSizes.length || Object.keys(photoFiles).length ? " with photos, colors, and sizes" : ""));
   };
 
-  const remove = async (id) => { await supabase.from("models").delete().eq("id", id); await refresh(); };
+  const remove = async (id) => {
+    const m = config.models.find((x) => x.id === id);
+    await supabase.from("models").delete().eq("id", id);
+    if (m) notify(session, `${session.name} deleted model ${m.modelNo}`, "model", null);
+    await refresh();
+  };
 
   return (
     <div style={{ maxWidth: 1400, margin: "0 auto" }}>
