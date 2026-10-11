@@ -432,7 +432,7 @@ function FileButton({ onChange, label, accept }) {
   );
 }
 
-function ModelThumb({ model, size, style }) {
+function ModelThumb({ model, size, width, height, fit, style }) {
   const [url, setUrl] = useState(model?.photoUrl || null);
   useEffect(() => {
     if (model?.photoUrl) { setUrl(model.photoUrl); return; }
@@ -446,8 +446,8 @@ function ModelThumb({ model, size, style }) {
 
   const s = size || 70;
   return (
-    <div style={{ width: s, height: s, background: "#F2F2F2", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, ...style }}>
-      {url ? <img src={url} alt={model?.modelNo || ""} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 10, color: "#8a8a8a" }}>No photo</span>}
+    <div style={{ width: width || s, height: height || s, background: "#F2F2F2", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, ...style }}>
+      {url ? <img src={url} alt={model?.modelNo || ""} style={{ width: "100%", height: "100%", objectFit: fit || "cover" }} /> : <span style={{ fontSize: 10, color: "#8a8a8a" }}>No photo</span>}
     </div>
   );
 }
@@ -1640,8 +1640,13 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     if (!model) return;
     const { data: sizes } = await supabase.from("model_sizes").select("*").eq("model_id", model.id);
     const cuts = cutTagsOf(model);
+    let photoUrl = model.photoUrl;
+    if (!photoUrl) {
+      const { data: imgs } = await supabase.from("model_images").select("*").eq("model_id", model.id);
+      if (imgs && imgs.length) photoUrl = (imgs.find((d) => d.view_label === "Front") || imgs[0]).url;
+    }
     setItems((it) => [...it, {
-      model: pickModel, modelId: model.id, modelObj: model, photoUrl: model.photoUrl,
+      model: pickModel, modelId: model.id, modelObj: model, photoUrl,
       customFields: model.customFields || [], cuts, cut: cuts[0] || null, notes: "", sizes: sizes || [], overrides: {},
       abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: "",
     }]);
@@ -1769,11 +1774,13 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         const rowKeys = [...FITTING_FIELDS.map(([k]) => k), ...(it.customFields || []).map((c) => c.key)].filter((k) => view.calc[k] != null);
         return (
           <div key={idx} style={{ border: "1px solid #C9CDD3", borderRadius: 6, padding: 16, marginBottom: 14, display: "flex", gap: 22, alignItems: "flex-start", flexWrap: "wrap" }}>
-            <div style={{ width: 150, flexShrink: 0 }}>
+            <div style={{ flex: "0 0 300px", maxWidth: "100%" }}>
               <div onClick={() => it.photoUrl && setLightbox(it.photoUrl)} style={{ cursor: it.photoUrl ? "zoom-in" : "default" }}>
-                <ModelThumb model={{ id: it.modelId, photoUrl: it.photoUrl, modelNo: it.model }} size={150} />
+                <ModelThumb model={{ id: it.modelId, photoUrl: it.photoUrl, modelNo: it.model }} width={300} height={400} fit="contain" style={{ maxWidth: "100%" }} />
               </div>
-              <div style={{ fontWeight: 700, fontSize: 14, marginTop: 8, textAlign: "center" }}>{it.model}</div>
+              <div style={{ fontWeight: 700, fontSize: 16, marginTop: 10, textAlign: "center" }}>{it.model}</div>
+              {it.cut && <div style={{ fontSize: 13, color: "#5a5a5a", textAlign: "center" }}>{it.cut}</div>}
+              {it.photoUrl && <div className="no-print" style={{ fontSize: 11, color: "#8a8a8a", textAlign: "center", marginTop: 2 }}>Tap photo to enlarge</div>}
             </div>
 
             <div style={{ flex: 1, minWidth: 320 }}>
