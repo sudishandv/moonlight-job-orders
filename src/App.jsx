@@ -883,12 +883,12 @@ function Field({ label, children }) {
 const ABAYA_OPTIONS = ["Normal", "Full button with fabric", "Full button without fabric", "Half button", "Button start from and till"];
 const BUTTON_RANGE = "Button start from and till";
 
-function ColorPicker({ colors, value, onChange, disabled }) {
+function ColorPicker({ colors, value, onChange, disabled, center }) {
   if (!colors || colors.length === 0) return null;
   return (
     <div>
-      <div style={label13}>Colour {!value && !disabled && <span style={{ color: "#C1302B" }}>— please choose</span>}</div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+      <div style={{ ...label13, textAlign: center ? "center" : "left" }}>Colour {!value && !disabled && <span style={{ color: "#C1302B" }}>— please choose</span>}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: center ? "center" : "flex-start" }}>
         {colors.map((c) => {
           const selected = value === c.color_name;
           return (
@@ -1943,6 +1943,9 @@ function RequirementForm({ config, session, onCancel, onSave }) {
               <div style={{ fontWeight: 700, fontSize: 16, marginTop: 10, textAlign: "center" }}>{it.model}</div>
               {it.cut && <div style={{ fontSize: 13, color: "#5a5a5a", textAlign: "center" }}>{it.cut}</div>}
               {it.photoUrl && <div className="no-print" style={{ fontSize: 11, color: "#8a8a8a", textAlign: "center", marginTop: 2 }}>Tap photo to enlarge</div>}
+              <div style={{ marginTop: 14 }}>
+                <ColorPicker center colors={it.colors} value={it.color} onChange={(v) => setItemColor(idx, v)} />
+              </div>
             </div>
 
             <div style={{ flex: 1, minWidth: 320 }}>
@@ -1958,10 +1961,6 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                   <div style={{ fontSize: 12.5 }}><span style={{ color: "#8a8a8a" }}>Cut:</span> <strong>{it.cuts[0]}</strong></div>
                 ) : null}
                 <a className="link" style={{ color: "#C1302B" }} onClick={() => removeItem(idx)}>Remove</a>
-              </div>
-
-              <div style={{ marginBottom: 14 }}>
-                <ColorPicker colors={it.colors} value={it.color} onChange={(v) => setItemColor(idx, v)} />
               </div>
 
               {rowKeys.length === 0 ? (
