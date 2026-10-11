@@ -321,6 +321,105 @@ function Lightbox({ src, alt, onClose }) {
   );
 }
 
+function VideoViewer({ src, onClose }) {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ position: "relative" }}>
+        <video src={src} controls autoPlay playsInline style={{ maxWidth: "92vw", maxHeight: "85vh", background: "#000" }} />
+        <div onClick={onClose} style={{ position: "absolute", top: -34, right: 0, color: "#fff", fontSize: 26, cursor: "pointer" }}>×</div>
+      </div>
+    </div>
+  );
+}
+
+// Read-only gallery (view pages, print). Images open in the Lightbox, videos in the VideoViewer.
+function AttachmentGallery({ files }) {
+  const [img, setImg] = useState(null);
+  const [vid, setVid] = useState(null);
+  if (!files || files.length === 0) return <span style={{ fontSize: 13, color: "#8a8a8a" }}>None</span>;
+  return (
+    <>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+        {files.map((f, i) => (
+          <div key={i} className={f.type === "video" ? "no-print" : undefined} style={{ width: 96 }}>
+            {f.type === "video" ? (
+              <div onClick={() => setVid(f.url)} style={{ width: 96, height: 96, background: "#1A1A1A", color: "#fff", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 30 }}>▶</div>
+            ) : (
+              <img src={f.url} alt={f.name} onClick={() => setImg(f.url)} style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 4, cursor: "zoom-in", border: "1px solid #E5E5E5" }} />
+            )}
+            <div style={{ fontSize: 10.5, color: "#8a8a8a", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+          </div>
+        ))}
+      </div>
+      {img && <Lightbox src={img} onClose={() => setImg(null)} />}
+      {vid && <VideoViewer src={vid} onClose={() => setVid(null)} />}
+    </>
+  );
+}
+
+// Editable: pick photos/videos, they upload straight away and appear as thumbnails with a remove ×.
+function AttachmentField({ files, onChange, disabled }) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  const [img, setImg] = useState(null);
+  const [vid, setVid] = useState(null);
+  const [inputId] = useState(() => "att-" + Math.random().toString(36).slice(2));
+  const list = files || [];
+
+  const pick = async (e) => {
+    const chosen = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (chosen.length === 0) return;
+    setUploading(true); setError("");
+    const added = [];
+    for (const file of chosen) {
+      const isVideo = file.type.startsWith("video/");
+      const isImage = file.type.startsWith("image/");
+      if (!isVideo && !isImage) { setError(`"${file.name}" isn't a photo or video.`); continue; }
+      const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `order-files/${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${safe}`;
+      const { error: upErr } = await supabase.storage.from("attachments").upload(path, file, { contentType: file.type });
+      if (upErr) { setError(`Couldn't upload "${file.name}": ${upErr.message}`); continue; }
+      const { data } = supabase.storage.from("attachments").getPublicUrl(path);
+      added.push({ url: data.publicUrl, name: file.name, type: isVideo ? "video" : "image" });
+    }
+    setUploading(false);
+    if (added.length) onChange([...list, ...added]);
+  };
+  const remove = (i) => onChange(list.filter((_, j) => j !== i));
+
+  return (
+    <div>
+      <div style={label13}>Attachments (photos / videos)</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-start" }}>
+        {list.map((f, i) => (
+          <div key={i} style={{ width: 96, position: "relative" }}>
+            {f.type === "video" ? (
+              <div onClick={() => setVid(f.url)} style={{ width: 96, height: 96, background: "#1A1A1A", color: "#fff", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 30 }}>▶</div>
+            ) : (
+              <img src={f.url} alt={f.name} onClick={() => setImg(f.url)} style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 4, cursor: "zoom-in", border: "1px solid #E5E5E5" }} />
+            )}
+            {!disabled && (
+              <span onClick={() => remove(i)} style={{ position: "absolute", top: -6, right: -6, background: "#C1302B", color: "#fff", borderRadius: 10, width: 18, height: 18, fontSize: 12, lineHeight: "18px", textAlign: "center", cursor: "pointer", fontWeight: 700 }}>×</span>
+            )}
+            <div style={{ fontSize: 10.5, color: "#8a8a8a", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+          </div>
+        ))}
+        {!disabled && (
+          <label htmlFor={inputId} style={{ width: 96, height: 96, border: "1px dashed #C9CDD3", borderRadius: 4, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: uploading ? "wait" : "pointer", color: "#8a8a8a", fontSize: 12, textAlign: "center" }}>
+            <span style={{ fontSize: 24, color: "#C9CDD3" }}>{uploading ? "…" : "+"}</span>
+            {uploading ? "Uploading" : "Add photo / video"}
+            <input id={inputId} type="file" accept="image/*,video/*" multiple onChange={pick} disabled={uploading} style={{ display: "none" }} />
+          </label>
+        )}
+      </div>
+      {error && <div style={{ color: "#C1302B", fontSize: 12, marginTop: 6 }}>{error}</div>}
+      {img && <Lightbox src={img} onClose={() => setImg(null)} />}
+      {vid && <VideoViewer src={vid} onClose={() => setVid(null)} />}
+    </div>
+  );
+}
+
 async function notify(session, message, type) {
   try { await supabase.from("notifications").insert({ message, type, created_by: session.name }); } catch (e) { /* non-critical, ignore */ }
 }
@@ -459,7 +558,7 @@ function dbToOrder(r) {
     id: r.id, invoiceNo: r.invoice_no, jobOrderNo: r.job_order_no, name: r.name, mobile: r.mobile, orderType: r.order_type,
     model: r.model, item: r.item, preparedBy: r.prepared_by, branch: r.branch,
     measurements: r.measurements || {}, sheilaType: r.sheila_type, abayaOption: r.abaya_option,
-    buttonFrom: r.button_from, buttonTill: r.button_till, additionalRequirements: r.additional_requirements, deliveryDate: r.delivery_date, attachmentUrl: r.attachment_url,
+    buttonFrom: r.button_from, buttonTill: r.button_till, additionalRequirements: r.additional_requirements, attachments: r.attachments || [], deliveryDate: r.delivery_date, attachmentUrl: r.attachment_url,
     comments: r.comments, status: r.status, history: r.history || [],
     createdAt: r.created_at, updatedAt: r.updated_at, cut: r.cut,
   };
@@ -583,7 +682,7 @@ export default function App() {
       deltas: r.deltas, notes: r.notes, jobOrderId: r.job_order_id, createdAt: r.created_at,
       calculated: r.calculated || {}, cut: r.cut,
       abayaOption: r.abaya_option, buttonFrom: r.button_from, buttonTill: r.button_till,
-      additionalRequirements: r.additional_requirements,
+      additionalRequirements: r.additional_requirements, attachments: r.attachments || [],
     })));
     setProjects(projs || []);
     setProjectCollaborators(collabs || []);
@@ -971,7 +1070,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       model: form.model, item: form.item, prepared_by: session.name, branch: form.branch || session.branch,
       measurements: form.measurements, sheila_type: form.sheilaType,
       abaya_option: form.abayaOption || "Normal", button_from: form.buttonFrom || null, button_till: form.buttonTill || null,
-      additional_requirements: form.additionalRequirements || null,
+      additional_requirements: form.additionalRequirements || null, attachments: form.attachments || [],
       delivery_date: form.deliveryDate || null,
       attachment_url: attachmentUrl || form.attachmentNote || null, comments: form.comments,
       status: "job_created", history: [{ note: "Job order created by Sales", by: session.name, at: now }],
@@ -1004,7 +1103,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       name: form.name, mobile: form.mobile, order_type: form.orderType,
       model: form.model, item: form.item, branch: form.branch, measurements: form.measurements,
       sheila_type: form.sheilaType, abaya_option: form.abayaOption || "Normal", button_from: form.buttonFrom || null, button_till: form.buttonTill || null,
-      additional_requirements: form.additionalRequirements || null,
+      additional_requirements: form.additionalRequirements || null, attachments: form.attachments || [],
       delivery_date: form.deliveryDate || null, attachment_url: attachmentUrl, comments: form.comments,
       history, updated_at: now,
     }).eq("id", editingOrderId);
@@ -1054,7 +1153,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
           model: it.model, item: ITEM_TYPES[0], prepared_by: session.name, branch,
           measurements: calcToStrings(it.calc), cut: it.cut || null, delivery_date: deliveryDate || null,
           abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
-          additional_requirements: it.additionalRequirements || null,
+          additional_requirements: it.additionalRequirements || null, attachments: it.attachments || [],
           comments: fitNote, status: "job_created",
           history: [{ note: "Job order created from customer requirement", by: session.name, at: now }],
         }).select().single();
@@ -1065,7 +1164,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       await supabase.from("requirement_items").insert({
         profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: {}, calculated: it.calc || {}, cut: it.cut || null,
         abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
-        additional_requirements: it.additionalRequirements || null,
+        additional_requirements: it.additionalRequirements || null, attachments: it.attachments || [],
         notes: it.notes || null, job_order_id: jobOrderId,
       });
     }
@@ -1085,7 +1184,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       measurements: row.calculated && Object.keys(row.calculated).length ? calcToStrings(row.calculated) : suggestionMeasurements(row.profile.measurements, row.deltas),
       cut: row.cut || null,
       abaya_option: row.abayaOption || "Normal", button_from: row.buttonFrom || null, button_till: row.buttonTill || null,
-      additional_requirements: row.additionalRequirements || null,
+      additional_requirements: row.additionalRequirements || null, attachments: row.attachments || [],
       comments: fitNote, status: "job_created",
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
@@ -1158,13 +1257,13 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
     item: initialOrder.item || ITEM_TYPES[0], branch: initialOrder.branch || session.branch || config.branches[0]?.name || "",
     measurements: { ...Object.fromEntries(ALL_MEASURE_FIELDS.map(([k]) => [k, ""])), ...(initialOrder.measurements || {}) },
     sheilaType: initialOrder.sheilaType || SHEILA_TYPES[0], abayaOption: normAbaya(initialOrder.abayaOption),
-    additionalRequirements: initialOrder.additionalRequirements || "",
+    additionalRequirements: initialOrder.additionalRequirements || "", attachments: initialOrder.attachments || [],
     buttonFrom: initialOrder.buttonFrom || "", buttonTill: initialOrder.buttonTill || "", deliveryDate: initialOrder.deliveryDate || "", comments: initialOrder.comments || "",
   } : {
     name: "", mobile: "", invoiceNo: "", orderType: "New", model: config.models[0]?.modelNo || "",
     item: ITEM_TYPES[0], branch: session.branch || config.branches[0]?.name || "",
     measurements: Object.fromEntries(ALL_MEASURE_FIELDS.map(([k]) => [k, ""])),
-    sheilaType: SHEILA_TYPES[0], abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: "",
+    sheilaType: SHEILA_TYPES[0], abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: "", attachments: [],
     deliveryDate: "", comments: "",
   });
   const [file, setFile] = useState(null);
@@ -1276,6 +1375,10 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
             disabled={readOnly}
           />
         </Field>
+      </div>
+
+      <div style={{ margin: "0 0 16px" }}>
+        <AttachmentField files={form.attachments} onChange={(files) => setForm((f) => ({ ...f, attachments: files }))} disabled={readOnly} />
       </div>
 
       {model && (
@@ -1648,7 +1751,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     setItems((it) => [...it, {
       model: pickModel, modelId: model.id, modelObj: model, photoUrl,
       customFields: model.customFields || [], cuts, cut: cuts[0] || null, notes: "", sizes: sizes || [], overrides: {},
-      abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: "",
+      abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: "", attachments: [],
     }]);
     setPickModel("");
   };
@@ -1667,6 +1770,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     return { ...b, calc };
   };
   const setItemNotes = (idx, text) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, notes: text })));
+  const setItemAttachments = (idx, files) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, attachments: files })));
   const setItemAdditional = (idx, v) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, additionalRequirements: resolveAdditional(it.additionalRequirements, v) })));
   const setItemAbaya = (idx, v) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, abayaOption: v.option, buttonFrom: v.from, buttonTill: v.till })));
   const removeItem = (idx) => setItems((it) => it.filter((_, i) => i !== idx));
@@ -1841,6 +1945,10 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                 </Field>
               </div>
 
+              <div style={{ marginTop: 12 }}>
+                <AttachmentField files={it.attachments} onChange={(files) => setItemAttachments(idx, files)} />
+              </div>
+
               <div style={{ marginTop: 10 }}>
                 <Field label="Special Requirements / Notes for this item">
                   <textarea style={{ ...inputStyle, minHeight: 50 }} value={it.notes} onChange={(e) => setItemNotes(idx, e.target.value)} placeholder="Anything specific to this item…" />
@@ -1942,6 +2050,7 @@ function RequirementDetail({ row, onClose }) {
           <div><strong>Cut:</strong> {row.cut || "—"}</div>
           <div><strong>Abaya Option:</strong> {row.abayaOption || "—"}{row.abayaOption === BUTTON_RANGE ? ` (${row.buttonFrom || "—"} to ${row.buttonTill || "—"})` : ""}</div>
           <div><strong>Additional Requirements:</strong> {row.additionalRequirements || "—"}</div>
+          <div style={{ marginTop: 8 }}><strong>Attachments:</strong> <AttachmentGallery files={row.attachments} /></div>
           <div><strong>Date:</strong> {fmtDate(row.createdAt)}</div>
           <div><strong>Job Order:</strong> {row.order ? row.order.jobOrderNo : "Not created yet"}</div>
           {row.notes && <div><strong>Notes:</strong> {row.notes}</div>}
@@ -2922,6 +3031,10 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
             <Row l="Delivery Date" v={fmtDate(order.deliveryDate)} />
             <Row l="Sheila Type" v={order.sheilaType} /><Row l="Abaya Option" v={order.abayaOption ? abayaLabel(normAbaya(order.abayaOption)) + (normAbaya(order.abayaOption) === BUTTON_RANGE ? ` (${order.buttonFrom || "—"} to ${order.buttonTill || "—"})` : "") : "—"} />
             <Row l="Additional Requirements" v={order.additionalRequirements || "—"} />
+            <div style={{ margin: "12px 0" }}>
+              <div style={label13}>Attachments</div>
+              <AttachmentGallery files={order.attachments} />
+            </div>
             <Row l="Attachment" v={order.attachmentUrl ? <a className="link" href={order.attachmentUrl} target="_blank" rel="noreferrer">View file</a> : "—"} />
             <Row l="Comments" v={order.comments || "—"} />
             <div style={{ marginTop: 10, fontWeight: 700, fontSize: 12.5, color: "#5a5a5a" }}>MEASUREMENTS</div>
@@ -3513,7 +3626,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       model: form.model, item: form.item, prepared_by: session.name, branch: form.branch || session.branch,
       measurements: form.measurements, sheila_type: form.sheilaType,
       abaya_option: form.abayaOption || "Normal", button_from: form.buttonFrom || null, button_till: form.buttonTill || null,
-      additional_requirements: form.additionalRequirements || null,
+      additional_requirements: form.additionalRequirements || null, attachments: form.attachments || [],
       delivery_date: form.deliveryDate || null,
       attachment_url: attachmentUrl || form.attachmentNote || null, comments: form.comments,
       status: "job_created", history: [{ note: `Job order created by Admin (${session.name})`, by: session.name, at: now }],
@@ -3546,7 +3659,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       name: form.name, mobile: form.mobile, order_type: form.orderType,
       model: form.model, item: form.item, branch: form.branch, measurements: form.measurements,
       sheila_type: form.sheilaType, abaya_option: form.abayaOption || "Normal", button_from: form.buttonFrom || null, button_till: form.buttonTill || null,
-      additional_requirements: form.additionalRequirements || null,
+      additional_requirements: form.additionalRequirements || null, attachments: form.attachments || [],
       delivery_date: form.deliveryDate || null, attachment_url: attachmentUrl, comments: form.comments,
       history, updated_at: now,
     }).eq("id", editingOrderId);
@@ -3590,7 +3703,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
           model: it.model, item: ITEM_TYPES[0], prepared_by: session.name, branch,
           measurements: calcToStrings(it.calc), cut: it.cut || null, delivery_date: deliveryDate || null,
           abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
-          additional_requirements: it.additionalRequirements || null,
+          additional_requirements: it.additionalRequirements || null, attachments: it.attachments || [],
           comments: fitNote, status: "job_created",
           history: [{ note: `Job order created from customer requirement by Admin (${session.name})`, by: session.name, at: now }],
         }).select().single();
@@ -3601,7 +3714,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       await supabase.from("requirement_items").insert({
         profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: {}, calculated: it.calc || {}, cut: it.cut || null,
         abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
-        additional_requirements: it.additionalRequirements || null,
+        additional_requirements: it.additionalRequirements || null, attachments: it.attachments || [],
         notes: it.notes || null, job_order_id: jobOrderId,
       });
     }
@@ -3621,7 +3734,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       measurements: row.calculated && Object.keys(row.calculated).length ? calcToStrings(row.calculated) : suggestionMeasurements(row.profile.measurements, row.deltas),
       cut: row.cut || null,
       abaya_option: row.abayaOption || "Normal", button_from: row.buttonFrom || null, button_till: row.buttonTill || null,
-      additional_requirements: row.additionalRequirements || null,
+      additional_requirements: row.additionalRequirements || null, attachments: row.attachments || [],
       comments: fitNote, status: "job_created",
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
