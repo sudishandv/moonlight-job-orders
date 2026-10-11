@@ -117,6 +117,7 @@ const ROLE_HOME_CARDS = {
     ["👥", "Add Users", "Create logins & assign roles", "users"],
     ["👤", "Customers", "Search profiles & history", "customers"],
     ["📊", "Analytics", "Which models and orders perform best", "analytics"],
+    ["🔐", "PIN & Devices", "Set PINs, approve showroom iPads", "pins"],
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
   model_manager: [
@@ -516,6 +517,12 @@ function DashboardMenu({ session, setSubpage, onLogout }) {
             </div>
           ))}
           <div style={{ borderTop: "1px solid #E5E5E5", margin: "4px 0" }} />
+          {localStorage.getItem(DEVICE_KEY) && (
+            <div onClick={() => { setOpen(false); onLogout(); }} style={{ padding: "8px 10px", fontSize: 12.5, cursor: "pointer", borderRadius: 4 }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+              🔁 Switch user
+            </div>
+          )}
           <div onClick={() => { setOpen(false); onLogout(); }} style={{ padding: "8px 10px", fontSize: 12.5, cursor: "pointer", borderRadius: 4, color: "#C1302B" }}
             onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
             Logout
@@ -722,7 +729,7 @@ export default function App() {
   }, [profile, loadNotifications]);
 
   if (session === undefined) return <Loading text="Loading…" />;
-  if (!session) return <LoginScreen onLoggedIn={() => {}} />;
+  if (!session) return <LoginGate />;
   if (profile === null) return <NoProfileScreen onSignOut={() => supabase.auth.signOut()} />;
   if (!config || !orders || !profiles || !requirementItems || !projects || !projectCollaborators || !allUsers || !projectTasks || !projectModels) return <Loading text="Loading job orders…" />;
 
@@ -739,19 +746,22 @@ export default function App() {
       {subpage === "analytics" && (profile.role === "admin" || profile.role === "model_manager") && (
         <AnalyticsPage orders={orders} models={config.models} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && profile.role === "sales" && (
+      {subpage === "pins" && profile.role === "admin" && (
+        <PinsPage users={allUsers} branches={config.branches.map((b) => b.name)} session={profile} />
+      )}
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && profile.role === "production" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && profile.role === "production" && (
         <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && profile.role === "admin" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && profile.role === "model_manager" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && profile.role === "model_manager" && (
         <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} />
       )}
       {toast && (
@@ -995,7 +1005,7 @@ function AbayaOptionField({ option, from, till, onChange, disabled }) {
 
 /* ---------------- Login (real Supabase auth) ---------------- */
 
-function LoginScreen() {
+function LoginScreen({ onUsePin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -1029,9 +1039,131 @@ function LoginScreen() {
           {busy ? "SIGNING IN…" : "LOGIN"}
         </button>
         <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 14 }}>Accounts are created by an Admin in the Supabase dashboard.</div>
+        {onUsePin && <a className="link" style={{ display: "block", textAlign: "center", marginTop: 16, fontSize: 13 }} onClick={onUsePin}>← Back to PIN login</a>}
       </div>
     </div>
   );
+}
+
+/* ---------------- PIN login (approved showroom devices) ---------------- */
+
+const DEVICE_KEY = "ml_device_token";
+const sha256Hex = async (s) => {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+};
+async function pinAuth(body) {
+  const { data, error } = await supabase.functions.invoke("pin-auth", { body });
+  if (error) {
+    let detail = {};
+    try { detail = await error.context.json(); } catch (e) { /* no body */ }
+    return { error: detail.error || "network", detail };
+  }
+  return { data };
+}
+
+function PinLogin({ onFallback }) {
+  const [users, setUsers] = useState(null);
+  const [deviceLabel, setDeviceLabel] = useState("");
+  const [picked, setPicked] = useState(null);
+  const [pin, setPin] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem(DEVICE_KEY);
+    if (!token) { onFallback(); return; }
+    pinAuth({ action: "list", device_token: token }).then(({ data, error }) => {
+      if (error === "untrusted_device") { localStorage.removeItem(DEVICE_KEY); onFallback(); return; }
+      if (error) { setMsg("Couldn't reach the server. Check the connection, or use email & password."); setUsers([]); return; }
+      setUsers(data.users); setDeviceLabel(data.device.label);
+    });
+  }, []); // eslint-disable-line
+
+  const submit = async (value) => {
+    setBusy(true); setMsg("");
+    const { data, error, detail } = await pinAuth({ action: "login", device_token: localStorage.getItem(DEVICE_KEY), user_id: picked.id, pin: value });
+    if (error) {
+      setPin("");
+      if (error === "wrong_pin") setMsg(`Wrong PIN — ${detail.attempts_left} ${detail.attempts_left === 1 ? "try" : "tries"} left.`);
+      else if (error === "locked") setMsg("Too many wrong attempts. Try again in a few minutes, or ask an admin to reset your PIN.");
+      else if (error === "untrusted_device") { localStorage.removeItem(DEVICE_KEY); onFallback(); }
+      else setMsg("Couldn't sign in. Try again, or use email & password.");
+      setBusy(false); return;
+    }
+    let { error: vErr } = await supabase.auth.verifyOtp({ token_hash: data.token_hash, type: "magiclink" });
+    if (vErr) ({ error: vErr } = await supabase.auth.verifyOtp({ token_hash: data.token_hash, type: "email" }));
+    if (vErr) { setMsg("Couldn't sign in. Try again."); setPin(""); }
+    setBusy(false);   // on success the app's auth listener takes over and this screen goes away
+  };
+
+  const press = (d) => { if (busy || pin.length >= 6) return; const next = pin + d; setPin(next); if (next.length === 6) submit(next); };
+  const back = () => { if (!busy) setPin((p) => p.slice(0, -1)); };
+
+  useEffect(() => {
+    if (!picked) return;
+    const onKey = (e) => { if (/^\d$/.test(e.key)) press(e.key); else if (e.key === "Backspace") back(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }); // eslint-disable-line
+
+  const initials = (n) => (n || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+  const keyStyle = { width: 78, height: 78, borderRadius: 39, border: "1px solid #C9CDD3", background: "#fff", fontSize: 26, fontWeight: 600, cursor: "pointer" };
+
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, background: "#fff", fontFamily: F.body }}>
+      <GlobalStyle />
+      <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 30, letterSpacing: "0.12em", textAlign: "center" }}>
+        MOONLIGHT
+        <div style={{ fontSize: 11, letterSpacing: "0.35em", fontWeight: 500, marginTop: -4 }}>CONCEPT</div>
+      </div>
+      <div style={{ fontSize: 13, color: "#8a8a8a", margin: "8px 0 28px" }}>{deviceLabel}</div>
+
+      {users === null ? <div style={{ color: "#8a8a8a" }}>Loading…</div> : !picked ? (
+        <>
+          <div style={{ fontWeight: 700, marginBottom: 16, letterSpacing: "0.04em" }}>WHO'S WORKING?</div>
+          {users.length === 0 ? (
+            <div style={{ color: "#8a8a8a", fontSize: 13.5, textAlign: "center", maxWidth: 340 }}>No PINs have been set up for this device yet. Use email & password, or ask an admin to set your PIN.</div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 14, justifyContent: "center", maxWidth: 640 }}>
+              {users.map((u) => (
+                <div key={u.id} onClick={() => { setPicked(u); setPin(""); setMsg(""); }}
+                  style={{ width: 150, padding: "20px 12px", border: "1px solid #DDE1E7", borderRadius: 8, textAlign: "center", cursor: "pointer" }}>
+                  <div style={{ width: 56, height: 56, borderRadius: 28, background: "#1A1A1A", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 10px", fontWeight: 700, fontSize: 18 }}>{initials(u.name)}</div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{u.name}</div>
+                  <div style={{ fontSize: 11.5, color: "#8a8a8a" }}>{ROLE_LABEL[u.role] || u.role}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {msg && <div style={{ color: "#C1302B", fontSize: 13, marginTop: 16, textAlign: "center", maxWidth: 360 }}>{msg}</div>}
+        </>
+      ) : (
+        <>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>{picked.name}</div>
+          <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 18 }}>Enter your 6-digit PIN</div>
+          <div style={{ display: "flex", gap: 14, marginBottom: 12 }}>
+            {[0, 1, 2, 3, 4, 5].map((i) => <div key={i} style={{ width: 16, height: 16, borderRadius: 8, border: "2px solid #1A1A1A", background: i < pin.length ? "#1A1A1A" : "#fff" }} />)}
+          </div>
+          <div style={{ minHeight: 20, color: "#C1302B", fontSize: 13, marginBottom: 12, textAlign: "center", maxWidth: 320 }}>{msg}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 78px)", gap: 14 }}>
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((d) => <button key={d} style={keyStyle} onClick={() => press(String(d))}>{d}</button>)}
+            <div />
+            <button style={keyStyle} onClick={() => press("0")}>0</button>
+            <button style={{ ...keyStyle, fontSize: 20 }} onClick={back}>⌫</button>
+          </div>
+          <a className="link" style={{ marginTop: 22, fontSize: 13 }} onClick={() => { setPicked(null); setPin(""); setMsg(""); }}>← Not you? Choose another name</a>
+        </>
+      )}
+      <a className="link" style={{ marginTop: 26, fontSize: 12.5, color: "#8a8a8a" }} onClick={onFallback}>Use email & password instead</a>
+    </div>
+  );
+}
+
+function LoginGate() {
+  const [mode, setMode] = useState(localStorage.getItem(DEVICE_KEY) ? "pin" : "password");
+  if (mode === "pin") return <PinLogin onFallback={() => setMode("password")} />;
+  return <LoginScreen onUsePin={localStorage.getItem(DEVICE_KEY) ? () => setMode("pin") : null} />;
 }
 
 /* ---------------- Records table (shared) ---------------- */
@@ -2598,6 +2730,175 @@ function AnalyticsPage({ orders, models }) {
             )}
           </ACard>
         </div>
+      )}
+    </div>
+  );
+}
+
+function PinsPage({ users, branches, session }) {
+  const staff = users.filter((u) => u.role === "sales" || u.role === "production");
+  const [pins, setPins] = useState({});
+  const [devices, setDevices] = useState([]);
+  const [log, setLog] = useState([]);
+  const [dialog, setDialog] = useState(null);      // { user, pin, error, busy }
+  const [label, setLabel] = useState("");
+  const [branch, setBranch] = useState("");
+  const [msg, setMsg] = useState("");
+  const [myHash, setMyHash] = useState("");
+
+  const load = async () => {
+    const st = await pinAuth({ action: "pin-status" });
+    if (st.data) setPins(Object.fromEntries(st.data.pins.map((p) => [p.user_id, p])));
+    const { data: d } = await supabase.from("trusted_devices").select("*").order("created_at");
+    setDevices(d || []);
+    const { data: l } = await supabase.from("pin_login_log").select("*").order("created_at", { ascending: false }).limit(20);
+    setLog(l || []);
+  };
+  useEffect(() => {
+    load();
+    const t = localStorage.getItem(DEVICE_KEY);
+    if (t) sha256Hex(t).then(setMyHash);
+  }, []); // eslint-disable-line
+
+  const randomPin = () => {
+    for (;;) {
+      const p = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, "0");
+      if (!/^(\d)\1{5}$/.test(p) && !["123456", "654321", "012345", "123123", "121212"].includes(p)) return p;
+    }
+  };
+  const savePin = async () => {
+    setDialog((d) => ({ ...d, busy: true, error: "" }));
+    const { error } = await pinAuth({ action: "set-pin", user_id: dialog.user.id, pin: dialog.pin });
+    if (error) { setDialog((d) => ({ ...d, busy: false, error: error === "network" ? "Couldn't save the PIN." : error })); return; }
+    setMsg(`PIN saved for ${dialog.user.name}.`); setDialog(null); load();
+  };
+  const [ask, setAsk] = useState(null);           // { title, text, label, run }
+  const removePin = (u) => setAsk({
+    title: `Remove ${u.name}'s PIN?`, text: "They'll have to use email & password.", label: "Yes, remove PIN",
+    run: async () => { await pinAuth({ action: "clear-pin", user_id: u.id }); setMsg(`PIN removed for ${u.name}.`); load(); },
+  });
+  const approveDevice = async () => {
+    if (!label.trim()) { setMsg('Give this device a name first, e.g. "Al Waab iPad".'); return; }
+    const token = crypto.randomUUID() + crypto.randomUUID();
+    const hash = await sha256Hex(token);
+    const { error } = await supabase.from("trusted_devices").insert({ label: label.trim(), branch: branch || null, token_hash: hash, created_by: session.name });
+    if (error) { setMsg("Couldn't approve this device: " + error.message); return; }
+    localStorage.setItem(DEVICE_KEY, token); setMyHash(hash); setLabel("");
+    setMsg("This device is now approved for PIN login."); load();
+  };
+  const revoke = (d) => setAsk({
+    title: `Stop trusting "${d.label}"?`, text: "PIN login will stop working on it.", label: "Yes, revoke",
+    run: async () => {
+      const { error } = await supabase.from("trusted_devices").delete().eq("id", d.id);
+      if (error) { setMsg("Couldn't revoke the device: " + error.message); return; }
+      if (d.token_hash === myHash) { localStorage.removeItem(DEVICE_KEY); setMyHash(""); }
+      setMsg(`"${d.label}" is no longer trusted.`); load();
+    },
+  });
+
+  const th = { textAlign: "left", padding: "7px 8px", fontSize: 12, borderBottom: "2px solid #1A1A1A" };
+  const td = { padding: "8px", fontSize: 13, borderBottom: "1px solid #E5E5E5" };
+  const myDeviceApproved = devices.some((d) => d.token_hash === myHash);
+
+  return (
+    <div style={{ maxWidth: 980, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>PIN & DEVICES</h2>
+      {msg && <div style={{ textAlign: "center", fontSize: 13, color: "#2F8F46", marginBottom: 14 }}>{msg}</div>}
+
+      <div style={cardStyle}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>STAFF PINS</div>
+        <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 12 }}>6 digits, for Sales and Production only. A PIN is never shown again after it's saved — reset it if someone forgets. Five wrong tries lock that person for 5 minutes.</div>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Branch</th><th style={th}>PIN</th><th style={th}></th></tr></thead>
+          <tbody>
+            {staff.map((u) => {
+              const p = pins[u.id];
+              const locked = p && p.locked_until && new Date(p.locked_until) > new Date();
+              return (
+                <tr key={u.id}>
+                  <td style={td}>{u.name}</td><td style={td}>{ROLE_LABEL[u.role]}</td><td style={td}>{u.branch || "—"}</td>
+                  <td style={{ ...td, color: locked ? "#C1302B" : p ? "#2F8F46" : "#8a8a8a", fontWeight: 600 }}>{locked ? "Locked" : p ? "Set" : "Not set"}</td>
+                  <td style={td}>
+                    <a className="link" onClick={() => setDialog({ user: u, pin: "", error: "", busy: false })}>{p ? "Reset PIN" : "Set PIN"}</a>
+                    {p && <a className="link" style={{ marginLeft: 14, color: "#C1302B" }} onClick={() => removePin(u)}>Remove</a>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ ...cardStyle, marginTop: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>APPROVED DEVICES</div>
+        <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 12 }}>PIN login only works on devices approved here. Log in on the showroom iPad with an admin password, approve it, then log out. If you pick a branch, only that branch's salespeople show on its screen.</div>
+        {devices.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 14 }}>
+            <thead><tr><th style={th}>Device</th><th style={th}>Branch</th><th style={th}>Approved</th><th style={th}>Last used</th><th style={th}></th></tr></thead>
+            <tbody>
+              {devices.map((d) => (
+                <tr key={d.id}>
+                  <td style={td}>{d.label}{d.token_hash === myHash && <span style={{ marginLeft: 8, fontSize: 11, color: "#2F8F46", fontWeight: 700 }}>THIS DEVICE</span>}</td>
+                  <td style={td}>{d.branch || "All"}</td><td style={td}>{fmtDate(d.created_at)}</td><td style={td}>{d.last_used_at ? fmtDateTime(d.last_used_at) : "—"}</td>
+                  <td style={td}><a className="link" style={{ color: "#C1302B" }} onClick={() => revoke(d)}>Revoke</a></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {myDeviceApproved ? (
+          <div style={{ fontSize: 13, color: "#2F8F46" }}>✓ This device is approved.</div>
+        ) : (
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div><div style={label13}>Name this device</div><input value={label} onChange={(e) => setLabel(e.target.value)} placeholder='e.g. "Al Waab iPad"' style={{ ...inputStyle, width: 220 }} /></div>
+            <div><div style={label13}>Branch</div>
+              <select value={branch} onChange={(e) => setBranch(e.target.value)} style={{ ...inputStyle, width: 170 }}>
+                <option value="">All branches</option>{branches.map((b) => <option key={b} value={b}>{b}</option>)}
+              </select></div>
+            <button onClick={approveDevice} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontSize: 13, fontWeight: 700 }}>Approve this device</button>
+          </div>
+        )}
+      </div>
+
+      <div style={{ ...cardStyle, marginTop: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>RECENT PIN SIGN-INS</div>
+        {log.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>Nothing yet.</div> : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <tbody>
+              {log.map((l) => (
+                <tr key={l.id}>
+                  <td style={td}>{fmtDateTime(l.created_at)}</td>
+                  <td style={td}>{(users.find((u) => u.id === l.user_id) || {}).name || "—"}</td>
+                  <td style={td}>{(devices.find((d) => d.id === l.device_id) || {}).label || "—"}</td>
+                  <td style={{ ...td, color: l.success ? "#2F8F46" : "#C1302B", fontWeight: 600 }}>{l.success ? "Signed in" : `Failed (${(l.reason || "").replace(/_/g, " ")})`}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {ask && (
+        <ConfirmDialog title={ask.title} confirmLabel={ask.label} onCancel={() => setAsk(null)}
+          onConfirm={async () => { const a = ask; setAsk(null); await a.run(); }}>
+          {ask.text}
+        </ConfirmDialog>
+      )}
+      {dialog && (
+        <ConfirmDialog
+          title={`${pins[dialog.user.id] ? "Reset" : "Set"} PIN for ${dialog.user.name}`}
+          confirmLabel="Save PIN" busy={dialog.busy} confirmDisabled={dialog.pin.length !== 6}
+          onCancel={() => setDialog(null)} onConfirm={savePin}
+        >
+          <div style={{ marginBottom: 10 }}>Choose 6 digits. Tell {dialog.user.name} the PIN — it can't be viewed again.</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input value={dialog.pin} inputMode="numeric" maxLength={6} placeholder="••••••"
+              onChange={(e) => setDialog((d) => ({ ...d, pin: e.target.value.replace(/\D/g, "").slice(0, 6) }))}
+              style={{ ...inputStyle, width: 150, fontSize: 20, letterSpacing: "0.3em", textAlign: "center" }} />
+            <a className="link" onClick={() => setDialog((d) => ({ ...d, pin: randomPin() }))}>Generate</a>
+          </div>
+          {dialog.error && <div style={{ color: "#C1302B", fontSize: 12.5, marginTop: 8 }}>{dialog.error}</div>}
+        </ConfirmDialog>
       )}
     </div>
   );
