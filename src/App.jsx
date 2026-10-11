@@ -286,12 +286,13 @@ function diffSummary(before, form, fileChanged) {
   const norm = {
     name: before.name || "", mobile: before.mobile || "", orderType: before.orderType || "New",
     model: before.model || "", item: before.item || ITEM_TYPES[0], branch: before.branch || "",
-    sheilaType: before.sheilaType || SHEILA_TYPES[0], abayaOption: before.abayaOption || "fullButton",
+    sheilaType: before.sheilaType || SHEILA_TYPES[0], abayaOption: normAbaya(before.abayaOption),
+    buttonFrom: before.buttonFrom || "", buttonTill: before.buttonTill || "",
     deliveryDate: before.deliveryDate || "", comments: before.comments || "",
   };
-  const simpleMap = { name: "Name", mobile: "Mobile", orderType: "Order Type", model: "Model", item: "Item", branch: "Branch", sheilaType: "Sheila Type", abayaOption: "Abaya Option", deliveryDate: "Delivery Date", comments: "Comments" };
+  const simpleMap = { name: "Name", mobile: "Mobile", orderType: "Order Type", model: "Model", item: "Item", branch: "Branch", sheilaType: "Sheila Type", abayaOption: "Abaya Option", buttonFrom: "Button start from", buttonTill: "Button till", deliveryDate: "Delivery Date", comments: "Comments" };
   Object.entries(simpleMap).forEach(([k, label]) => {
-    const oldV = norm[k] || "—", newV = form[k] || "—";
+    const oldV = norm[k] || "—", newV = (k === "abayaOption" ? normAbaya(form[k]) : form[k]) || "—";
     if (oldV !== newV) changed.push(`${label} (${oldV} → ${newV})`);
   });
   ALL_MEASURE_FIELDS.forEach(([k, l]) => {
@@ -458,7 +459,7 @@ function dbToOrder(r) {
     id: r.id, invoiceNo: r.invoice_no, jobOrderNo: r.job_order_no, name: r.name, mobile: r.mobile, orderType: r.order_type,
     model: r.model, item: r.item, preparedBy: r.prepared_by, branch: r.branch,
     measurements: r.measurements || {}, sheilaType: r.sheila_type, abayaOption: r.abaya_option,
-    buttonTill: r.button_till, deliveryDate: r.delivery_date, attachmentUrl: r.attachment_url,
+    buttonFrom: r.button_from, buttonTill: r.button_till, deliveryDate: r.delivery_date, attachmentUrl: r.attachment_url,
     comments: r.comments, status: r.status, history: r.history || [],
     createdAt: r.created_at, updatedAt: r.updated_at, cut: r.cut,
   };
@@ -466,7 +467,7 @@ function dbToOrder(r) {
 function orderFieldsToDb(f) {
   const map = {
     invoiceNo: "invoice_no", orderType: "order_type", preparedBy: "prepared_by", sheilaType: "sheila_type",
-    abayaOption: "abaya_option", buttonTill: "button_till", deliveryDate: "delivery_date",
+    abayaOption: "abaya_option", buttonFrom: "button_from", buttonTill: "button_till", deliveryDate: "delivery_date",
     attachmentUrl: "attachment_url",
   };
   const out = {};
@@ -581,6 +582,7 @@ export default function App() {
       id: r.id, profileId: r.profile_id, model: r.model, recommendedSize: r.recommended_size,
       deltas: r.deltas, notes: r.notes, jobOrderId: r.job_order_id, createdAt: r.created_at,
       calculated: r.calculated || {}, cut: r.cut,
+      abayaOption: r.abaya_option, buttonFrom: r.button_from, buttonTill: r.button_till,
     })));
     setProjects(projs || []);
     setProjectCollaborators(collabs || []);
@@ -776,6 +778,43 @@ function Field({ label, children }) {
   return <label style={{ display: "block", marginBottom: 12 }}><div style={label13}>{label}</div>{children}</label>;
 }
 
+const ABAYA_OPTIONS = ["Normal", "Full button with fabric", "Full button without fabric", "Half button", "Button start from and till"];
+const BUTTON_RANGE = "Button start from and till";
+// Older orders stored "normal" / "fullButton" / "buttonFromTill". The first and last map cleanly; the old
+// "fullButton" can't be mapped (with or without fabric?) so it stays visible as its own legacy choice.
+const normAbaya = (v) => (!v || v === "normal" ? "Normal" : v === "buttonFromTill" ? BUTTON_RANGE : v);
+const abayaLabel = (v) => (v === "fullButton" ? "Full Button (old)" : v);
+
+function AbayaOptionField({ option, from, till, onChange, disabled }) {
+  const opt = normAbaya(option);
+  const options = ABAYA_OPTIONS.includes(opt) ? ABAYA_OPTIONS : [...ABAYA_OPTIONS, opt];
+  return (
+    <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+      <div>
+        <div style={label13}>Abaya Option</div>
+        <select
+          value={opt} disabled={disabled} style={{ ...inputStyle, width: 250 }}
+          onChange={(e) => onChange({ option: e.target.value, from: e.target.value === BUTTON_RANGE ? from : "", till: e.target.value === BUTTON_RANGE ? till : "" })}
+        >
+          {options.map((o) => <option key={o} value={o}>{abayaLabel(o)}</option>)}
+        </select>
+      </div>
+      {opt === BUTTON_RANGE && (
+        <>
+          <div>
+            <div style={label13}>Start from</div>
+            <input value={from || ""} disabled={disabled} placeholder="e.g. 12" style={{ ...inputStyle, width: 110 }} onChange={(e) => onChange({ option: opt, from: e.target.value, till })} />
+          </div>
+          <div>
+            <div style={label13}>Till</div>
+            <input value={till || ""} disabled={disabled} placeholder="e.g. 40" style={{ ...inputStyle, width: 110 }} onChange={(e) => onChange({ option: opt, from, till: e.target.value })} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ---------------- Login (real Supabase auth) ---------------- */
 
 function LoginScreen() {
@@ -911,8 +950,9 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     const row = {
       job_order_no: jobNo, invoice_no: form.invoiceNo || null, name: form.name, mobile: form.mobile, order_type: form.orderType,
       model: form.model, item: form.item, prepared_by: session.name, branch: form.branch || session.branch,
-      measurements: form.measurements, sheila_type: form.sheilaType, abaya_option: form.abayaOption,
-      button_till: form.buttonTill, delivery_date: form.deliveryDate || null,
+      measurements: form.measurements, sheila_type: form.sheilaType,
+      abaya_option: form.abayaOption || "Normal", button_from: form.buttonFrom || null, button_till: form.buttonTill || null,
+      delivery_date: form.deliveryDate || null,
       attachment_url: attachmentUrl || form.attachmentNote || null, comments: form.comments,
       status: "job_created", history: [{ note: "Job order created by Sales", by: session.name, at: now }],
     };
@@ -943,7 +983,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     const { error } = await supabase.from("job_orders").update({
       name: form.name, mobile: form.mobile, order_type: form.orderType,
       model: form.model, item: form.item, branch: form.branch, measurements: form.measurements,
-      sheila_type: form.sheilaType, abaya_option: form.abayaOption, button_till: form.buttonTill,
+      sheila_type: form.sheilaType, abaya_option: form.abayaOption || "Normal", button_from: form.buttonFrom || null, button_till: form.buttonTill || null,
       delivery_date: form.deliveryDate || null, attachment_url: attachmentUrl, comments: form.comments,
       history, updated_at: now,
     }).eq("id", editingOrderId);
@@ -992,6 +1032,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
           job_order_no: jobNumbers[vIdx], name: customer.name, mobile: customer.mobile, order_type: "New",
           model: it.model, item: ITEM_TYPES[0], prepared_by: session.name, branch,
           measurements: calcToStrings(it.calc), cut: it.cut || null, delivery_date: deliveryDate || null,
+          abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
           comments: fitNote, status: "job_created",
           history: [{ note: "Job order created from customer requirement", by: session.name, at: now }],
         }).select().single();
@@ -1001,6 +1042,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       }
       await supabase.from("requirement_items").insert({
         profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: {}, calculated: it.calc || {}, cut: it.cut || null,
+        abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
         notes: it.notes || null, job_order_id: jobOrderId,
       });
     }
@@ -1019,6 +1061,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       item: ITEM_TYPES[0], prepared_by: session.name, branch,
       measurements: row.calculated && Object.keys(row.calculated).length ? calcToStrings(row.calculated) : suggestionMeasurements(row.profile.measurements, row.deltas),
       cut: row.cut || null,
+      abaya_option: row.abayaOption || "Normal", button_from: row.buttonFrom || null, button_till: row.buttonTill || null,
       comments: fitNote, status: "job_created",
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
@@ -1090,13 +1133,13 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
     orderType: initialOrder.orderType || "New", model: initialOrder.model || config.models[0]?.modelNo || "",
     item: initialOrder.item || ITEM_TYPES[0], branch: initialOrder.branch || session.branch || config.branches[0]?.name || "",
     measurements: { ...Object.fromEntries(ALL_MEASURE_FIELDS.map(([k]) => [k, ""])), ...(initialOrder.measurements || {}) },
-    sheilaType: initialOrder.sheilaType || SHEILA_TYPES[0], abayaOption: initialOrder.abayaOption || "fullButton",
-    buttonTill: initialOrder.buttonTill || "", deliveryDate: initialOrder.deliveryDate || "", comments: initialOrder.comments || "",
+    sheilaType: initialOrder.sheilaType || SHEILA_TYPES[0], abayaOption: normAbaya(initialOrder.abayaOption),
+    buttonFrom: initialOrder.buttonFrom || "", buttonTill: initialOrder.buttonTill || "", deliveryDate: initialOrder.deliveryDate || "", comments: initialOrder.comments || "",
   } : {
     name: "", mobile: "", invoiceNo: "", orderType: "New", model: config.models[0]?.modelNo || "",
     item: ITEM_TYPES[0], branch: session.branch || config.branches[0]?.name || "",
     measurements: Object.fromEntries(ALL_MEASURE_FIELDS.map(([k]) => [k, ""])),
-    sheilaType: SHEILA_TYPES[0], abayaOption: "fullButton", buttonTill: "",
+    sheilaType: SHEILA_TYPES[0], abayaOption: "Normal", buttonFrom: "", buttonTill: "",
     deliveryDate: "", comments: "",
   });
   const [file, setFile] = useState(null);
@@ -1191,16 +1234,11 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
 
       <div style={{ display: "flex", gap: 26, alignItems: "flex-end", marginTop: 6, marginBottom: 18, flexWrap: "wrap" }}>
         <Field label="Sheila Type"><select style={{ ...inputStyle, width: 180 }} value={form.sheilaType} onChange={set("sheilaType")} disabled={readOnly}>{SHEILA_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
-        <div>
-          <div style={label13}>Abaya Option</div>
-          <div style={{ display: "flex", gap: 16, fontSize: 13.5, paddingTop: 6 }}>
-            {[["fullButton", "Full Button"], ["normal", "Normal"], ["buttonFromTill", "Button From/Till"]].map(([k, l]) => (
-              <label key={k} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                <input type="radio" checked={form.abayaOption === k} onChange={() => setForm((f) => ({ ...f, abayaOption: k }))} disabled={readOnly} /> {l}
-              </label>
-            ))}
-            {form.abayaOption === "buttonFromTill" && <input style={{ ...inputStyle, width: 90 }} value={form.buttonTill} onChange={set("buttonTill")} placeholder="e.g. 20cm" disabled={readOnly} />}
-          </div>
+        <div style={{ marginBottom: 12 }}>
+          <AbayaOptionField
+            option={form.abayaOption} from={form.buttonFrom} till={form.buttonTill} disabled={readOnly}
+            onChange={(v) => setForm((f) => ({ ...f, abayaOption: v.option, buttonFrom: v.from, buttonTill: v.till }))}
+          />
         </div>
       </div>
 
@@ -1569,6 +1607,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     setItems((it) => [...it, {
       model: pickModel, modelId: model.id, modelObj: model, photoUrl: model.photoUrl,
       customFields: model.customFields || [], cuts, cut: cuts[0] || null, notes: "", sizes: sizes || [], overrides: {},
+      abayaOption: "Normal", buttonFrom: "", buttonTill: "",
     }]);
     setPickModel("");
   };
@@ -1587,6 +1626,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     return { ...b, calc };
   };
   const setItemNotes = (idx, text) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, notes: text })));
+  const setItemAbaya = (idx, v) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, abayaOption: v.option, buttonFrom: v.from, buttonTill: v.till })));
   const removeItem = (idx) => setItems((it) => it.filter((_, i) => i !== idx));
   const customerValid = customer.name.trim() && customer.mobile.trim();
 
@@ -1747,6 +1787,10 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                 {view.formulaKeys.length > 0 ? "Rows with a calculation are calculated; the rest are the customer's fitted measurements." : "No calculation set up for this model — values are the customer's fitted measurements."}
               </div>
 
+              <div style={{ marginTop: 12 }}>
+                <AbayaOptionField option={it.abayaOption} from={it.buttonFrom} till={it.buttonTill} onChange={(v) => setItemAbaya(idx, v)} />
+              </div>
+
               <div style={{ marginTop: 10 }}>
                 <Field label="Special Requirements / Notes for this item">
                   <textarea style={{ ...inputStyle, minHeight: 50 }} value={it.notes} onChange={(e) => setItemNotes(idx, e.target.value)} placeholder="Anything specific to this item…" />
@@ -1846,6 +1890,7 @@ function RequirementDetail({ row, onClose }) {
           <div><strong>Model:</strong> {row.model}</div>
           <div><strong>Size:</strong> {row.recommendedSize || "—"}</div>
           <div><strong>Cut:</strong> {row.cut || "—"}</div>
+          <div><strong>Abaya Option:</strong> {row.abayaOption || "—"}{row.abayaOption === BUTTON_RANGE ? ` (${row.buttonFrom || "—"} to ${row.buttonTill || "—"})` : ""}</div>
           <div><strong>Date:</strong> {fmtDate(row.createdAt)}</div>
           <div><strong>Job Order:</strong> {row.order ? row.order.jobOrderNo : "Not created yet"}</div>
           {row.notes && <div><strong>Notes:</strong> {row.notes}</div>}
@@ -2824,7 +2869,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
             <Row l="Model" v={order.model} /><Row l="Cut" v={order.cut || "—"} /><Row l="Item" v={order.item} />
             <Row l="Prepared By" v={order.preparedBy} /><Row l="Branch" v={order.branch} />
             <Row l="Delivery Date" v={fmtDate(order.deliveryDate)} />
-            <Row l="Sheila Type" v={order.sheilaType} /><Row l="Abaya Option" v={order.abayaOption} />
+            <Row l="Sheila Type" v={order.sheilaType} /><Row l="Abaya Option" v={order.abayaOption ? abayaLabel(normAbaya(order.abayaOption)) + (normAbaya(order.abayaOption) === BUTTON_RANGE ? ` (${order.buttonFrom || "—"} to ${order.buttonTill || "—"})` : "") : "—"} />
             <Row l="Attachment" v={order.attachmentUrl ? <a className="link" href={order.attachmentUrl} target="_blank" rel="noreferrer">View file</a> : "—"} />
             <Row l="Comments" v={order.comments || "—"} />
             <div style={{ marginTop: 10, fontWeight: 700, fontSize: 12.5, color: "#5a5a5a" }}>MEASUREMENTS</div>
@@ -3414,8 +3459,9 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     const row = {
       job_order_no: jobNo, invoice_no: form.invoiceNo || null, name: form.name, mobile: form.mobile, order_type: form.orderType,
       model: form.model, item: form.item, prepared_by: session.name, branch: form.branch || session.branch,
-      measurements: form.measurements, sheila_type: form.sheilaType, abaya_option: form.abayaOption,
-      button_till: form.buttonTill, delivery_date: form.deliveryDate || null,
+      measurements: form.measurements, sheila_type: form.sheilaType,
+      abaya_option: form.abayaOption || "Normal", button_from: form.buttonFrom || null, button_till: form.buttonTill || null,
+      delivery_date: form.deliveryDate || null,
       attachment_url: attachmentUrl || form.attachmentNote || null, comments: form.comments,
       status: "job_created", history: [{ note: `Job order created by Admin (${session.name})`, by: session.name, at: now }],
     };
@@ -3446,7 +3492,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     const { error } = await supabase.from("job_orders").update({
       name: form.name, mobile: form.mobile, order_type: form.orderType,
       model: form.model, item: form.item, branch: form.branch, measurements: form.measurements,
-      sheila_type: form.sheilaType, abaya_option: form.abayaOption, button_till: form.buttonTill,
+      sheila_type: form.sheilaType, abaya_option: form.abayaOption || "Normal", button_from: form.buttonFrom || null, button_till: form.buttonTill || null,
       delivery_date: form.deliveryDate || null, attachment_url: attachmentUrl, comments: form.comments,
       history, updated_at: now,
     }).eq("id", editingOrderId);
@@ -3489,6 +3535,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
           job_order_no: jobNumbers[vIdx], name: customer.name, mobile: customer.mobile, order_type: "New",
           model: it.model, item: ITEM_TYPES[0], prepared_by: session.name, branch,
           measurements: calcToStrings(it.calc), cut: it.cut || null, delivery_date: deliveryDate || null,
+          abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
           comments: fitNote, status: "job_created",
           history: [{ note: `Job order created from customer requirement by Admin (${session.name})`, by: session.name, at: now }],
         }).select().single();
@@ -3498,6 +3545,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       }
       await supabase.from("requirement_items").insert({
         profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: {}, calculated: it.calc || {}, cut: it.cut || null,
+        abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
         notes: it.notes || null, job_order_id: jobOrderId,
       });
     }
@@ -3516,6 +3564,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       item: ITEM_TYPES[0], prepared_by: session.name, branch,
       measurements: row.calculated && Object.keys(row.calculated).length ? calcToStrings(row.calculated) : suggestionMeasurements(row.profile.measurements, row.deltas),
       cut: row.cut || null,
+      abaya_option: row.abayaOption || "Normal", button_from: row.buttonFrom || null, button_till: row.buttonTill || null,
       comments: fitNote, status: "job_created",
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
