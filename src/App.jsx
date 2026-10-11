@@ -2735,6 +2735,27 @@ function AnalyticsPage({ orders, models }) {
   );
 }
 
+function StaffPicker({ staff, selected, onChange }) {
+  const toggle = (id) => onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 14, marginBottom: 8, fontSize: 12 }}>
+        <a className="link" onClick={() => onChange(staff.map((u) => u.id))}>Select all</a>
+        <a className="link" onClick={() => onChange([])}>Clear</a>
+      </div>
+      <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid #E5E5E5", borderRadius: 4 }}>
+        {staff.map((u) => (
+          <label key={u.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid #F0F0F0", cursor: "pointer", fontSize: 13.5 }}>
+            <input type="checkbox" checked={selected.includes(u.id)} onChange={() => toggle(u.id)} />
+            <span style={{ flex: 1 }}>{u.name}</span>
+            <span style={{ fontSize: 11.5, color: "#8a8a8a" }}>{ROLE_LABEL[u.role]}{u.branch ? ` · ${u.branch}` : ""}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PinsPage({ users, branches, session }) {
   const staff = users.filter((u) => u.role === "sales" || u.role === "production");
   const [pins, setPins] = useState({});
@@ -2745,6 +2766,8 @@ function PinsPage({ users, branches, session }) {
   const [branch, setBranch] = useState("");
   const [msg, setMsg] = useState("");
   const [myHash, setMyHash] = useState("");
+  const [staffDialog, setStaffDialog] = useState(null);   // { device, selected }
+  const [newStaff, setNewStaff] = useState([]);            // list chosen while approving a new device
 
   const load = async () => {
     const st = await pinAuth({ action: "pin-status" });
@@ -2777,13 +2800,20 @@ function PinsPage({ users, branches, session }) {
     title: `Remove ${u.name}'s PIN?`, text: "They'll have to use email & password.", label: "Yes, remove PIN",
     run: async () => { await pinAuth({ action: "clear-pin", user_id: u.id }); setMsg(`PIN removed for ${u.name}.`); load(); },
   });
+  const saveStaff = async () => {
+    const { error } = await supabase.from("trusted_devices")
+      .update({ allowed_user_ids: staffDialog.selected.length ? staffDialog.selected : null })
+      .eq("id", staffDialog.device.id);
+    if (error) { setMsg("Couldn't save: " + error.message); return; }
+    setMsg(`Updated who appears on "${staffDialog.device.label}".`); setStaffDialog(null); load();
+  };
   const approveDevice = async () => {
     if (!label.trim()) { setMsg('Give this device a name first, e.g. "Al Waab iPad".'); return; }
     const token = crypto.randomUUID() + crypto.randomUUID();
     const hash = await sha256Hex(token);
-    const { error } = await supabase.from("trusted_devices").insert({ label: label.trim(), branch: branch || null, token_hash: hash, created_by: session.name });
+    const { error } = await supabase.from("trusted_devices").insert({ label: label.trim(), branch: branch || null, token_hash: hash, created_by: session.name, allowed_user_ids: newStaff.length ? newStaff : null });
     if (error) { setMsg("Couldn't approve this device: " + error.message); return; }
-    localStorage.setItem(DEVICE_KEY, token); setMyHash(hash); setLabel("");
+    localStorage.setItem(DEVICE_KEY, token); setMyHash(hash); setLabel(""); setNewStaff([]);
     setMsg("This device is now approved for PIN login."); load();
   };
   const revoke = (d) => setAsk({
@@ -2834,13 +2864,22 @@ function PinsPage({ users, branches, session }) {
         <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 12 }}>PIN login only works on devices approved here. Log in on the showroom iPad with an admin password, approve it, then log out. If you pick a branch, only that branch's salespeople show on its screen.</div>
         {devices.length > 0 && (
           <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 14 }}>
-            <thead><tr><th style={th}>Device</th><th style={th}>Branch</th><th style={th}>Approved</th><th style={th}>Last used</th><th style={th}></th></tr></thead>
+            <thead><tr><th style={th}>Device</th><th style={th}>Branch</th><th style={th}>Staff on this device</th><th style={th}>Approved</th><th style={th}>Last used</th><th style={th}></th></tr></thead>
             <tbody>
               {devices.map((d) => (
                 <tr key={d.id}>
                   <td style={td}>{d.label}{d.token_hash === myHash && <span style={{ marginLeft: 8, fontSize: 11, color: "#2F8F46", fontWeight: 700 }}>THIS DEVICE</span>}</td>
-                  <td style={td}>{d.branch || "All"}</td><td style={td}>{fmtDate(d.created_at)}</td><td style={td}>{d.last_used_at ? fmtDateTime(d.last_used_at) : "—"}</td>
-                  <td style={td}><a className="link" style={{ color: "#C1302B" }} onClick={() => revoke(d)}>Revoke</a></td>
+                  <td style={td}>{d.branch || "All"}</td>
+                  <td style={td}>
+                    {d.allowed_user_ids && d.allowed_user_ids.length
+                      ? d.allowed_user_ids.map((id) => (users.find((u) => u.id === id) || {}).name).filter(Boolean).join(", ")
+                      : <span style={{ color: "#8a8a8a" }}>Everyone (by branch rule)</span>}
+                  </td>
+                  <td style={td}>{fmtDate(d.created_at)}</td><td style={td}>{d.last_used_at ? fmtDateTime(d.last_used_at) : "—"}</td>
+                  <td style={td}>
+                    <a className="link" style={{ marginRight: 14 }} onClick={() => setStaffDialog({ device: d, selected: d.allowed_user_ids || [] })}>Choose staff</a>
+                    <a className="link" style={{ color: "#C1302B" }} onClick={() => revoke(d)}>Revoke</a>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -2855,6 +2894,10 @@ function PinsPage({ users, branches, session }) {
               <select value={branch} onChange={(e) => setBranch(e.target.value)} style={{ ...inputStyle, width: 170 }}>
                 <option value="">All branches</option>{branches.map((b) => <option key={b} value={b}>{b}</option>)}
               </select></div>
+            <div style={{ width: "100%" }}>
+              <div style={label13}>Who can sign in on this device? (leave empty for everyone)</div>
+              <StaffPicker staff={staff} selected={newStaff} onChange={setNewStaff} />
+            </div>
             <button onClick={approveDevice} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontSize: 13, fontWeight: 700 }}>Approve this device</button>
           </div>
         )}
@@ -2882,6 +2925,12 @@ function PinsPage({ users, branches, session }) {
         <ConfirmDialog title={ask.title} confirmLabel={ask.label} onCancel={() => setAsk(null)}
           onConfirm={async () => { const a = ask; setAsk(null); await a.run(); }}>
           {ask.text}
+        </ConfirmDialog>
+      )}
+      {staffDialog && (
+        <ConfirmDialog title={`Who appears on "${staffDialog.device.label}"?`} confirmLabel="Save" onCancel={() => setStaffDialog(null)} onConfirm={saveStaff}>
+          <div style={{ marginBottom: 10 }}>Tick the people who can sign in on this device. Everyone else is hidden from its login screen and can't sign in on it. Leave all unticked to fall back to the branch rule.</div>
+          <StaffPicker staff={staff} selected={staffDialog.selected} onChange={(sel) => setStaffDialog((d) => ({ ...d, selected: sel }))} />
         </ConfirmDialog>
       )}
       {dialog && (
