@@ -1972,7 +1972,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
             </div>
 
             <div style={{ flex: 1, minWidth: 320 }}>
-              <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 16, flexWrap: "wrap", marginBottom: 10 }}>
+              <div style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", gap: 16, flexWrap: "wrap", marginBottom: 10 }}>
                 {it.cuts && it.cuts.length >= 2 ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <span style={{ fontSize: 12, color: "#8a8a8a" }}>Cut:</span>
@@ -1983,7 +1983,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                 ) : it.cuts && it.cuts.length === 1 ? (
                   <div style={{ fontSize: 12.5 }}><span style={{ color: "#8a8a8a" }}>Cut:</span> <strong>{it.cuts[0]}</strong></div>
                 ) : null}
-                <a className="link" style={{ color: "#C1302B" }} onClick={() => removeItem(idx)}>Remove</a>
+                <a className="link" style={{ color: "#C1302B", marginLeft: "auto" }} onClick={() => removeItem(idx)}>Remove</a>
               </div>
 
               {rowKeys.length === 0 ? (
