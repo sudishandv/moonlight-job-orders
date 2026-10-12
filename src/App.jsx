@@ -481,10 +481,17 @@ function AttachmentField({ files, onChange, disabled }) {
 }
 
 // `branch` limits which approved devices get the alert: omit it to use the signer's own branch, pass null for everyone.
-async function notify(session, message, type, branch) {
+// Set by a notification click: OrderDetail scrolls to its activity log when it opens (edits / status changes).
+const openFocus = { current: null };
+
+// `target` ({ type: "order" | "customer" | "model", id }) is what clicking the notification opens.
+async function notify(session, message, type, branch, target) {
   try {
     const { data } = await supabase.from("notifications")
-      .insert({ message, type, created_by: session.name, branch: (branch !== undefined ? branch : session.branch) || null })
+      .insert({
+        message, type, created_by: session.name, branch: (branch !== undefined ? branch : session.branch) || null,
+        target_type: target ? target.type : null, target_id: target ? String(target.id) : null,
+      })
       .select("id").single();
     if (data) {
       supabase.functions.invoke("push-service", {
@@ -494,8 +501,18 @@ async function notify(session, message, type, branch) {
   } catch (e) { /* non-critical, ignore */ }
 }
 
-function NotificationBell({ session, notifications, refreshNotifications }) {
+function NotificationBell({ session, notifications, refreshNotifications, onOpen }) {
   const [open, setOpen] = useState(false);
+  const wrapperRef = React.useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onOutside = (e) => { if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setOpen(false); };
+    const onEsc = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onOutside);
+    document.addEventListener("touchstart", onOutside);   // iPad
+    document.addEventListener("keydown", onEsc);
+    return () => { document.removeEventListener("mousedown", onOutside); document.removeEventListener("touchstart", onOutside); document.removeEventListener("keydown", onEsc); };
+  }, [open]);
   const [lastSeenOverride, setLastSeenOverride] = useState(null);
   const lastSeen = lastSeenOverride || (session.notifications_last_seen_at ? new Date(session.notifications_last_seen_at) : new Date(0));
   const unread = notifications.filter((n) => new Date(n.created_at) > lastSeen).length;
@@ -512,7 +529,7 @@ function NotificationBell({ session, notifications, refreshNotifications }) {
   };
 
   return (
-    <div style={{ position: "relative", display: "inline-block" }}>
+    <div ref={wrapperRef} style={{ position: "relative", display: "inline-block" }}>
       <span onClick={toggle} style={{ cursor: "pointer", position: "relative", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5 }}>
         <span style={{ position: "relative", fontSize: 15 }}>
           🔔
@@ -528,7 +545,9 @@ function NotificationBell({ session, notifications, refreshNotifications }) {
         <div className="no-print" style={{ position: "absolute", top: 26, right: 0, width: 300, maxHeight: 380, overflowY: "auto", background: "#fff", border: "1px solid #C9CDD3", borderRadius: 6, boxShadow: "0 10px 28px rgba(0,0,0,0.14)", zIndex: 200, padding: 12, textAlign: "left" }}>
           <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, letterSpacing: "0.03em" }}>RECENT ACTIVITY</div>
           {notifications.length === 0 ? <div style={{ fontSize: 12, color: "#8a8a8a" }}>Nothing yet.</div> : notifications.slice(0, 20).map((n) => (
-            <div key={n.id} style={{ fontSize: 12, padding: "7px 0", borderBottom: "1px solid #E5E5E5" }}>
+            <div key={n.id} onClick={() => { setOpen(false); onOpen && onOpen(n); }}
+              style={{ fontSize: 12, padding: "8px 6px", borderBottom: "1px solid #E5E5E5", cursor: "pointer", borderRadius: 3 }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
               <div>{n.message}</div>
               <div className="mono" style={{ fontSize: 10.5, color: "#8a8a8a", marginTop: 2 }}>{fmtDateTime(n.created_at)}</div>
             </div>
@@ -728,6 +747,8 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const lastSeenNotifId = React.useRef(null);
+  const [openRequest, setOpenRequest] = useState(null);       // { type, id, focus }
+  const clearOpenRequest = useCallback(() => setOpenRequest(null), []);
 
   const onTrustedDevice = !!localStorage.getItem(DEVICE_KEY);
   const [locked, setLocked] = useState(() => !!localStorage.getItem(DEVICE_KEY) && localStorage.getItem("ml_locked") === "1");
@@ -823,6 +844,46 @@ export default function App() {
     if (profile && profile.role !== "sales" && localStorage.getItem("ml_locked") === "1") { localStorage.removeItem("ml_locked"); setLocked(false); }
   }, [profile?.role]); // eslint-disable-line
 
+  // Which page can each role use for each kind of target?
+  const openTarget = useCallback(async (type, id, focus) => {
+    if (!profile) return;
+    const role = profile.role;
+    if (type === "order" && role !== "model_manager") {
+      await loadAll();                                          // the order may have just been created by someone else
+      setSubpage("records");
+    } else if (type === "customer" && (role === "sales" || role === "admin")) {
+      setSubpage("customers");
+    } else if (type === "model" && (role === "admin" || role === "model_manager")) {
+      await loadAll();
+      setSubpage("viewmodels");
+    } else if (type === "model" && role === "production") {
+      await loadAll();
+      setSubpage("items");
+    } else {
+      return;                                                   // this role has no page for it — do nothing
+    }
+    setOpenRequest({ type, id, focus });
+  }, [profile, loadAll]);
+
+  // A banner tapped on the lock screen arrives either as a link (?open=order:123) or as a message from the service worker.
+  const handleOpenUrl = useCallback((url) => {
+    try {
+      const p = new URL(url, window.location.origin).searchParams.get("open");
+      if (!p) return;
+      const [type, ...rest] = p.split(":");
+      openTarget(type, decodeURIComponent(rest.join(":")), "history");
+      window.history.replaceState({}, "", "/");
+    } catch (e) { /* ignore */ }
+  }, [openTarget]);
+
+  useEffect(() => { if (profile && config) handleOpenUrl(window.location.href); }, [profile?.id, !!config]); // eslint-disable-line
+  useEffect(() => {
+    if (!navigator.serviceWorker) return;
+    const onMsg = (e) => { if (e.data && e.data.type === "open") handleOpenUrl(e.data.url); };
+    navigator.serviceWorker.addEventListener("message", onMsg);
+    return () => navigator.serviceWorker.removeEventListener("message", onMsg);
+  }, [handleOpenUrl]);
+
   // The lock screen is an overlay on top of the app, so the form underneath keeps its state.
   const withLock = (node) => (
     <>
@@ -838,8 +899,20 @@ export default function App() {
 
   const refresh = loadAll;
 
+  // Called when someone clicks a notification in the bell.
+  const openFromNotification = (n) => {
+    let type = n.target_type, id = n.target_id;
+    if (!type) {                                               // older notifications: work it out from "…order 1042…"
+      const m = /order\s+([A-Za-z0-9-]+)/i.exec(n.message || "");
+      const found = m && orders.find((o) => String(o.jobOrderNo) === m[1]);
+      if (found) { type = "order"; id = found.id; }
+    }
+    if (!type) return;
+    openTarget(type, id, (n.type === "edit" || n.type === "status") ? "history" : null);
+  };
+
   return withLock(
-    <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()} onLock={lock} notifications={notifications} refreshNotifications={loadNotifications}>
+    <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()} onLock={lock} notifications={notifications} refreshNotifications={loadNotifications} onOpenNotification={openFromNotification}>
       {subpage === "home" && <HomePage session={profile} setSubpage={setSubpage} />}
       {subpage === "projects" && (
         PROJECTS_ENABLED
@@ -854,18 +927,18 @@ export default function App() {
       )}
       {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
-          subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
+          subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && profile.role === "production" && (
         <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
-          subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
+          subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
-          subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} />
+          subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && profile.role === "model_manager" && (
-        <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} />
+        <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {toast && (
         <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "#1A1A1A", color: "#fff", padding: "10px 20px", borderRadius: 4, fontSize: 13, fontFamily: "Inter, sans-serif", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", zIndex: 100 }}>
@@ -908,7 +981,7 @@ function GlobalStyle() {
   );
 }
 
-function Shell({ session, subpage, setSubpage, onLogout, onLock, children, notifications, refreshNotifications }) {
+function Shell({ session, subpage, setSubpage, onLogout, onLock, children, notifications, refreshNotifications, onOpenNotification }) {
   const adminTabs = [
     ["records", "ALL RECORDS"], ["requirements", "ALL REQUIREMENTS"], ["branches", "ADD/REMOVE BRANCH"],
     ["models", "ADD MODEL"], ["viewmodels", "VIEW MODELS"], ["users", "ADD USERS"],
@@ -924,7 +997,7 @@ function Shell({ session, subpage, setSubpage, onLogout, onLock, children, notif
         <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.03em", display: "flex", gap: 14, alignItems: "center" }}>
           <span><span style={{ color: "#8a8a8a" }}>{session.name} ·</span> {ROLE_LABEL[session.role].toUpperCase()}</span>
           <DashboardMenu session={session} setSubpage={setSubpage} onLogout={onLogout} onLock={onLock} />
-          <NotificationBell session={session} notifications={notifications} refreshNotifications={refreshNotifications} />
+          <NotificationBell session={session} notifications={notifications} refreshNotifications={refreshNotifications} onOpen={onOpenNotification} />
         </div>
       </div>
       <div style={{ padding: "26px 30px 60px" }}>{children}</div>
@@ -1490,10 +1563,13 @@ function useFilteredOrders(orders, query, statusFilter) {
 
 /* ================= Sales Panel ================= */
 
-function SalesPanel({ config, orders, profiles, requirementItems, refresh, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
+function SalesPanel({ config, orders, profiles, requirementItems, refresh, session, subpage, setSubpage, selectedId, setSelectedId, flash, openRequest, clearOpenRequest }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [editingOrderId, setEditingOrderId] = useState(null);
+  useEffect(() => {
+    if (openRequest && openRequest.type === "order") { setSelectedId(openRequest.id); openFocus.current = openRequest.focus || null; clearOpenRequest(); }
+  }, [openRequest]); // eslint-disable-line
   const filtered = useFilteredOrders(orders, query, statusFilter);
   const selected = orders.find((o) => o.id === selectedId);
 
@@ -1519,7 +1595,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     };
     const { data, error } = await supabase.from("job_orders").insert(row).select().single();
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} created job order ${jobNo}`, "job_order", row.branch);
+    notify(session, `${session.name} created job order ${jobNo}`, "job_order", row.branch, { type: "order", id: data.id });
     await refresh();
     setSubpage("records");
     setSelectedId(data.id);
@@ -1548,7 +1624,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       history, updated_at: now,
     }).eq("id", editingOrderId);
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} edited order ${before?.jobOrderNo || ""} (${form.name}): ${changed.length ? changed.join(", ") : "no field changes"}`, "edit", form.branch || before?.branch);
+    notify(session, `${session.name} edited order ${before?.jobOrderNo || ""} (${form.name}): ${changed.length ? changed.join(", ") : "no field changes"}`, "edit", form.branch || before?.branch, { type: "order", id: editingOrderId });
     await refresh(); setSubpage("records"); setSelectedId(editingOrderId); flash("Job order updated");
   };
 
@@ -1556,7 +1632,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     const { error } = await supabase.from("job_orders").update({ ...orderFieldsToDb(fields), updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
     const o = orders.find((x) => x.id === id);
-    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.name})`, "edit", o.branch);
+    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.name})`, "edit", o.branch, { type: "order", id: o.id });
     await refresh(); flash("Changes saved");
   };
 
@@ -1603,7 +1679,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
         }).select().single();
         jobOrderId = order?.id || null;
         lastOrderId = jobOrderId;
-        if (order) notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a requirement`, "job_order", branch);
+        if (order) notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a requirement`, "job_order", branch, { type: "order", id: order.id });
       }
       await supabase.from("requirement_items").insert({
         profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: {}, calculated: it.calc || {}, cut: it.cut || null,
@@ -1615,8 +1691,8 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     }
     await refresh();
     if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
-    else if (createOrders) { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
-    else { const exists = existing && existing.length > 0; flash(exists ? "Profile updated" : "Profile created"); notify(session, `${session.name} ${exists ? "updated" : "created"} the profile of ${customer.name}`, "profile"); }
+    else if (createOrders) { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement", undefined, { type: "customer", id: customer.mobile }); }
+    else { const exists = existing && existing.length > 0; flash(exists ? "Profile updated" : "Profile created"); notify(session, `${session.name} ${exists ? "updated" : "created"} the profile of ${customer.name}`, "profile", undefined, { type: "customer", id: customer.mobile }); }
     return true;
   };
 
@@ -1637,7 +1713,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order", branch);
+    notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order", branch, { type: "order", id: order.id });
     await supabase.from("requirement_items").update({ job_order_id: order.id }).eq("id", row.id);
     await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created");
   };
@@ -1647,7 +1723,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     const history = [...current.history, { note, by: session.name, at: new Date().toISOString() }];
     const { error } = await supabase.from("job_orders").update({ status, history, updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name}: ${STATUS[status].label} — order ${current.jobOrderNo} (${current.name})${comment ? " — " + comment : ""}`, "status", current.branch);
+    notify(session, `${session.name}: ${STATUS[status].label} — order ${current.jobOrderNo} (${current.name})${comment ? " — " + comment : ""}`, "status", current.branch, { type: "order", id: current.id });
     await refresh(); flash(STATUS[status].label);
   };
 
@@ -1667,7 +1743,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSave={handleSaveRequirement} />;
   }
   if (subpage === "customers") {
-    return <CustomersPage profiles={profiles} orders={orders} session={session} refresh={refresh} />;
+    return <CustomersPage profiles={profiles} orders={orders} session={session} refresh={refresh} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />;
   }
   if (subpage === "requirements") {
     return (
@@ -3689,9 +3765,12 @@ function ProjectDetailPage({ project, collaborators, allUsers, session, refresh,
   );
 }
 
-function CustomersPage({ profiles, orders, session, refresh }) {
+function CustomersPage({ profiles, orders, session, refresh, openRequest, clearOpenRequest }) {
   const [query, setQuery] = useState("");
   const [selectedMobile, setSelectedMobile] = useState(null);
+  useEffect(() => {
+    if (openRequest && openRequest.type === "customer") { setSelectedMobile(openRequest.id); clearOpenRequest(); }
+  }, [openRequest]); // eslint-disable-line
   const [legacyFittedIndex, setLegacyFittedIndex] = useState([]);
   const [legacyOrdersIndex, setLegacyOrdersIndex] = useState([]);
   const [page, setPage] = useState(1);
@@ -3808,7 +3887,7 @@ function CustomerDetail({ mobile, profiles, orders, session, refresh, onClose })
         branch: session.branch || (session.role === "admin" ? "Admin" : ""), created_by: session.name,
       });
     }
-    notify(session, `${session.name} updated ${form.name}'s fitted measurement`, "profile");
+    notify(session, `${session.name} updated ${form.name}'s fitted measurement`, "profile", undefined, { type: "customer", id: mobile });
     setSaving(false);
     setEditing(false);
     await refresh();
@@ -3898,6 +3977,12 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
   const [edit, setEdit] = useState(false);
   const [comment, setComment] = useState("");
   const [pendingAction, setPendingAction] = useState(null);
+  useEffect(() => {
+    if (openFocus.current === "history") {
+      openFocus.current = null;
+      setTimeout(() => { const el = document.getElementById("order-history"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 150);
+    }
+  }, [order.id]); // eslint-disable-line
   const editable = canEditFields(order.status, role);
   const resubmittable = canResubmit(order.status, role);
   const actions = role === "production" ? productionActions(order.status) : role === "sales" ? salesActions(order.status) : [];
@@ -3976,7 +4061,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
 
             {onDelete && <button onClick={() => onDelete(order.id)} style={{ marginTop: 16, background: "#fff", border: "1px solid #C1302B", color: "#C1302B", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Delete Record</button>}
 
-            <div style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid #E5E5E5" }}>
+            <div id="order-history" style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid #E5E5E5" }}>
               <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", marginBottom: 8 }}>ACTIVITY LOG</div>
               {order.history.slice().reverse().map((h, i) => (
                 <div key={i} style={{ fontSize: 12.5, marginBottom: 8 }}>
@@ -4020,9 +4105,12 @@ function EditFieldsForm({ order, onCancel, onSave }) {
 
 /* ================= Production Panel ================= */
 
-function ProductionPanel({ config, orders, profiles, requirementItems, refresh, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
+function ProductionPanel({ config, orders, profiles, requirementItems, refresh, session, subpage, setSubpage, selectedId, setSelectedId, flash, openRequest, clearOpenRequest }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  useEffect(() => {
+    if (openRequest && openRequest.type === "order") { setSelectedId(openRequest.id); openFocus.current = openRequest.focus || null; clearOpenRequest(); }
+  }, [openRequest]); // eslint-disable-line
   const visible = orders.filter((o) => o.status !== "ready_to_deliver" && o.status !== "delivered");
   const filtered = useFilteredOrders(visible, query, statusFilter);
   const selected = orders.find((o) => o.id === selectedId);
@@ -4031,7 +4119,7 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
     const { error } = await supabase.from("job_orders").update({ ...orderFieldsToDb(fields), updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
     const o = orders.find((x) => x.id === id);
-    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.name})`, "edit", o.branch);
+    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.name})`, "edit", o.branch, { type: "order", id: o.id });
     await refresh(); flash("Changes saved");
   };
   const handleAction = async (id, to, comment) => {
@@ -4040,11 +4128,11 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
     const history = [...current.history, { note, by: session.name, at: new Date().toISOString() }];
     const { error } = await supabase.from("job_orders").update({ status: to, history, updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name}: ${STATUS[to].label} — order ${current.jobOrderNo} (${current.name})${comment ? " — " + comment : ""}`, "status", current.branch);
+    notify(session, `${session.name}: ${STATUS[to].label} — order ${current.jobOrderNo} (${current.name})${comment ? " — " + comment : ""}`, "status", current.branch, { type: "order", id: current.id });
     await refresh(); flash(STATUS[to].label);
   };
 
-  if (subpage === "items") return <ModelBrowser models={config.models} canEdit={false} session={session} />;
+  if (subpage === "items") return <ModelBrowser models={config.models} canEdit={false} session={session} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />;
   if (subpage === "requirements") {
     return <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={false} canCreateOrder={false} />;
   }
@@ -4059,9 +4147,9 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
   );
 }
 
-function ModelManagerPanel({ config, refresh, flash, session, subpage, setSubpage }) {
+function ModelManagerPanel({ config, refresh, flash, session, subpage, setSubpage, openRequest, clearOpenRequest }) {
   if (subpage === "viewmodels") {
-    return <ModelBrowser models={config.models} canEdit={true} refresh={refresh} flash={flash} session={session} />;
+    return <ModelBrowser models={config.models} canEdit={true} refresh={refresh} flash={flash} session={session} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />;
   }
   // default view
   return <ManageModels config={config} refresh={refresh} flash={flash} session={session} />;
@@ -4109,7 +4197,7 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
     }).eq("id", model.id);
     setSavingCore(false);
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} updated model ${model.modelNo}`, "model", null);
+    notify(session, `${session.name} updated model ${model.modelNo}`, "model", null, { type: "model", id: model.id });
     setEditingModel(false);
     loadReadOnlyData();
     await refresh();
@@ -4376,10 +4464,13 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
   );
 }
 
-function ModelBrowser({ models, canEdit, refresh, flash, session }) {
+function ModelBrowser({ models, canEdit, refresh, flash, session, openRequest, clearOpenRequest }) {
   const [query, setQuery] = useState("");
   const [keywords, setKeywords] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  useEffect(() => {
+    if (openRequest && openRequest.type === "model") { setSelectedId(openRequest.id); clearOpenRequest(); }
+  }, [openRequest]); // eslint-disable-line
 
   const addKeyword = () => {
     const k = query.trim();
@@ -4496,10 +4587,13 @@ function ModelBrowserCard({ model }) {
 
 /* ================= Admin Panel ================= */
 
-function AdminPanel({ config, refresh, orders, profiles, requirementItems, session, subpage, setSubpage, selectedId, setSelectedId, flash }) {
+function AdminPanel({ config, refresh, orders, profiles, requirementItems, session, subpage, setSubpage, selectedId, setSelectedId, flash, openRequest, clearOpenRequest }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [editingOrderId, setEditingOrderId] = useState(null);
+  useEffect(() => {
+    if (openRequest && openRequest.type === "order") { setSelectedId(openRequest.id); openFocus.current = openRequest.focus || null; clearOpenRequest(); }
+  }, [openRequest]); // eslint-disable-line
   const filtered = useFilteredOrders(orders, query, statusFilter);
   const selected = orders.find((o) => o.id === selectedId);
 
@@ -4514,14 +4608,14 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     const it = requirementItems.find((r) => r.id === id);
     const cust = it && profiles.find((p) => p.id === it.profileId);
     await supabase.from("requirement_items").delete().eq("id", id);
-    notify(session, `${session.name} deleted a requirement for ${cust ? cust.name : "a customer"}`, "delete");
+    notify(session, `${session.name} deleted a requirement for ${cust ? cust.name : "a customer"}`, "delete", undefined, cust ? { type: "customer", id: cust.mobile } : undefined);
     await refresh(); flash("Requirement deleted");
   };
   const handleSaveFields = async (id, fields) => {
     const { error } = await supabase.from("job_orders").update({ ...orderFieldsToDb(fields), updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
     const o = orders.find((x) => x.id === id);
-    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.name})`, "edit", o.branch);
+    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.name})`, "edit", o.branch, { type: "order", id: o.id });
     await refresh(); flash("Changes saved");
   };
 
@@ -4547,7 +4641,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     };
     const { data, error } = await supabase.from("job_orders").insert(row).select().single();
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} created job order ${jobNo}`, "job_order", row.branch);
+    notify(session, `${session.name} created job order ${jobNo}`, "job_order", row.branch, { type: "order", id: data.id });
     await refresh();
     setSubpage("records");
     setSelectedId(data.id);
@@ -4576,7 +4670,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       history, updated_at: now,
     }).eq("id", editingOrderId);
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} edited order ${before?.jobOrderNo || ""} (${form.name}): ${changed.length ? changed.join(", ") : "no field changes"}`, "edit", form.branch || before?.branch);
+    notify(session, `${session.name} edited order ${before?.jobOrderNo || ""} (${form.name}): ${changed.length ? changed.join(", ") : "no field changes"}`, "edit", form.branch || before?.branch, { type: "order", id: editingOrderId });
     await refresh(); setSubpage("records"); setSelectedId(editingOrderId); flash("Job order updated");
   };
 
@@ -4623,7 +4717,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
         }).select().single();
         jobOrderId = order?.id || null;
         lastOrderId = jobOrderId;
-        if (order) notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a requirement`, "job_order", branch);
+        if (order) notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a requirement`, "job_order", branch, { type: "order", id: order.id });
       }
       await supabase.from("requirement_items").insert({
         profile_id: profile.id, model: it.model, recommended_size: it.size || null, deltas: {}, calculated: it.calc || {}, cut: it.cut || null,
@@ -4635,8 +4729,8 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     }
     await refresh();
     if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
-    else if (createOrders) { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement"); }
-    else { const exists = existing && existing.length > 0; flash(exists ? "Profile updated" : "Profile created"); notify(session, `${session.name} ${exists ? "updated" : "created"} the profile of ${customer.name}`, "profile"); }
+    else if (createOrders) { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement", undefined, { type: "customer", id: customer.mobile }); }
+    else { const exists = existing && existing.length > 0; flash(exists ? "Profile updated" : "Profile created"); notify(session, `${session.name} ${exists ? "updated" : "created"} the profile of ${customer.name}`, "profile", undefined, { type: "customer", id: customer.mobile }); }
     return true;
   };
 
@@ -4657,7 +4751,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       history: [{ note: "Job order created from saved requirement", by: session.name, at: now }],
     }).select().single();
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order", branch);
+    notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order", branch, { type: "order", id: order.id });
     await supabase.from("requirement_items").update({ job_order_id: order.id }).eq("id", row.id);
     await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created");
   };
@@ -4667,7 +4761,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     onRemove={async (id) => { await supabase.from("branches").delete().eq("id", id); await refresh(); }} />;
 
   if (subpage === "models") return <ManageModels config={config} refresh={refresh} flash={flash} session={session} />;
-  if (subpage === "viewmodels") return <ModelBrowser models={config.models} canEdit={true} refresh={refresh} flash={flash} session={session} />;
+  if (subpage === "viewmodels") return <ModelBrowser models={config.models} canEdit={true} refresh={refresh} flash={flash} session={session} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />;
   if (subpage === "users") return <AddUsers config={config} />;
   if (subpage === "new") {
     return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
@@ -4684,7 +4778,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSave={handleSaveRequirement} />;
   }
   if (subpage === "customers") {
-    return <CustomersPage profiles={profiles} orders={orders} session={session} refresh={refresh} />;
+    return <CustomersPage profiles={profiles} orders={orders} session={session} refresh={refresh} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />;
   }
   if (subpage === "requirements") {
     return (
@@ -5464,7 +5558,7 @@ function ManageModels({ config, refresh, flash, session }) {
     payload.cutting_formula = pendingFormula;
     const { data: inserted, error } = await supabase.from("models").insert(payload).select().single();
     if (error) { flash("Error: " + error.message); setCreating(false); return; }
-    notify(session, `${session.name} created a new model: ${inserted.model_no}`, "model");
+    notify(session, `${session.name} created a new model: ${inserted.model_no}`, "model", undefined, { type: "model", id: inserted.id });
 
     let frontUrl = null;
     for (const view of Object.keys(photoFiles)) {

@@ -18,8 +18,9 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   event.waitUntil((async () => {
+    const url = (event.notification.data && event.notification.data.url) || "/";
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    if (wins.length) return wins[0].focus();
-    return self.clients.openWindow((event.notification.data && event.notification.data.url) || "/");
+    if (wins.length) { await wins[0].focus(); wins[0].postMessage({ type: "open", url }); return; }
+    return self.clients.openWindow(url);        // app was closed: it starts at /?open=order:123
   })());
 });
