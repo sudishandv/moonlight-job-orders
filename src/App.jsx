@@ -312,11 +312,54 @@ const ROLE_LABEL = { sales: "Sales Panel", production: "Production Panel", admin
 const fmtDate = (d) => { if (!d) return "—"; try { return new Date(d).toLocaleDateString(undefined, { day: "2-digit", month: "2-digit", year: "numeric" }); } catch { return d; } };
 const fmtDateTime = (d) => { try { return new Date(d).toLocaleString(undefined, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch { return d; } };
 
+// Customer files (signatures, order attachments) live in a PRIVATE bucket and are stored as "cf:<path>".
+// Anything that still holds an ordinary web link (catalogue files, older customer files) keeps working.
+const PRIVATE_BUCKET = "customer-files";
+const PRIVATE_PREFIX = "cf:";
+const isPrivateRef = (u) => typeof u === "string" && u.startsWith(PRIVATE_PREFIX);
+const signedCache = {};
+
+async function resolveFileUrl(ref) {
+  if (!isPrivateRef(ref)) return ref;                       // ordinary public link — use as it is
+  const path = ref.slice(PRIVATE_PREFIX.length);
+  const hit = signedCache[path];
+  if (hit && hit.exp > Date.now() + 60000) return hit.url;
+  const { data, error } = await supabase.storage.from(PRIVATE_BUCKET).createSignedUrl(path, 3600);
+  if (error || !data) return "";
+  signedCache[path] = { url: data.signedUrl, exp: Date.now() + 3600 * 1000 };
+  return data.signedUrl;
+}
+function useFileUrl(ref) {
+  const [url, setUrl] = useState(isPrivateRef(ref) ? "" : ref || "");
+  useEffect(() => {
+    let alive = true;
+    if (!isPrivateRef(ref)) { setUrl(ref || ""); return; }
+    resolveFileUrl(ref).then((u) => alive && setUrl(u));
+    return () => { alive = false; };
+  }, [ref]);
+  return url;
+}
+// Use instead of <img> for any customer file (signatures, attachments)
+function SecureImg({ src, style, ...rest }) {
+  const url = useFileUrl(src);
+  return url ? <img src={url} style={style} {...rest} /> : <div style={{ background: "#F2F2F2", ...style }} />;
+}
+// Same idea for a "View file" link.
+function SecureLink({ href, children }) {
+  const url = useFileUrl(href);
+  return <a className="link" href={url || undefined} target="_blank" rel="noreferrer">{children}</a>;
+}
+async function uploadCustomerFile(path, file, contentType) {
+  const { error } = await supabase.storage.from(PRIVATE_BUCKET).upload(path, file, contentType ? { contentType } : undefined);
+  return error ? { error } : { ref: PRIVATE_PREFIX + path };
+}
+
 function Lightbox({ src, alt, onClose }) {
-  if (!src) return null;
+  const realSrc = useFileUrl(src);
+  if (!realSrc) return null;
   return (
     <div className="no-print" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, cursor: "zoom-out" }} onClick={onClose}>
-      <img src={src} alt={alt || ""} style={{ maxWidth: "90%", maxHeight: "90%", objectFit: "contain", borderRadius: 4 }} onClick={(e) => e.stopPropagation()} />
+      <img src={realSrc} alt={alt || ""} style={{ maxWidth: "90%", maxHeight: "90%", objectFit: "contain", borderRadius: 4 }} onClick={(e) => e.stopPropagation()} />
       <button onClick={onClose} style={{ position: "absolute", top: 20, right: 24, background: "none", border: "none", color: "#fff", fontSize: 30, cursor: "pointer", lineHeight: 1 }}>×</button>
     </div>
   );
@@ -338,10 +381,12 @@ function ConfirmDialog({ title, children, confirmLabel, cancelLabel, busy, confi
 }
 
 function VideoViewer({ src, onClose }) {
+  const realSrc = useFileUrl(src);
+  if (!realSrc) return null;
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div onClick={(e) => e.stopPropagation()} style={{ position: "relative" }}>
-        <video src={src} controls autoPlay playsInline style={{ maxWidth: "92vw", maxHeight: "85vh", background: "#000" }} />
+        <video src={realSrc} controls autoPlay playsInline style={{ maxWidth: "92vw", maxHeight: "85vh", background: "#000" }} />
         <div onClick={onClose} style={{ position: "absolute", top: -34, right: 0, color: "#fff", fontSize: 26, cursor: "pointer" }}>×</div>
       </div>
     </div>
@@ -361,7 +406,7 @@ function AttachmentGallery({ files }) {
             {f.type === "video" ? (
               <div onClick={() => setVid(f.url)} style={{ width: 96, height: 96, background: "#1A1A1A", color: "#fff", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 30 }}>▶</div>
             ) : (
-              <img src={f.url} alt={f.name} onClick={() => setImg(f.url)} style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 4, cursor: "zoom-in", border: "1px solid #E5E5E5" }} />
+              <SecureImg src={f.url} alt={f.name} onClick={() => setImg(f.url)} style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 4, cursor: "zoom-in", border: "1px solid #E5E5E5" }} />
             )}
             <div style={{ fontSize: 10.5, color: "#8a8a8a", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
           </div>
@@ -394,10 +439,9 @@ function AttachmentField({ files, onChange, disabled }) {
       if (!isVideo && !isImage) { setError(`"${file.name}" isn't a photo or video.`); continue; }
       const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
       const path = `order-files/${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${safe}`;
-      const { error: upErr } = await supabase.storage.from("attachments").upload(path, file, { contentType: file.type });
-      if (upErr) { setError(`Couldn't upload "${file.name}": ${upErr.message}`); continue; }
-      const { data } = supabase.storage.from("attachments").getPublicUrl(path);
-      added.push({ url: data.publicUrl, name: file.name, type: isVideo ? "video" : "image" });
+      const up = await uploadCustomerFile(path, file, file.type);
+      if (up.error) { setError(`Couldn't upload "${file.name}": ${up.error.message}`); continue; }
+      added.push({ url: up.ref, name: file.name, type: isVideo ? "video" : "image" });
     }
     setUploading(false);
     if (added.length) onChange([...list, ...added]);
@@ -413,7 +457,7 @@ function AttachmentField({ files, onChange, disabled }) {
             {f.type === "video" ? (
               <div onClick={() => setVid(f.url)} style={{ width: 96, height: 96, background: "#1A1A1A", color: "#fff", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 30 }}>▶</div>
             ) : (
-              <img src={f.url} alt={f.name} onClick={() => setImg(f.url)} style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 4, cursor: "zoom-in", border: "1px solid #E5E5E5" }} />
+              <SecureImg src={f.url} alt={f.name} onClick={() => setImg(f.url)} style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 4, cursor: "zoom-in", border: "1px solid #E5E5E5" }} />
             )}
             {!disabled && (
               <span onClick={() => remove(i)} style={{ position: "absolute", top: -6, right: -6, background: "#C1302B", color: "#fff", borderRadius: 10, width: 18, height: 18, fontSize: 12, lineHeight: "18px", textAlign: "center", cursor: "pointer", fontWeight: 700 }}>×</span>
@@ -1456,12 +1500,9 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
   const handleCreate = async (form, file) => {
     let attachmentUrl = null;
     if (file) {
-      const path = `${Date.now()}-${file.name}`;
-      const { error: upErr } = await supabase.storage.from("attachments").upload(path, file);
-      if (!upErr) {
-        const { data } = supabase.storage.from("attachments").getPublicUrl(path);
-        attachmentUrl = data.publicUrl;
-      }
+      const up = await uploadCustomerFile(`order-files/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`, file, file.type);
+      if (up.error) { flash("Couldn't upload the attachment: " + up.error.message); return; }
+      attachmentUrl = up.ref;
     }
     const [jobNo] = await nextJobOrderNumbers(1);
     const now = new Date().toISOString();
@@ -1489,12 +1530,9 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     const before = orders.find((o) => o.id === editingOrderId);
     let attachmentUrl = before?.attachmentUrl || null;
     if (file) {
-      const path = `${Date.now()}-${file.name}`;
-      const { error: upErr } = await supabase.storage.from("attachments").upload(path, file);
-      if (!upErr) {
-        const { data } = supabase.storage.from("attachments").getPublicUrl(path);
-        attachmentUrl = data.publicUrl;
-      }
+      const up = await uploadCustomerFile(`order-files/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`, file, file.type);
+      if (up.error) { flash("Couldn't upload the attachment: " + up.error.message); return; }
+      attachmentUrl = up.ref;
     }
     const changed = diffSummary(before, form, !!file);
     const now = new Date().toISOString();
@@ -1842,7 +1880,7 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
         </Field>
         <Field label="Attachment (photo/video reference)">
           {isEdit && initialOrder.attachmentUrl ? (
-            <div style={{ fontSize: 12.5 }}>Current file: <a className="link" href={initialOrder.attachmentUrl} target="_blank" rel="noreferrer">View</a>{!readOnly && " — choose a new file below to replace it."}</div>
+            <div style={{ fontSize: 12.5 }}>Current file: <SecureLink href={initialOrder.attachmentUrl}>View</SecureLink>{!readOnly && " — choose a new file below to replace it."}</div>
           ) : readOnly ? <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No attachment.</div> : null}
           {!readOnly && <input type="file" accept="image/*,video/*" onChange={(e) => setFile(e.target.files?.[0] || null)} style={inputStyle} />}
         </Field>
@@ -2226,10 +2264,8 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     const blob = await new Promise((resolve) => sigCanvasRef.current.toBlob(resolve, "image/png"));
     if (!blob) return null;
     const path = `signatures/${Date.now()}.png`;
-    const { error } = await supabase.storage.from("attachments").upload(path, blob);
-    if (error) return null;
-    const { data } = supabase.storage.from("attachments").getPublicUrl(path);
-    return data.publicUrl;
+    const up = await uploadCustomerFile(path, blob, "image/png");
+    return up.error ? null : up.ref;
   };
 
   // Validate, then ask. Nothing is saved until the pop-up is confirmed.
@@ -2607,7 +2643,7 @@ function RequirementDetail({ row, onClose }) {
         )}
 
         <div style={{ fontWeight: 700, fontSize: 12.5, margin: "18px 0 6px" }}>CUSTOMER SIGNATURE</div>
-        {p.signature_url ? <img src={p.signature_url} alt="signature" style={{ border: "1px solid #E5E5E5", maxWidth: "100%", background: "#fff" }} /> : <div style={{ fontSize: 13, color: "#8a8a8a" }}>No signature captured for this profile.</div>}
+        {p.signature_url ? <SecureImg src={p.signature_url} alt="signature" style={{ border: "1px solid #E5E5E5", maxWidth: "100%", background: "#fff" }} /> : <div style={{ fontSize: 13, color: "#8a8a8a" }}>No signature captured for this profile.</div>}
       </div>
     </div>
   );
@@ -2947,6 +2983,110 @@ function AnalyticsPage({ orders, models }) {
   );
 }
 
+// One-time move of customer signatures / order attachments from the old public bucket into the private one.
+function MigrateFilesCard() {
+  const [log, setLog] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const add = (m) => setLog((l) => [...l, m]);
+  const PUB = /\/storage\/v1\/object\/public\/attachments\/(.+)$/;
+  const isCustomerPath = (p) => p.startsWith("signatures/") || p.startsWith("order-files/");
+
+  const copyToPrivate = async (path, blob) => {
+    const { error } = await supabase.storage.from(PRIVATE_BUCKET).upload(path, blob, { contentType: blob.type });
+    if (error && !/already exists|duplicate/i.test(error.message)) throw error;
+  };
+  // copy one old public file into the private bucket; returns the new reference, or null if it isn't a customer file
+  const moveOne = async (url) => {
+    const m = PUB.exec(url || "");
+    if (!m) return null;
+    const path = decodeURIComponent(m[1]);
+    if (!isCustomerPath(path)) return null;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("couldn't download " + path);
+    await copyToPrivate(path, await res.blob());
+    return { path, ref: PRIVATE_PREFIX + path };
+  };
+
+  const run = async () => {
+    setAsking(false); setBusy(true); setLog([]);
+    const oldPaths = new Set();
+    try {
+      const { data: profs, error: pe } = await supabase.from("customer_profiles").select("id, signature_url").like("signature_url", "%/object/public/attachments/signatures/%");
+      if (pe) throw pe;
+      let n = 0;
+      for (const p of profs || []) {
+        const r = await moveOne(p.signature_url);
+        if (r) {
+          const { error } = await supabase.from("customer_profiles").update({ signature_url: r.ref }).eq("id", p.id);
+          if (error) throw error;
+          oldPaths.add(r.path); n++;
+        }
+      }
+      add(`Signatures moved: ${n}`);
+
+      for (const table of ["job_orders", "requirement_items"]) {
+        const { data: rows, error: re } = await supabase.from(table).select("id, attachments").neq("attachments", "[]");
+        if (re) throw re;
+        let moved = 0;
+        for (const row of rows || []) {
+          let changed = false;
+          const next = [];
+          for (const f of row.attachments || []) {
+            const r = await moveOne(f.url);
+            if (r) { next.push({ ...f, url: r.ref }); oldPaths.add(r.path); changed = true; } else next.push(f);
+          }
+          if (changed) {
+            const { error } = await supabase.from(table).update({ attachments: next }).eq("id", row.id);
+            if (error) throw error;
+            moved++;
+          }
+        }
+        add(`${table}: ${moved} record(s) updated`);
+      }
+
+      // Files no record points at (left over from abandoned or test saves) are public too — move them as well.
+      let orphans = 0;
+      for (const folder of ["signatures", "order-files"]) {
+        const { data: objs, error: le } = await supabase.storage.from("attachments").list(folder, { limit: 1000 });
+        if (le) throw le;
+        for (const o of objs || []) {
+          if (!o.name || o.name.startsWith(".") || o.id === null) continue;
+          const path = `${folder}/${o.name}`;
+          if (oldPaths.has(path)) continue;
+          const { data: blob, error: de } = await supabase.storage.from("attachments").download(path);
+          if (de || !blob) throw new Error("couldn't download " + path);
+          await copyToPrivate(path, blob);
+          oldPaths.add(path); orphans++;
+        }
+      }
+      add(`Unreferenced files moved: ${orphans}`);
+
+      // only after every record points at the private copy do the public copies get deleted
+      if (oldPaths.size) {
+        const { error } = await supabase.storage.from("attachments").remove([...oldPaths]);
+        add(error ? "Couldn't delete some old public copies: " + error.message : `Old public copies deleted: ${oldPaths.size}`);
+      }
+      add("Done.");
+    } catch (e) { add("Stopped: " + (e.message || e) + " — nothing was deleted; you can run it again."); }
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ ...cardStyle, marginTop: 16 }}>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>PRIVATE CUSTOMER FILES</div>
+      <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 12 }}>One-time step: moves the signatures and order attachments saved before this update into the private folder, then deletes the old public copies. Safe to run again.</div>
+      <button onClick={() => setAsking(true)} disabled={busy} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontSize: 13, fontWeight: 700, opacity: busy ? 0.6 : 1 }}>{busy ? "Moving…" : "Move existing files to private storage"}</button>
+      {log.map((l, i) => <div key={i} style={{ fontSize: 12.5, marginTop: 6 }}>{l}</div>)}
+      {asking && (
+        <ConfirmDialog title="Move existing customer files?" confirmLabel="Yes, move them" onCancel={() => setAsking(false)} onConfirm={run}>
+          Every existing customer signature and order attachment moves into the private folder. It can take a minute.
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
 function StaffPicker({ staff, selected, onChange }) {
   const toggle = (id) => onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
   return (
@@ -3150,6 +3290,8 @@ function PinsPage({ users, branches, session }) {
           </table>
         )}
       </div>
+
+      <MigrateFilesCard />
 
       {ask && (
         <ConfirmDialog title={ask.title} confirmLabel={ask.label} onCancel={() => setAsk(null)}
@@ -3797,7 +3939,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
               <div style={label13}>Attachments</div>
               <AttachmentGallery files={order.attachments} />
             </div>
-            <Row l="Attachment" v={order.attachmentUrl ? <a className="link" href={order.attachmentUrl} target="_blank" rel="noreferrer">View file</a> : "—"} />
+            <Row l="Attachment" v={order.attachmentUrl ? <SecureLink href={order.attachmentUrl}>View file</SecureLink> : "—"} />
             <Row l="Comments" v={order.comments || "—"} />
             <div style={{ marginTop: 10, fontWeight: 700, fontSize: 12.5, color: "#5a5a5a" }}>MEASUREMENTS</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, fontSize: 13 }}>
@@ -4386,12 +4528,9 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
   const handleCreate = async (form, file) => {
     let attachmentUrl = null;
     if (file) {
-      const path = `${Date.now()}-${file.name}`;
-      const { error: upErr } = await supabase.storage.from("attachments").upload(path, file);
-      if (!upErr) {
-        const { data } = supabase.storage.from("attachments").getPublicUrl(path);
-        attachmentUrl = data.publicUrl;
-      }
+      const up = await uploadCustomerFile(`order-files/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`, file, file.type);
+      if (up.error) { flash("Couldn't upload the attachment: " + up.error.message); return; }
+      attachmentUrl = up.ref;
     }
     const [jobNo] = await nextJobOrderNumbers(1);
     const now = new Date().toISOString();
@@ -4419,12 +4558,9 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     const before = orders.find((o) => o.id === editingOrderId);
     let attachmentUrl = before?.attachmentUrl || null;
     if (file) {
-      const path = `${Date.now()}-${file.name}`;
-      const { error: upErr } = await supabase.storage.from("attachments").upload(path, file);
-      if (!upErr) {
-        const { data } = supabase.storage.from("attachments").getPublicUrl(path);
-        attachmentUrl = data.publicUrl;
-      }
+      const up = await uploadCustomerFile(`order-files/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`, file, file.type);
+      if (up.error) { flash("Couldn't upload the attachment: " + up.error.message); return; }
+      attachmentUrl = up.ref;
     }
     const changed = diffSummary(before, form, !!file);
     const now = new Date().toISOString();
