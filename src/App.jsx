@@ -125,6 +125,7 @@ const ROLE_HOME_CARDS = {
   production: [
     ["📋", "Production Panel", "Orders awaiting production", "records"],
     ["📅", "Production Calendar", "What's being made today", "calendar"],
+    ["✅", "Quality Check", "Finished pieces waiting to be checked", "qcqueue"],
     ["🧥", "Item Details", "Browse the model catalog", "items"],
     ["📄", "Requirement List", "View saved requirements", "requirements"],
     ["🗂️", "Projects", "Design team projects", "projects"],
@@ -141,6 +142,8 @@ const ROLE_HOME_CARDS = {
     ["👤", "Customers", "Search profiles & history", "customers"],
     ["📊", "Analytics", "Which models and orders perform best", "analytics"],
     ["📅", "Production Calendar", "What's being made today", "calendar"],
+    ["✅", "Quality Check", "Finished pieces waiting to be checked", "qcqueue"],
+    ["📝", "Quality Checklist", "Edit the standard checks", "qcsetup"],
     ["🔐", "PIN & Devices", "Set PINs, approve showroom iPads", "pins"],
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
@@ -553,6 +556,31 @@ async function startTailoring(session, order) {
   const now = new Date().toISOString();
   await supabase.from("job_order_tailors").update({ started_at: now }).eq("job_order_id", order.id).is("started_at", null);
   return advanceOrder(session, order, "job_in_process", null, { production_started_at: now });
+}
+
+// Back to the tailors after a failed quality check
+async function startRework(session, order) {
+  return advanceOrder(session, order, "job_in_process", "Rework started", { production_completed_at: null });
+}
+
+// The checklist for one order: the standard checks + this order's own requirements + its measurements.
+// It's saved as a snapshot, so later changes to the standard list never alter a check already done.
+function buildQcChecks(order, standard) {
+  const checks = [];
+  const add = (group, key, label) => checks.push({ key, group, label, ok: false, at: null, by: null });
+  (standard || []).forEach((s) => add("Standard checks", "s-" + s.id, s.label));
+  add("This order's requirements", "model", `Model ${order.model}${order.cut ? " · cut " + order.cut : ""} is as ordered`);
+  if (order.color) add("This order's requirements", "color", `Colour: ${order.color}`);
+  if (order.abayaOption) {
+    const opt = normAbaya(order.abayaOption);
+    add("This order's requirements", "abaya", `Abaya option: ${abayaLabel(opt)}${opt === BUTTON_RANGE ? ` (${order.buttonFrom || "—"} to ${order.buttonTill || "—"})` : ""}`);
+  }
+  (order.additionalRequirements || "").split(",").map((t) => t.trim()).filter(Boolean)
+    .forEach((t, i) => add("This order's requirements", "req-" + i, `Additional requirement: ${t}`));
+  if ((order.comments || "").trim()) add("This order's requirements", "notes", `Notes followed: ${order.comments.trim().slice(0, 140)}`);
+  ALL_MEASURE_FIELDS.filter(([k]) => order.measurements && order.measurements[k])
+    .forEach(([k, l]) => add("Measurements", "m-" + k, `${l}: ${order.measurements[k]}`));
+  return checks;
 }
 
 // Stop the clock: close the tailors' work and move the order to Pending Quality Check
@@ -1063,22 +1091,26 @@ export default function App() {
       {subpage === "calendar" && (profile.role === "production" || profile.role === "admin") && (
         <ProductionCalendar orders={orders} models={config.models} session={profile} refresh={refresh} flash={flash} onOpenOrder={(id) => openTarget("order", id)} />
       )}
+      {subpage === "qcqueue" && (profile.role === "production" || profile.role === "admin") && (
+        <QcQueuePage orders={orders} session={profile} refresh={refresh} flash={flash} onOpenOrder={(id) => openTarget("order", id)} />
+      )}
+      {subpage === "qcsetup" && profile.role === "admin" && <QcSetupPage flash={flash} />}
       {subpage === "pins" && profile.role === "admin" && (
         <PinsPage users={allUsers} branches={config.branches.map((b) => b.name)} session={profile} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && profile.role === "sales" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && profile.role === "production" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && profile.role === "production" && (
         <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && profile.role === "admin" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && profile.role === "model_manager" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && profile.role === "model_manager" && (
         <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {toast && (
@@ -4347,12 +4379,21 @@ function ProductionActions({ order, session, models, onDone, flash }) {
   const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState(false);
   const [counts, setCounts] = useState({ mats: 0, crew: 0 });
-  const live = ["job_created", "job_accepted", "material_assigned", "manpower_planned", "job_in_process", "job_pending_qc"];
+  const live = ["job_created", "job_accepted", "material_assigned", "manpower_planned", "job_in_process", "job_pending_qc", "job_rework"];
 
   useEffect(() => {
     if (session.role !== "production" && session.role !== "admin") return;
     supabase.from("job_order_materials").select("id", { count: "exact", head: true }).eq("job_order_id", order.id).then(({ count }) => setCounts((c) => ({ ...c, mats: count || 0 })));
     supabase.from("job_order_tailors").select("id", { count: "exact", head: true }).eq("job_order_id", order.id).then(({ count }) => setCounts((c) => ({ ...c, crew: count || 0 })));
+  }, [order.id, order.status]);
+
+  const [qcOpen, setQcOpen] = useState(false);
+  const [lastFail, setLastFail] = useState("");
+  useEffect(() => {
+    if (session.role !== "production" && session.role !== "admin") return;
+    if (order.status !== "job_pending_qc" && order.status !== "job_rework") return;
+    supabase.from("job_order_qc").select("status, fail_reason, started_at").eq("job_order_id", order.id).eq("stage", "production").order("started_at", { ascending: false }).limit(1)
+      .then(({ data }) => { const r = data && data[0]; setQcOpen(!!r && r.status === "in_progress"); setLastFail(r && r.status === "failed" ? r.fail_reason || "" : ""); });
   }, [order.id, order.status]);
 
   if (session.role !== "production" && session.role !== "admin") return null;
@@ -4377,7 +4418,7 @@ function ProductionActions({ order, session, models, onDone, flash }) {
           {chip(true, "Accepted", "")}
           {chip(counts.mats > 0 || ["material_assigned", "manpower_planned", "job_in_process", "job_pending_qc"].includes(s), "Material assigned", "Material not assigned")}
           {chip(counts.crew > 0, "Tailors assigned", "Tailors not assigned")}
-          {chip(["job_in_process", "job_pending_qc"].includes(s), "Started", "Not started")}
+          {chip(["job_in_process", "job_pending_qc", "job_rework"].includes(s), "Started", "Not started")}
         </div>
       )}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -4395,7 +4436,8 @@ function ProductionActions({ order, session, models, onDone, flash }) {
           <button style={btn("#2F8F46")} onClick={() => setDlg("complete")}>Mark as completed</button>
           <button style={btn("#8a8a8a")} onClick={() => setDlg("tailors")}>Add tailors</button>
         </>)}
-        {s === "job_pending_qc" && <button style={btn("#8a8a8a")} onClick={() => setDlg("bridge")}>Quality check passed (temporary step)</button>}
+        {s === "job_pending_qc" && <button style={btn("#1A1A1A")} onClick={() => setDlg("qc")}>{qcOpen ? "Continue quality check" : "Start quality check"}</button>}
+        {s === "job_rework" && <button style={btn("#C1302B")} onClick={() => setDlg("rework")}>Start rework</button>}
       </div>
 
       {dlg === "accept" && (
@@ -4424,10 +4466,11 @@ function ProductionActions({ order, session, models, onDone, flash }) {
           The time stamp stops and the order moves to <strong>Pending Quality Check</strong>.
         </ConfirmDialog>
       )}
-      {dlg === "bridge" && (
-        <ConfirmDialog title="Quality check passed?" confirmLabel="Yes" busy={busy} onCancel={() => setDlg(null)}
-          onConfirm={() => run(() => advanceOrder(session, order, "ready_in_production", "Quality check passed (temporary step)"), "Ready in Production")}>
-          The order becomes <strong>Ready in Production</strong>, which Sales can see. (Temporary step: the full quality-check checklist with sign-off comes in the next update.)
+      {dlg === "qc" && <QualityCheckDialog order={order} session={session} onClose={() => { setDlg(null); onDone && onDone(); }} onDone={(msg) => { setDlg(null); flash && flash(msg); onDone && onDone(); }} />}
+      {dlg === "rework" && (
+        <ConfirmDialog title="Start the rework?" confirmLabel="Yes, start rework" busy={busy} onCancel={() => setDlg(null)} onConfirm={() => run(() => startRework(session, order), "Rework started")}>
+          The order goes back to <strong>Job In Progress</strong>. Use "Add tailors" afterwards if someone different will fix it.
+          {lastFail && <div style={{ marginTop: 8, color: "#C1302B" }}>Quality check said: {lastFail}</div>}
         </ConfirmDialog>
       )}
     </div>
@@ -4555,6 +4598,7 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
         <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Waiting for tailors: <strong>{waiting.tailors}</strong></span>
         <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Planned (not started): <strong>{waiting.planned}</strong></span>
         <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Pending quality check: <strong>{waiting.qc}</strong></span>
+        <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Sent back for rework: <strong>{orders.filter((o) => o.status === "job_rework").length}</strong></span>
       </div>
 
       {laneNames.length === 0 ? (
@@ -4660,6 +4704,288 @@ function WorkersManager({ flash }) {
   );
 }
 
+/* ---------------- Quality check ---------------- */
+
+function QualityCheckDialog({ order, session, onClose, onDone }) {
+  const [qc, setQc] = useState(null);
+  const [error, setError] = useState("");
+  const [notes, setNotes] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [signed, setSigned] = useState(false);
+  const sigRef = React.useRef(null);
+  const checksRef = React.useRef([]);
+  const startedRef = React.useRef(false);      // React runs effects twice in development — never start two checks
+  const [mode, setMode] = useState(null);          // null | "pass" | "fail" (confirm pop-ups)
+  const [failing, setFailing] = useState(false);   // shows the "needs rework" form
+  const [reason, setReason] = useState("");
+  const [files, setFiles] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    (async () => {
+      // pick up a check that was started earlier (so ticks are never lost), otherwise start a new round
+      const { data: open } = await supabase.from("job_order_qc").select("*").eq("job_order_id", order.id).eq("stage", "production").eq("status", "in_progress").order("started_at", { ascending: false }).limit(1);
+      if (open && open[0]) { checksRef.current = open[0].checks; setNotes(open[0].notes || ""); setQc(open[0]); return; }
+      const { data: all } = await supabase.from("job_order_qc").select("round").eq("job_order_id", order.id).eq("stage", "production");
+      const round = (all || []).reduce((m, r) => Math.max(m, r.round), 0) + 1;
+      const { data: std } = await supabase.from("qc_checklist_items").select("*").eq("stage", "production").eq("active", true).order("sort_order");
+      const checks = buildQcChecks(order, std || []);
+      const { data: created, error: e } = await supabase.from("job_order_qc").insert({ job_order_id: order.id, stage: "production", round, checks, started_by: session.name }).select().single();
+      if (e) { setError(e.message); return; }
+      checksRef.current = created.checks;
+      setQc(created);
+      notify(session, `${session.name} started the quality check — order ${order.jobOrderNo} (${order.model})`, "status", order.branch, { type: "order", id: order.id }, { internal: true });
+    })();
+  }, []); // eslint-disable-line
+
+  // Tick / untick one line. Time-stamped, and saved straight away.
+  const toggle = async (key) => {
+    const now = new Date().toISOString();
+    const checks = checksRef.current.map((c) => (c.key !== key ? c : c.ok ? { ...c, ok: false, at: null, by: null } : { ...c, ok: true, at: now, by: session.name }));
+    checksRef.current = checks;
+    setQc((q) => ({ ...q, checks }));
+    const { error: e } = await supabase.from("job_order_qc").update({ checks }).eq("id", qc.id);
+    if (e) setError("Couldn't save that tick: " + e.message);
+  };
+
+  const checks = qc ? qc.checks : [];
+  const done = checks.filter((c) => c.ok).length;
+  const allDone = checks.length > 0 && done === checks.length;
+  const groups = ["Standard checks", "This order's requirements", "Measurements"].filter((g) => checks.some((c) => c.group === g));
+
+  const doPass = async () => {
+    setBusy(true); setError("");
+    const blob = sigRef.current ? await new Promise((r) => sigRef.current.toBlob(r, "image/png")) : null;
+    const up = blob ? await uploadCustomerFile(`qc-signatures/${order.id}-${Date.now()}.png`, blob, "image/png") : { error: { message: "no signature drawn" } };
+    if (up.error) { setError("Couldn't save the signature: " + up.error.message); setBusy(false); setMode(null); return; }
+    const { error: e1 } = await supabase.from("job_order_qc").update({
+      status: "passed", confirmed: true, signature_url: up.ref, notes: notes || null, completed_by: session.name, completed_at: new Date().toISOString(),
+    }).eq("id", qc.id);
+    if (e1) { setError(e1.message); setBusy(false); setMode(null); return; }
+    const { error: e2 } = await advanceOrder(session, order, "ready_in_production", null);
+    setBusy(false);
+    if (e2) { setError(e2.message); setMode(null); return; }
+    onDone && onDone("Quality check passed — Ready in Production");
+  };
+
+  const doFail = async () => {
+    setBusy(true); setError("");
+    const { error: e1 } = await supabase.from("job_order_qc").update({
+      status: "failed", fail_reason: reason.trim(), fail_attachments: files, notes: notes || null, completed_by: session.name, completed_at: new Date().toISOString(),
+    }).eq("id", qc.id);
+    if (e1) { setError(e1.message); setBusy(false); setMode(null); return; }
+    const { error: e2 } = await advanceOrder(session, order, "job_rework", reason.trim(), null, files);
+    setBusy(false);
+    if (e2) { setError(e2.message); setMode(null); return; }
+    onDone && onDone("Sent back for rework");
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 16 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 780 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20 }}>Quality check{qc ? ` · round ${qc.round}` : ""}</div>
+            <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 10 }}>Order {order.jobOrderNo} · {order.model}{order.cut ? ` · ${order.cut}` : ""}{order.color ? ` · ${order.color}` : ""}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 24, color: "#8a8a8a" }}>×</button>
+        </div>
+
+        {!qc ? <div style={{ fontSize: 13, color: error ? "#C1302B" : "#8a8a8a", padding: "20px 0" }}>{error || "Loading…"}</div> : (
+          <>
+            <div style={{ margin: "6px 0 14px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 4 }}><span>{done} of {checks.length} checked</span><span style={{ color: "#8a8a8a" }}>Every tick is time-stamped and saved as you go</span></div>
+              <div style={{ height: 8, background: "#EEF0F2", borderRadius: 4 }}><div style={{ width: `${checks.length ? (done / checks.length) * 100 : 0}%`, height: "100%", background: allDone ? "#2F8F46" : "#3B6FA0", borderRadius: 4, transition: "width .2s" }} /></div>
+            </div>
+
+            {groups.map((g) => (
+              <div key={g} style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.04em", color: "#5a5a5a", marginBottom: 6 }}>{g.toUpperCase()}</div>
+                {checks.filter((c) => c.group === g).map((c) => (
+                  <div key={c.key} onClick={() => toggle(c.key)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "11px 12px", minHeight: 48, border: "1px solid " + (c.ok ? "#BFE0C7" : "#E5E5E5"), background: c.ok ? "#F2FAF4" : "#fff", borderRadius: 6, marginBottom: 6, cursor: "pointer" }}>
+                    <div style={{ width: 26, height: 26, borderRadius: 5, border: "2px solid " + (c.ok ? "#2F8F46" : "#9aa0a8"), background: c.ok ? "#2F8F46" : "#fff", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, flexShrink: 0 }}>{c.ok ? "✓" : ""}</div>
+                    <div style={{ flex: 1, fontSize: 14 }}>{c.label}</div>
+                    <div className="mono" style={{ fontSize: 11, color: "#8a8a8a", textAlign: "right" }}>{c.ok ? <>{fmtTime(c.at)}<br />{c.by}</> : ""}</div>
+                  </div>
+                ))}
+              </div>
+            ))}
+
+            <Field label="Notes (optional)"><textarea value={notes} onChange={(e) => setNotes(e.target.value)} onBlur={() => supabase.from("job_order_qc").update({ notes: notes || null }).eq("id", qc.id)} style={{ ...inputStyle, minHeight: 56 }} placeholder="Anything worth recording about this check…" /></Field>
+
+            {failing ? (
+              <div style={{ border: "1px solid #E8B9B6", background: "#FDF6F5", borderRadius: 6, padding: 14, marginTop: 14 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Send back for rework</div>
+                <textarea value={reason} onChange={(e) => setReason(e.target.value)} style={{ ...inputStyle, minHeight: 70, marginBottom: 10 }} placeholder="What needs fixing? (required)" />
+                <AttachmentField files={files} onChange={setFiles} folder="rejections" />
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 12 }}>
+                  <button onClick={() => setFailing(false)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Back</button>
+                  <button disabled={!reason.trim()} onClick={() => setMode("fail")} style={{ background: reason.trim() ? "#C1302B" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Send back for rework</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ borderTop: "2px solid #1A1A1A", marginTop: 18, paddingTop: 16 }}>
+                <label style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 14, marginBottom: 12, cursor: "pointer" }}>
+                  <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} style={{ width: 20, height: 20, marginTop: 1 }} />
+                  <span>I confirm that all requirements for this order have been fulfilled and every check above has been done.</span>
+                </label>
+                <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Signature — {session.name}</div>
+                <SignaturePad canvasRef={sigRef} onDrawn={setSigned} />
+                {error && <div style={{ color: "#C1302B", fontSize: 13, marginTop: 10 }}>{error}</div>}
+                <div style={{ display: "flex", gap: 10, justifyContent: "space-between", flexWrap: "wrap", marginTop: 16 }}>
+                  <button onClick={() => setFailing(true)} style={{ background: "#fff", border: "1px solid #C1302B", color: "#C1302B", borderRadius: 4, padding: "10px 18px", fontWeight: 700 }}>Needs rework</button>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 18px", fontWeight: 700 }}>Save & close</button>
+                    <button disabled={!(allDone && confirmed && signed)} onClick={() => setMode("pass")} style={{ background: allDone && confirmed && signed ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "10px 18px", fontWeight: 700 }}>Sign & submit — Ready in Production</button>
+                  </div>
+                </div>
+                {!(allDone && confirmed && signed) && <div style={{ fontSize: 11.5, color: "#8a8a8a", textAlign: "right", marginTop: 6 }}>{!allDone ? "Tick every line" : !confirmed ? "Tick the confirmation" : "Sign above"} to submit.</div>}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {mode === "pass" && <ConfirmDialog title="Submit the quality check?" confirmLabel="Yes, submit" busy={busy} onCancel={() => setMode(null)} onConfirm={doPass}>Order {order.jobOrderNo} becomes <strong>Ready in Production</strong>, and your signature and the time stamps are saved.</ConfirmDialog>}
+      {mode === "fail" && <ConfirmDialog title="Send back for rework?" confirmLabel="Yes, send back" busy={busy} onCancel={() => setMode(null)} onConfirm={doFail}>The order goes back to <strong>Rework</strong> with your reason{files.length ? " and photos" : ""}.</ConfirmDialog>}
+    </div>
+  );
+}
+
+// The quality-check record on the order page (Production and Admin only)
+function QcRecord({ order }) {
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    const load = () => supabase.from("job_order_qc").select("*").eq("job_order_id", order.id).eq("stage", "production").order("round").then(({ data }) => setRows(data || []));
+    load();
+    // a check can be started or ticked without the order's status changing — follow it live
+    const channel = supabase.channel("qc-record-" + order.id)
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_order_qc", filter: `job_order_id=eq.${order.id}` }, load)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [order.id, order.status]);
+  if (rows.length === 0) return null;
+  return (
+    <div style={{ ...cardStyle, margin: "16px 0" }}>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>QUALITY CHECK RECORD</div>
+      {rows.map((r) => (
+        <div key={r.id} style={{ marginBottom: 14, paddingBottom: 12, borderBottom: "1px solid #EEE" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: r.status === "passed" ? "#2F8F46" : r.status === "failed" ? "#C1302B" : "#D98E2B" }}>
+            Round {r.round} — {r.status === "passed" ? "Passed" : r.status === "failed" ? "Sent back for rework" : "In progress"}
+          </div>
+          <div style={{ fontSize: 12, color: "#8a8a8a", marginBottom: 6 }}>
+            Started {fmtDateTime(r.started_at)} by {r.started_by}
+            {r.completed_at && <> · finished {fmtDateTime(r.completed_at)} by {r.completed_by} ({fmtDuration(new Date(r.completed_at) - new Date(r.started_at))})</>}
+          </div>
+          {r.fail_reason && <div style={{ fontSize: 12.5, color: "#C1302B", marginBottom: 6 }}>Reason: {r.fail_reason}{r.fail_attachments && r.fail_attachments.length > 0 && <div style={{ marginTop: 4 }}><AttachmentGallery files={r.fail_attachments} /></div>}</div>}
+          <div style={{ fontSize: 12, columns: 2, columnGap: 20 }}>
+            {(r.checks || []).map((c) => <div key={c.key} style={{ breakInside: "avoid", marginBottom: 3 }}>{c.ok ? "✓" : "○"} {c.label}{c.ok && <span className="mono" style={{ color: "#8a8a8a" }}> · {fmtTime(c.at)} {c.by}</span>}</div>)}
+          </div>
+          {r.notes && <div style={{ fontSize: 12.5, marginTop: 6 }}><strong>Notes:</strong> {r.notes}</div>}
+          {r.signature_url && <div style={{ marginTop: 8 }}><div style={{ fontSize: 11.5, color: "#8a8a8a" }}>Signed by {r.completed_by}</div><SecureImg src={r.signature_url} style={{ width: 200, height: 60, objectFit: "contain", border: "1px solid #E5E5E5", borderRadius: 3, background: "#fff" }} /></div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// The "Quality Check" queue page (Production and Admin)
+function QcQueuePage({ orders, session, refresh, flash, onOpenOrder }) {
+  const [open, setOpen] = useState({});            // order id -> check under way
+  const [checking, setChecking] = useState(null);  // order being checked
+  const pending = orders.filter((o) => o.status === "job_pending_qc").sort((a, b) => new Date(a.productionCompletedAt || 0) - new Date(b.productionCompletedAt || 0));
+  const rework = orders.filter((o) => o.status === "job_rework");
+  useEffect(() => {
+    supabase.from("job_order_qc").select("job_order_id, started_by, checks").eq("stage", "production").eq("status", "in_progress")
+      .then(({ data }) => setOpen(Object.fromEntries((data || []).map((r) => [r.job_order_id, r]))));
+  }, [orders]);
+  const th = { textAlign: "left", padding: "8px 10px", fontSize: 12.5, borderBottom: "2px solid #1A1A1A" };
+  const td = { padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5" };
+  return (
+    <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 18 }}>QUALITY CHECK</h2>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>WAITING TO BE CHECKED ({pending.length})</div>
+      {pending.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14, padding: "10px 0 24px" }}>Nothing is waiting for a quality check.</div> : (
+        <table style={{ marginBottom: 28 }}>
+          <thead><tr><th style={th}>Job order</th><th style={th}>Model</th><th style={th}>Colour</th><th style={th}>Finished</th><th style={th}>Waiting</th><th style={th}>Check</th><th style={th}></th></tr></thead>
+          <tbody>
+            {pending.map((o) => {
+              const r = open[o.id];
+              return (
+                <tr key={o.id}>
+                  <td style={td} className="mono">{o.jobOrderNo}</td><td style={td}>{o.model}{o.cut ? ` · ${o.cut}` : ""}</td><td style={td}>{o.color || "—"}</td>
+                  <td style={td}>{o.productionCompletedAt ? fmtDateTime(o.productionCompletedAt) : "—"}</td>
+                  <td style={td}>{o.productionCompletedAt ? fmtDuration(Date.now() - new Date(o.productionCompletedAt)) : "—"}</td>
+                  <td style={{ ...td, color: r ? "#D98E2B" : "#8a8a8a", fontWeight: 600 }}>{r ? `In progress (${r.checks.filter((c) => c.ok).length}/${r.checks.length}) — ${r.started_by}` : "Not started"}</td>
+                  <td style={td}><button onClick={() => setChecking(o)} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontWeight: 700, fontSize: 12.5 }}>{r ? "Continue" : "Start check"}</button> <a className="link" style={{ marginLeft: 10, fontSize: 12.5 }} onClick={() => onOpenOrder(o.id)}>Open</a></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {rework.length > 0 && (
+        <>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, color: "#C1302B" }}>SENT BACK FOR REWORK ({rework.length})</div>
+          {rework.map((o) => <div key={o.id} style={{ padding: "8px 0", borderBottom: "1px solid #EEE", fontSize: 13.5 }}><span className="mono">{o.jobOrderNo}</span> · {o.model} — <a className="link" onClick={() => onOpenOrder(o.id)}>Open to start the rework</a></div>)}
+        </>
+      )}
+      {checking && <QualityCheckDialog order={checking} session={session} onClose={() => { setChecking(null); refresh(); }} onDone={(msg) => { setChecking(null); flash(msg); refresh(); }} />}
+    </div>
+  );
+}
+
+// Admin: the standard checklist editor
+function QcSetupPage({ flash }) {
+  const [stage, setStage] = useState("production");
+  const [rows, setRows] = useState([]);
+  const [text, setText] = useState("");
+  const load = () => supabase.from("qc_checklist_items").select("*").eq("stage", stage).order("sort_order").then(({ data }) => setRows(data || []));
+  useEffect(() => { load(); }, [stage]); // eslint-disable-line
+  const add = async () => {
+    if (!text.trim()) return;
+    const next = rows.reduce((m, r) => Math.max(m, r.sort_order), 0) + 10;
+    const { error } = await supabase.from("qc_checklist_items").insert({ stage, label: text.trim(), sort_order: next });
+    if (error) { flash("Error: " + error.message); return; }
+    setText(""); load();
+  };
+  const rename = async (r, label) => { if (label.trim() && label !== r.label) { await supabase.from("qc_checklist_items").update({ label: label.trim() }).eq("id", r.id); load(); } };
+  const toggle = async (r) => { await supabase.from("qc_checklist_items").update({ active: !r.active }).eq("id", r.id); load(); };
+  const move = async (i, dir) => {
+    const j = i + dir;
+    if (j < 0 || j >= rows.length) return;
+    await supabase.from("qc_checklist_items").update({ sort_order: rows[j].sort_order }).eq("id", rows[i].id);
+    await supabase.from("qc_checklist_items").update({ sort_order: rows[i].sort_order }).eq("id", rows[j].id);
+    load();
+  };
+  const pill = (on) => ({ padding: "6px 16px", fontSize: 12.5, borderRadius: 14, cursor: "pointer", border: "1px solid " + (on ? "#1A1A1A" : "#DDE1E7"), background: on ? "#1A1A1A" : "#fff", color: on ? "#fff" : "#1A1A1A" });
+  return (
+    <div style={{ maxWidth: 760, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 14 }}>QUALITY CHECKLIST</h2>
+      <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 6 }}>
+        <button style={pill(stage === "production")} onClick={() => setStage("production")}>Production check</button>
+        <button style={pill(stage === "store")} onClick={() => setStage("store")}>Store re-check</button>
+      </div>
+      <div style={{ textAlign: "center", fontSize: 12, color: "#8a8a8a", marginBottom: 16 }}>These standard lines appear on every check, alongside each order's own requirements and measurements (added automatically). A change only affects checks started after it.</div>
+      <div style={cardStyle}>
+        {rows.map((r, i) => (
+          <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "7px 0", borderBottom: "1px solid #F0F0F0", opacity: r.active ? 1 : 0.5 }}>
+            <input defaultValue={r.label} key={r.label} onBlur={(e) => rename(r, e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+            <a className="link" onClick={() => move(i, -1)}>↑</a><a className="link" onClick={() => move(i, 1)}>↓</a>
+            <a className="link" style={{ fontSize: 12 }} onClick={() => toggle(r)}>{r.active ? "Switch off" : "Switch on"}</a>
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Add a check…" style={{ ...inputStyle, flex: 1 }} />
+          <button onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px", fontWeight: 700 }}>+ Add</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- Order detail ---------------- */
 
 function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, onResubmit, onDelete, onEditFull, onViewFull, models, flash, onProductionDone }) {
@@ -4758,6 +5084,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
             {onDelete && <button onClick={() => onDelete(order.id)} style={{ marginTop: 16, background: "#fff", border: "1px solid #C1302B", color: "#C1302B", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Delete Record</button>}
 
             {seesInternal && <ProductionInfo order={order} />}
+            {seesInternal && <QcRecord order={order} />}
 
             <div id="order-history" style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid #E5E5E5" }}>
               <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", marginBottom: 8 }}>ACTIVITY LOG</div>
