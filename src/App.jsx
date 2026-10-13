@@ -35,6 +35,15 @@ const STATUS = {
   job_return_complete: { label: "Job Return Complete", color: "#2F8F46" },
   ready_to_deliver: { label: "Ready To Deliver", color: "#1A1A1A" },
   delivered: { label: "Delivered", color: "#1A1A1A" },
+  // Production cycle (part 1 uses the first two; the rest are filled in by the coming parts)
+  job_accepted: { label: "Accepted — Assign Material & Tailors", color: "#2F8F46" },
+  job_pending_qc: { label: "Pending Quality Check", color: "#D98E2B" },
+  job_rework: { label: "Rework", color: "#C1302B" },
+  ready_in_production: { label: "Ready in Production", color: "#1A1A1A" },
+  in_transit: { label: "Delivery to Stores", color: "#3B6FA0" },
+  store_received: { label: "Delivery Accepted — Re-Quality Check", color: "#D98E2B" },
+  ready_in_stores: { label: "Ready in Stores", color: "#1A1A1A" },
+  delivery_assigned: { label: "Delivery Assigned", color: "#3B6FA0" },
 };
 
 const MEASURE_FIELDS = [
@@ -102,6 +111,7 @@ const ROLE_HOME_CARDS = {
   ],
   production: [
     ["📋", "Production Panel", "Orders awaiting production", "records"],
+    ["📅", "Production Calendar", "What's being made today", "calendar"],
     ["🧥", "Item Details", "Browse the model catalog", "items"],
     ["📄", "Requirement List", "View saved requirements", "requirements"],
     ["🗂️", "Projects", "Design team projects", "projects"],
@@ -117,6 +127,7 @@ const ROLE_HOME_CARDS = {
     ["👥", "Add Users", "Create logins & assign roles", "users"],
     ["👤", "Customers", "Search profiles & history", "customers"],
     ["📊", "Analytics", "Which models and orders perform best", "analytics"],
+    ["📅", "Production Calendar", "What's being made today", "calendar"],
     ["🔐", "PIN & Devices", "Set PINs, approve showroom iPads", "pins"],
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
@@ -501,6 +512,30 @@ async function notify(session, message, type, branch, target) {
   } catch (e) { /* non-critical, ignore */ }
 }
 
+// Move an order to a new status, log it in its history, and notify.
+async function advanceOrder(session, order, toStatus, comment, extra) {
+  const label = STATUS[toStatus].label;
+  const note = comment ? `${label}: ${comment}` : label;
+  const history = [...(order.history || []), { at: new Date().toISOString(), by: session.name, note }];
+  const { error } = await supabase.from("job_orders").update({ status: toStatus, history, updated_at: new Date().toISOString(), ...(extra || {}) }).eq("id", order.id);
+  if (!error) notify(session, `${session.name}: ${label} — order ${order.jobOrderNo} (${order.name})${comment ? " — " + comment : ""}`, "status", order.branch, { type: "order", id: order.id });
+  return { error };
+}
+
+// Stop the clock: close the tailors' work and move the order to Pending Quality Check
+async function completeProduction(session, order) {
+  const now = new Date().toISOString();
+  await supabase.from("job_order_tailors").update({ finished_at: now }).eq("job_order_id", order.id).is("finished_at", null);
+  return advanceOrder(session, order, "job_pending_qc", null, { production_completed_at: now });
+}
+
+const fmtDuration = (ms) => {
+  if (ms == null || ms < 0) return "—";
+  const m = Math.floor(ms / 60000), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60);
+  return [d ? d + "d" : "", h ? h + "h" : "", (m % 60) + "m"].filter(Boolean).join(" ");
+};
+const fmtTime = (iso) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—");
+
 function NotificationBell({ session, notifications, refreshNotifications, onOpen }) {
   const [open, setOpen] = useState(false);
   const wrapperRef = React.useRef(null);
@@ -665,6 +700,8 @@ function dbToOrder(r) {
     buttonFrom: r.button_from, buttonTill: r.button_till, additionalRequirements: r.additional_requirements, attachments: r.attachments || [], color: r.color, colorSwatch: r.color_swatch, deliveryDate: r.delivery_date, attachmentUrl: r.attachment_url,
     comments: r.comments, status: r.status, history: r.history || [],
     createdAt: r.created_at, updatedAt: r.updated_at, cut: r.cut,
+    acceptedAt: r.accepted_at, acceptedBy: r.accepted_by,
+    productionStartedAt: r.production_started_at, productionCompletedAt: r.production_completed_at,
   };
 }
 function orderFieldsToDb(f) {
@@ -701,12 +738,8 @@ function modelToDb(f) {
 
 /* ---------------- workflow rules ---------------- */
 
+// Accept / Reject / Assign / Complete now live in ProductionActions; only the old return-and-rework steps remain here.
 function productionActions(status) {
-  if (status === "job_created") return [
-    { to: "job_in_process", label: "Accept & Start Production", color: "#2F8F46" },
-    { to: "job_rejected", label: "Reject Job", color: "#C1302B", needsComment: true },
-  ];
-  if (status === "job_in_process") return [{ to: "job_completed", label: "Mark Completed → Send to Showroom", color: "#2F8F46" }];
   if (status === "job_returned") return [{ to: "job_return_in_process", label: "Accept Return & Start Rework", color: "#2F8F46" }];
   if (status === "job_return_in_process") return [{ to: "job_return_complete", label: "Mark Return Complete → Send to Showroom", color: "#2F8F46" }];
   return [];
@@ -965,22 +998,25 @@ export default function App() {
       {subpage === "analytics" && (profile.role === "admin" || profile.role === "model_manager") && (
         <AnalyticsPage orders={orders} models={config.models} />
       )}
+      {subpage === "calendar" && (profile.role === "production" || profile.role === "admin") && (
+        <ProductionCalendar orders={orders} models={config.models} session={profile} refresh={refresh} flash={flash} onOpenOrder={(id) => openTarget("order", id)} />
+      )}
       {subpage === "pins" && profile.role === "admin" && (
         <PinsPage users={allUsers} branches={config.branches.map((b) => b.name)} session={profile} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && profile.role === "sales" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && profile.role === "production" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && profile.role === "production" && (
         <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && profile.role === "admin" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && profile.role === "model_manager" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && profile.role === "model_manager" && (
         <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {toast && (
@@ -1807,7 +1843,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
         <button onClick={() => setSubpage("new")} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em" }}>+ NEW JOB ORDER</button>
       </div>
       <OrderTable orders={filtered} onOpen={setSelectedId} editableStatuses={["job_rejected", "ready_to_deliver"]} />
-      {selected && <OrderDetail order={selected} role="sales" session={session} onClose={() => setSelectedId(null)}
+      {selected && <OrderDetail order={selected} role="sales" session={session} onClose={() => setSelectedId(null)} models={config.models} flash={flash} onProductionDone={refresh}
         onSaveFields={handleSaveFields} onAction={handleAction} onResubmit={handleResubmit}
         onEditFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("editOrder"); }}
         onViewFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("viewOrder"); }} />}
@@ -4014,9 +4050,420 @@ function CustomerDetail({ mobile, profiles, orders, session, refresh, onClose })
   );
 }
 
+/* ---------------- Production cycle: assign & start, actions, record, calendar ---------------- */
+
+function AssignStartDialog({ order, models, session, onClose, onDone }) {
+  const model = models.find((m) => m.modelNo === order.model);
+  const [workers, setWorkers] = useState([]);
+  const [mats, setMats] = useState(null);
+  const [crew, setCrew] = useState([{ worker_id: "", task: "" }]);
+  const [adding, setAdding] = useState(null);       // { name, department } while adding a new tailor
+  const [error, setError] = useState("");
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const loadWorkers = () => supabase.from("workers").select("*").eq("active", true).order("name").then(({ data }) => setWorkers(data || []));
+  useEffect(() => {
+    loadWorkers();
+    if (!model) { setMats([]); return; }
+    // the materials this model needs (from "Material Used" in Add Model), meters to be filled in
+    supabase.from("model_materials").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => {
+      setMats((data || []).map((m) => {
+        const n = parseFloat(m.quantity);
+        return { material_type: m.material_type || "", material_code: m.material_code || "", required: m.quantity || "", assigned: isNaN(n) ? "" : String(n) };
+      }));
+    });
+  }, []); // eslint-disable-line
+
+  const setMat = (i, patch) => setMats((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const setCrewRow = (i, patch) => setCrew((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const pickWorker = (i, id) => { const w = workers.find((x) => x.id === id); setCrewRow(i, { worker_id: id, task: (w && w.department) || "" }); };
+
+  const saveNewWorker = async () => {
+    if (!adding.name.trim()) return;
+    const { error: e } = await supabase.from("workers").insert({ name: adding.name.trim(), department: adding.department.trim() || null });
+    if (e) { setError(e.code === "23505" ? "That tailor is already in the list." : e.message); return; }
+    setAdding(null); setError(""); loadWorkers();
+  };
+
+  const validate = () => {
+    for (const m of (mats || []).filter((r) => r.material_type.trim() || r.assigned.trim())) {
+      if (!m.material_type.trim()) return "Every material row needs a material name.";
+      if (m.assigned === "" || isNaN(parseFloat(m.assigned)) || parseFloat(m.assigned) < 0) return `Enter the meters assigned for ${m.material_type}.`;
+    }
+    if (!crew.some((c) => c.worker_id)) return "Choose at least one tailor.";
+    return "";
+  };
+  const short = (mats || []).filter((m) => { const r = parseFloat(m.required), a = parseFloat(m.assigned); return !isNaN(r) && !isNaN(a) && a < r; });
+
+  const doStart = async () => {
+    setBusy(true); setError("");
+    const now = new Date().toISOString();
+    const matRows = (mats || []).filter((m) => m.material_type.trim()).map((m) => ({
+      job_order_id: order.id, material_type: m.material_type.trim(), material_code: m.material_code || null,
+      required_qty: m.required || null, assigned_qty: m.assigned || null, created_by: session.name,
+    }));
+    const crewRows = crew.filter((c) => c.worker_id).map((c) => {
+      const w = workers.find((x) => x.id === c.worker_id);
+      return { job_order_id: order.id, worker_id: c.worker_id, worker_name: w ? w.name : "", task: c.task || null, started_at: now, assigned_by: session.name };
+    });
+    const fail = (msg) => { setError(msg); setBusy(false); setConfirm(false); };
+    let matIds = [];
+    if (matRows.length) {
+      const { data, error: e1 } = await supabase.from("job_order_materials").insert(matRows).select("id");
+      if (e1) { fail(e1.message); return; }
+      matIds = (data || []).map((r) => r.id);
+    }
+    const { data: crewData, error: e2 } = await supabase.from("job_order_tailors").insert(crewRows).select("id");
+    if (e2) {
+      if (matIds.length) await supabase.from("job_order_materials").delete().in("id", matIds);
+      fail(e2.message); return;
+    }
+    const { error: e3 } = await advanceOrder(session, order, "job_in_process", null, { production_started_at: now });
+    if (e3) {                                  // undo what was just saved so a retry doesn't double it up
+      if (matIds.length) await supabase.from("job_order_materials").delete().in("id", matIds);
+      await supabase.from("job_order_tailors").delete().in("id", (crewData || []).map((r) => r.id));
+      fail(e3.message); return;
+    }
+    setBusy(false);
+    onDone && onDone();
+  };
+
+  const th = { textAlign: "left", padding: "6px 8px", fontSize: 11.5, borderBottom: "2px solid #1A1A1A" };
+  const td = { padding: "5px 8px", fontSize: 12.5 };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 24 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 860 }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 2 }}>Assign material & tailors</div>
+        <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 18 }}>Order {order.jobOrderNo} · {order.name} · {order.model}{order.cut ? ` · ${order.cut}` : ""}{order.color ? ` · ${order.color}` : ""}</div>
+
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>MATERIAL</div>
+        <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 8 }}>Filled from this model's "Material Used". Enter the meters actually issued; add anything extra below.</div>
+        {mats === null ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>Loading…</div> : (
+          <>
+            {mats.length === 0 && <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 8 }}>No material is listed for this model. Add what you issued, or continue without.</div>}
+            {mats.length > 0 && (
+              <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8 }}>
+                <thead><tr><th style={th}>Material</th><th style={th}>Code</th><th style={th}>Required (model)</th><th style={th}>Assigned (meters)</th><th style={th}></th></tr></thead>
+                <tbody>
+                  {mats.map((m, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid #E5E5E5" }}>
+                      <td style={td}><input value={m.material_type} onChange={(e) => setMat(i, { material_type: e.target.value })} style={{ ...inputStyle, width: 170 }} /></td>
+                      <td style={td}><input value={m.material_code} onChange={(e) => setMat(i, { material_code: e.target.value })} style={{ ...inputStyle, width: 110 }} /></td>
+                      <td style={{ ...td, color: "#5a5a5a" }}>{m.required || "—"}</td>
+                      <td style={td}><input value={m.assigned} inputMode="decimal" onChange={(e) => setMat(i, { assigned: e.target.value })} style={{ ...inputStyle, width: 90 }} /></td>
+                      <td style={td}><a className="link" style={{ color: "#C1302B", fontSize: 11 }} onClick={() => setMats((rows) => rows.filter((_, j) => j !== i))}>Remove</a></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <a className="link" style={{ fontSize: 12.5 }} onClick={() => setMats((rows) => [...rows, { material_type: "", material_code: "", required: "", assigned: "" }])}>+ Add another material</a>
+          </>
+        )}
+
+        <div style={{ fontWeight: 700, fontSize: 13, margin: "22px 0 6px" }}>TAILORS</div>
+        <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 8 }}>The time stamp starts when you confirm.</div>
+        {crew.map((c, i) => (
+          <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+            <select value={c.worker_id} onChange={(e) => pickWorker(i, e.target.value)} style={{ ...inputStyle, width: 220 }}>
+              <option value="">Choose a tailor…</option>
+              {workers.map((w) => <option key={w.id} value={w.id}>{w.name}{w.department ? ` — ${w.department}` : ""}</option>)}
+            </select>
+            <input value={c.task} onChange={(e) => setCrewRow(i, { task: e.target.value })} placeholder="Task / department" list="dept-list" style={{ ...inputStyle, width: 200 }} />
+            {crew.length > 1 && <a className="link" style={{ color: "#C1302B", fontSize: 11 }} onClick={() => setCrew((rows) => rows.filter((_, j) => j !== i))}>Remove</a>}
+          </div>
+        ))}
+        <datalist id="dept-list">{["Cutting", "Stitching", "Finishing", "Embroidery", "Pressing"].map((d) => <option key={d} value={d} />)}</datalist>
+        <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center" }}>
+          <a className="link" style={{ fontSize: 12.5 }} onClick={() => setCrew((rows) => [...rows, { worker_id: "", task: "" }])}>+ Add another tailor</a>
+          {adding ? (
+            <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+              <input value={adding.name} onChange={(e) => setAdding({ ...adding, name: e.target.value })} placeholder="New tailor's name" style={{ ...inputStyle, width: 160 }} />
+              <input value={adding.department} onChange={(e) => setAdding({ ...adding, department: e.target.value })} placeholder="Department" list="dept-list" style={{ ...inputStyle, width: 130 }} />
+              <button onClick={saveNewWorker} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Save</button>
+              <a className="link" style={{ fontSize: 12 }} onClick={() => setAdding(null)}>Cancel</a>
+            </span>
+          ) : <a className="link" style={{ fontSize: 12.5 }} onClick={() => setAdding({ name: "", department: "" })}>+ New tailor (not in the list yet)</a>}
+        </div>
+
+        {error && <div style={{ color: "#C1302B", fontSize: 13, marginTop: 14 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 22 }}>
+          <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 20px", fontSize: 14, fontWeight: 700 }}>Cancel</button>
+          <button onClick={() => { const v = validate(); if (v) setError(v); else { setError(""); setConfirm(true); } }} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 20px", fontSize: 14, fontWeight: 700 }}>Assign & start tailoring</button>
+        </div>
+      </div>
+
+      {confirm && (
+        <ConfirmDialog title="Start tailoring now?" confirmLabel="Yes, start" busy={busy} onCancel={() => setConfirm(false)} onConfirm={doStart}>
+          The job moves to <strong>Job In Progress</strong> and its time stamp starts at this moment.
+          {short.length > 0 && <div style={{ marginTop: 8, color: "#C1302B" }}>Less material than the model needs: {short.map((m) => m.material_type).join(", ")}.</div>}
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
+function ProductionActions({ order, session, models, onDone, flash }) {
+  const [dlg, setDlg] = useState(null);       // "accept" | "reject" | "assign" | "complete" | "bridge"
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (session.role !== "production" && session.role !== "admin") return null;
+  const s = order.status;
+  if (!["job_created", "job_accepted", "job_in_process", "job_pending_qc"].includes(s)) return null;
+
+  const run = async (fn, okMsg) => {
+    setBusy(true);
+    const { error } = await fn();
+    setBusy(false); setDlg(null); setReason("");
+    if (error) flash && flash("Error: " + error.message); else { flash && flash(okMsg); onDone && onDone(); }
+  };
+  const btn = (bg) => ({ background: bg, color: "#fff", border: "none", borderRadius: 4, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" });
+
+  return (
+    <div style={{ ...cardStyle, marginBottom: 16 }}>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>PRODUCTION</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {s === "job_created" && (<>
+          <button style={btn("#2F8F46")} onClick={() => setDlg("accept")}>Accept</button>
+          <button style={btn("#C1302B")} onClick={() => setDlg("reject")}>Reject</button>
+        </>)}
+        {s === "job_accepted" && <button style={btn("#1A1A1A")} onClick={() => setDlg("assign")}>Assign material & tailors</button>}
+        {s === "job_in_process" && <button style={btn("#2F8F46")} onClick={() => setDlg("complete")}>Mark as completed</button>}
+        {s === "job_pending_qc" && <button style={btn("#8a8a8a")} onClick={() => setDlg("bridge")}>Quality check passed (temporary step)</button>}
+      </div>
+
+      {dlg === "accept" && (
+        <ConfirmDialog title="Accept this job order?" confirmLabel="Yes, accept" busy={busy} onCancel={() => setDlg(null)}
+          onConfirm={() => run(() => advanceOrder(session, order, "job_accepted", null, { accepted_at: new Date().toISOString(), accepted_by: session.name }), "Job order accepted")}>
+          Order {order.jobOrderNo} for {order.name}. Next you'll assign the material and tailors.
+        </ConfirmDialog>
+      )}
+      {dlg === "reject" && (
+        <ConfirmDialog title="Reject this job order?" confirmLabel="Yes, reject" busy={busy} confirmDisabled={!reason.trim()} onCancel={() => setDlg(null)}
+          onConfirm={() => run(() => advanceOrder(session, order, "job_rejected", reason.trim()), "Job order rejected")}>
+          <div style={{ marginBottom: 8 }}>Tell Sales why, so they can fix it and send it again.</div>
+          <textarea value={reason} onChange={(e) => setReason(e.target.value)} style={{ ...inputStyle, minHeight: 70 }} placeholder="Reason (required)" />
+        </ConfirmDialog>
+      )}
+      {dlg === "assign" && <AssignStartDialog order={order} models={models} session={session} onClose={() => setDlg(null)} onDone={() => { setDlg(null); flash && flash("Tailoring started"); onDone && onDone(); }} />}
+      {dlg === "complete" && (
+        <ConfirmDialog title="Mark as completed?" confirmLabel="Yes, completed" busy={busy} onCancel={() => setDlg(null)}
+          onConfirm={() => run(() => completeProduction(session, order), "Marked as completed")}>
+          The time stamp stops and the order moves to <strong>Pending Quality Check</strong>.
+        </ConfirmDialog>
+      )}
+      {dlg === "bridge" && (
+        <ConfirmDialog title="Quality check passed?" confirmLabel="Yes" busy={busy} onCancel={() => setDlg(null)}
+          onConfirm={() => run(() => advanceOrder(session, order, "ready_to_deliver", "Quality check passed (temporary step)"), "Moved on")}>
+          Temporary step: the full quality-check checklist with sign-off arrives in the next update.
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
+function ProductionInfo({ order }) {
+  const [mats, setMats] = useState([]);
+  const [crew, setCrew] = useState([]);
+  useEffect(() => {
+    supabase.from("job_order_materials").select("*").eq("job_order_id", order.id).order("created_at").then(({ data }) => setMats(data || []));
+    supabase.from("job_order_tailors").select("*").eq("job_order_id", order.id).order("started_at").then(({ data }) => setCrew(data || []));
+  }, [order.id, order.status]);
+  if (!order.acceptedAt && mats.length === 0 && crew.length === 0) return null;
+  const took = order.productionStartedAt ? new Date(order.productionCompletedAt || Date.now()) - new Date(order.productionStartedAt) : null;
+  const th = { textAlign: "left", padding: "5px 8px", fontSize: 11.5, borderBottom: "2px solid #1A1A1A" };
+  const td = { padding: "5px 8px", fontSize: 12.5, borderBottom: "1px solid #E5E5E5" };
+  return (
+    <div style={{ ...cardStyle, margin: "16px 0" }}>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>PRODUCTION RECORD</div>
+      <div style={{ fontSize: 12.5, lineHeight: 1.8, marginBottom: 10 }}>
+        {order.acceptedAt && <div>Accepted by <strong>{order.acceptedBy}</strong> · {fmtDateTime(order.acceptedAt)}</div>}
+        {order.productionStartedAt && <div>Tailoring started · {fmtDateTime(order.productionStartedAt)}</div>}
+        {order.productionCompletedAt && <div>Completed · {fmtDateTime(order.productionCompletedAt)}</div>}
+        {took != null && <div>{order.productionCompletedAt ? "Time taken" : "Running for"}: <strong>{fmtDuration(took)}</strong></div>}
+      </div>
+      {mats.length > 0 && (
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+          <thead><tr><th style={th}>Material</th><th style={th}>Code</th><th style={th}>Required</th><th style={th}>Assigned (meters)</th></tr></thead>
+          <tbody>{mats.map((m) => <tr key={m.id}><td style={td}>{m.material_type}</td><td style={td}>{m.material_code || "—"}</td><td style={td}>{m.required_qty || "—"}</td><td style={td}><strong>{m.assigned_qty || "—"}</strong></td></tr>)}</tbody>
+        </table>
+      )}
+      {crew.length > 0 && (
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={th}>Tailor</th><th style={th}>Task</th><th style={th}>Started</th><th style={th}>Finished</th></tr></thead>
+          <tbody>{crew.map((c) => <tr key={c.id}><td style={td}>{c.worker_name}</td><td style={td}>{c.task || "—"}</td><td style={td}>{c.started_at ? fmtDateTime(c.started_at) : "—"}</td><td style={td}>{c.finished_at ? fmtDateTime(c.finished_at) : "In progress"}</td></tr>)}</tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// yyyy-mm-dd in the viewer's own time zone (toISOString would shift the day for anyone ahead of UTC, e.g. Qatar)
+const localYmd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrder }) {
+  const [day, setDay] = useState(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; });
+  const [crew, setCrew] = useState([]);
+  const [pickedId, setPickedId] = useState(null);
+  const [confirmDone, setConfirmDone] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { supabase.from("job_order_tailors").select("*").then(({ data }) => setCrew(data || [])); }, [orders]);   // refreshes live when orders change
+
+  const bounds = (d) => { const a = new Date(d); a.setHours(0, 0, 0, 0); const b = new Date(d); b.setHours(23, 59, 59, 999); return [a, b]; };
+  const activeOn = (o, d) => {
+    if (!o.productionStartedAt) return false;
+    const [a, b] = bounds(d);
+    const s = new Date(o.productionStartedAt), e = o.productionCompletedAt ? new Date(o.productionCompletedAt) : null;
+    return s <= b && (!e || e >= a);
+  };
+  const working = orders.filter((o) => activeOn(o, day));
+  const lanes = {};
+  working.forEach((o) => {
+    const rows = crew.filter((c) => c.job_order_id === o.id);
+    const names = rows.length ? Array.from(new Set(rows.map((r) => r.worker_name))) : ["Unassigned"];
+    names.forEach((n) => { (lanes[n] = lanes[n] || []).push(o); });
+  });
+  const laneNames = Object.keys(lanes).sort((a, b) => (a === "Unassigned" ? 1 : b === "Unassigned" ? -1 : a.localeCompare(b)));
+  const isToday = bounds(day)[0].getTime() === bounds(new Date())[0].getTime();
+  const shift = (n) => setDay((d) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; });
+  const strip = [-3, -2, -1, 0, 1, 2, 3].map((n) => { const x = new Date(day); x.setDate(x.getDate() + n); return x; });
+  const picked = orders.find((o) => o.id === pickedId);
+  const canAct = session.role === "production" || session.role === "admin";
+  const today = localYmd(new Date());
+  const waiting = { accept: orders.filter((o) => o.status === "job_created").length, assign: orders.filter((o) => o.status === "job_accepted").length, qc: orders.filter((o) => o.status === "job_pending_qc").length };
+
+  return (
+    <div style={{ maxWidth: 1200, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 16 }}>PRODUCTION CALENDAR</h2>
+
+      <div style={{ display: "flex", justifyContent: "center", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+        <button onClick={() => shift(-1)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "7px 14px" }}>◀</button>
+        <div style={{ fontWeight: 700, fontSize: 16, minWidth: 220, textAlign: "center" }}>{isToday ? "Today · " : ""}{day.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" })}</div>
+        <button onClick={() => shift(1)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "7px 14px" }}>▶</button>
+        <button onClick={() => { const d = new Date(); d.setHours(0, 0, 0, 0); setDay(d); }} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontWeight: 700 }}>Today</button>
+        <input type="date" value={localYmd(day)} onChange={(e) => e.target.value && setDay(new Date(e.target.value + "T00:00:00"))} style={{ ...inputStyle, width: 160 }} />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 18, flexWrap: "wrap" }}>
+        {strip.map((d) => {
+          const sel = bounds(d)[0].getTime() === bounds(day)[0].getTime();
+          const n = orders.filter((o) => activeOn(o, d)).length;
+          return (
+            <div key={d.toISOString()} onClick={() => setDay(d)} style={{ width: 92, padding: "8px 4px", textAlign: "center", borderRadius: 6, cursor: "pointer", border: "1px solid " + (sel ? "#1A1A1A" : "#DDE1E7"), background: sel ? "#1A1A1A" : "#fff", color: sel ? "#fff" : "#1A1A1A" }}>
+              <div style={{ fontSize: 11 }}>{d.toLocaleDateString([], { weekday: "short" })} {d.getDate()}</div>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>{n}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", gap: 12, justifyContent: "center", marginBottom: 18, flexWrap: "wrap", fontSize: 12.5 }}>
+        <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Being made on this day: <strong>{working.length}</strong></span>
+        <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Waiting to be accepted: <strong>{waiting.accept}</strong></span>
+        <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Waiting for material & tailors: <strong>{waiting.assign}</strong></span>
+        <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Pending quality check: <strong>{waiting.qc}</strong></span>
+      </div>
+
+      {working.length === 0 ? (
+        <div style={{ textAlign: "center", color: "#8a8a8a", padding: 40, fontSize: 14 }}>Nothing was being made on this day.</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+          {laneNames.map((name) => (
+            <div key={name} style={{ border: "1px solid #DDE1E7", borderRadius: 8, padding: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 10, color: name === "Unassigned" ? "#C1302B" : "#1A1A1A" }}>👤 {name} <span style={{ color: "#8a8a8a", fontWeight: 400 }}>· {lanes[name].length}</span></div>
+              {lanes[name].map((o) => {
+                const overdue = o.deliveryDate && o.deliveryDate < today && !o.productionCompletedAt;
+                return (
+                  <div key={o.id} onClick={() => setPickedId(o.id)} style={{ border: "1px solid #E5E5E5", borderLeft: "4px solid " + (o.productionCompletedAt ? "#8a8a8a" : "#2F8F46"), borderRadius: 4, padding: "8px 10px", marginBottom: 8, cursor: "pointer", background: "#fff" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700 }}><span className="mono">{o.jobOrderNo}</span><span style={{ fontSize: 11, fontWeight: 400, color: "#8a8a8a" }}>{o.productionCompletedAt ? "done " + fmtTime(o.productionCompletedAt) : "since " + fmtTime(o.productionStartedAt)}</span></div>
+                    <div style={{ fontSize: 12 }}>{o.name} · {o.model}</div>
+                    <div style={{ fontSize: 11, color: overdue ? "#C1302B" : "#8a8a8a", fontWeight: overdue ? 700 : 400 }}>Due {o.deliveryDate ? fmtDate(o.deliveryDate) : "—"}{overdue ? " · overdue" : ""}</div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {picked && (
+        <div onClick={() => setPickedId(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", gap: 14, marginBottom: 14 }}>
+              <ModelThumb model={(models || []).find((m) => m.modelNo === picked.model) || { id: null, modelNo: picked.model }} size={90} />
+              <div>
+                <div className="mono" style={{ fontSize: 20, fontWeight: 700 }}>{picked.jobOrderNo}</div>
+                <div style={{ fontSize: 14 }}>{picked.name}</div>
+                <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{picked.model}{picked.cut ? ` · ${picked.cut}` : ""}{picked.color ? ` · ${picked.color}` : ""}</div>
+                <div style={{ marginTop: 4 }}><StatusTag status={picked.status} /></div>
+              </div>
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.8, marginBottom: 12 }}>
+              <div><strong>Due:</strong> {picked.deliveryDate ? fmtDate(picked.deliveryDate) : "—"}</div>
+              <div><strong>Started:</strong> {picked.productionStartedAt ? fmtDateTime(picked.productionStartedAt) : "—"}</div>
+              <div><strong>{picked.productionCompletedAt ? "Time taken" : "Running for"}:</strong> {picked.productionStartedAt ? fmtDuration(new Date(picked.productionCompletedAt || Date.now()) - new Date(picked.productionStartedAt)) : "—"}</div>
+              <div style={{ marginTop: 6 }}><strong>Working on it:</strong></div>
+              {crew.filter((c) => c.job_order_id === picked.id).map((c) => <div key={c.id}>👤 {c.worker_name}{c.task ? ` — ${c.task}` : ""} <span style={{ color: "#8a8a8a" }}>(since {fmtTime(c.started_at)}{c.finished_at ? `, finished ${fmtTime(c.finished_at)}` : ""})</span></div>)}
+              {crew.filter((c) => c.job_order_id === picked.id).length === 0 && <div style={{ color: "#C1302B" }}>No tailor recorded</div>}
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button onClick={() => setPickedId(null)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Close</button>
+              <button onClick={() => { setPickedId(null); onOpenOrder && onOpenOrder(picked.id); }} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Open full job order</button>
+              {canAct && picked.status === "job_in_process" && <button onClick={() => setConfirmDone(true)} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Mark as completed</button>}
+            </div>
+          </div>
+        </div>
+      )}
+      {confirmDone && picked && (
+        <ConfirmDialog title="Mark as completed?" confirmLabel="Yes, completed" busy={busy} onCancel={() => setConfirmDone(false)}
+          onConfirm={async () => { setBusy(true); const { error } = await completeProduction(session, picked); setBusy(false); setConfirmDone(false); setPickedId(null); if (error) flash("Error: " + error.message); else { flash("Marked as completed"); refresh(); } }}>
+          The time stamp stops and order {picked.jobOrderNo} moves to <strong>Pending Quality Check</strong>.
+        </ConfirmDialog>
+      )}
+
+      {canAct && <WorkersManager flash={flash} />}
+    </div>
+  );
+}
+
+function WorkersManager({ flash }) {
+  const [rows, setRows] = useState([]);
+  const [name, setName] = useState("");
+  const [dept, setDept] = useState("");
+  const load = () => supabase.from("workers").select("*").order("name").then(({ data }) => setRows(data || []));
+  useEffect(() => { load(); }, []);
+  const add = async () => {
+    if (!name.trim()) return;
+    const { error } = await supabase.from("workers").insert({ name: name.trim(), department: dept.trim() || null });
+    if (error) { flash(error.code === "23505" ? "That tailor is already in the list." : error.message); return; }
+    setName(""); setDept(""); load();
+  };
+  const toggle = async (w) => { await supabase.from("workers").update({ active: !w.active }).eq("id", w.id); load(); };
+  return (
+    <div style={{ ...cardStyle, marginTop: 28 }}>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>TAILORS</div>
+      <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 12 }}>The people you can assign to a job. They don't need a login. Switch someone off to hide them from the list without losing their history.</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" style={{ ...inputStyle, width: 200 }} />
+        <input value={dept} onChange={(e) => setDept(e.target.value)} placeholder="Department (Cutting, Stitching…)" style={{ ...inputStyle, width: 230 }} />
+        <button onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px", fontWeight: 700 }}>+ Add tailor</button>
+      </div>
+      {rows.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>No tailors yet.</div> : rows.map((w) => (
+        <div key={w.id} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #F0F0F0", fontSize: 13, opacity: w.active ? 1 : 0.5 }}>
+          <span>{w.name}{w.department ? <span style={{ color: "#8a8a8a" }}> — {w.department}</span> : null}</span>
+          <a className="link" onClick={() => toggle(w)}>{w.active ? "Switch off" : "Switch on"}</a>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ---------------- Order detail ---------------- */
 
-function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, onResubmit, onDelete, onEditFull, onViewFull }) {
+function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, onResubmit, onDelete, onEditFull, onViewFull, models, flash, onProductionDone }) {
   const [edit, setEdit] = useState(false);
   const [comment, setComment] = useState("");
   const [pendingAction, setPendingAction] = useState(null);
@@ -4050,6 +4497,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
 
         {!edit ? (
           <div style={{ marginTop: 16 }}>
+            <ProductionActions order={order} session={session} models={models || []} onDone={onProductionDone} flash={flash} />
             <Row l="Mobile" v={order.mobile} /><Row l="Order Type" v={order.orderType} />
             <Row l="Model" v={order.model} />
             <Row l="Colour" v={order.color ? (
@@ -4103,6 +4551,8 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
             )}
 
             {onDelete && <button onClick={() => onDelete(order.id)} style={{ marginTop: 16, background: "#fff", border: "1px solid #C1302B", color: "#C1302B", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Delete Record</button>}
+
+            <ProductionInfo order={order} />
 
             <div id="order-history" style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid #E5E5E5" }}>
               <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", marginBottom: 8 }}>ACTIVITY LOG</div>
@@ -4185,7 +4635,7 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL RECORDS</h2>
       <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />
       <OrderTable orders={filtered} onOpen={setSelectedId} editableStatuses={["job_rejected"]} />
-      {selected && <OrderDetail order={selected} role="production" session={session} onClose={() => setSelectedId(null)} onSaveFields={handleSaveFields} onAction={handleAction} />}
+      {selected && <OrderDetail order={selected} role="production" session={session} onClose={() => setSelectedId(null)} onSaveFields={handleSaveFields} onAction={handleAction} models={config.models} flash={flash} onProductionDone={refresh} />}
     </div>
   );
 }
@@ -4842,7 +5292,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
         <button onClick={() => setSubpage("new")} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em" }}>+ NEW JOB ORDER</button>
       </div>
       <OrderTable orders={filtered} onOpen={setSelectedId} showDelete onDelete={handleDeleteOrder} />
-      {selected && <OrderDetail order={selected} role="admin" session={session} onClose={() => setSelectedId(null)}
+      {selected && <OrderDetail order={selected} role="admin" session={session} onClose={() => setSelectedId(null)} models={config.models} flash={flash} onProductionDone={refresh}
         onSaveFields={handleSaveFields} onAction={() => {}} onDelete={handleDeleteOrder}
         onEditFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("editOrder"); }}
         onViewFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("viewOrder"); }} />}
