@@ -28,7 +28,7 @@ const PROJECTS_ENABLED = false; // flip to true when ready to continue building 
 const STATUS = {
   job_created: { label: "Job Created", color: "#2F8F46" },
   job_rejected: { label: "Job Rejected", color: "#C1302B" },
-  job_in_process: { label: "Job In Process", color: "#2F8F46" },
+  job_in_process: { label: "Job In Progress", color: "#2F8F46" },
   job_completed: { label: "Job Completed", color: "#2F8F46" },
   job_returned: { label: "Job Returned", color: "#C1302B" },
   job_return_in_process: { label: "Job Return In Process", color: "#2F8F46" },
@@ -36,7 +36,10 @@ const STATUS = {
   ready_to_deliver: { label: "Ready To Deliver", color: "#1A1A1A" },
   delivered: { label: "Delivered", color: "#1A1A1A" },
   // Production cycle (part 1 uses the first two; the rest are filled in by the coming parts)
-  job_accepted: { label: "Accepted — Assign Material & Tailors", color: "#2F8F46" },
+  job_accepted: { label: "Accepted — Assign Material", color: "#2F8F46" },
+  material_assigned: { label: "Material Assigned — Assign Tailors", color: "#2F8F46" },
+  manpower_planned: { label: "Tailors Planned — Start Tailoring", color: "#2F8F46" },
+  public_in_process: { label: "Job In Process", color: "#C1302B" },   // what Sales sees instead of the internal stages
   job_pending_qc: { label: "Pending Quality Check", color: "#D98E2B" },
   job_rework: { label: "Rework", color: "#C1302B" },
   ready_in_production: { label: "Ready in Production", color: "#1A1A1A" },
@@ -45,6 +48,16 @@ const STATUS = {
   ready_in_stores: { label: "Ready in Stores", color: "#1A1A1A" },
   delivery_assigned: { label: "Delivery Assigned", color: "#3B6FA0" },
 };
+
+// Internal production stages are hidden from everyone except Production and Admin; others see "Job In Process" instead.
+const PRODUCTION_ONLY = ["job_accepted", "material_assigned", "manpower_planned", "job_in_process", "job_pending_qc", "job_rework"];
+let VIEWER_ROLE = null;
+const setViewerRole = (r) => { VIEWER_ROLE = r; };
+const maskStatus = (status, role = VIEWER_ROLE) =>
+  (role === "production" || role === "admin" || !PRODUCTION_ONLY.includes(status)) ? status : "public_in_process";
+const hidePII = (session) => !!session && session.role === "production";   // Production never sees a customer's name or mobile number
+// Statuses after production hands the order on: Production's own list drops them
+const AFTER_PRODUCTION = ["ready_in_production", "in_transit", "store_received", "ready_in_stores", "delivery_assigned", "ready_to_deliver", "delivered"];
 
 const MEASURE_FIELDS = [
   ["shoulder", "Shoulder"], ["chest", "Chest"], ["waist", "Waist"], ["hips", "Hips"],
@@ -369,7 +382,7 @@ function Lightbox({ src, alt, onClose }) {
   const realSrc = useFileUrl(src);
   if (!realSrc) return null;
   return (
-    <div className="no-print" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, cursor: "zoom-out" }} onClick={onClose}>
+    <div className="no-print" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200, cursor: "zoom-out" }} onClick={onClose}>
       <img src={realSrc} alt={alt || ""} style={{ maxWidth: "90%", maxHeight: "90%", objectFit: "contain", borderRadius: 4 }} onClick={(e) => e.stopPropagation()} />
       <button onClick={onClose} style={{ position: "absolute", top: 20, right: 24, background: "none", border: "none", color: "#fff", fontSize: 30, cursor: "pointer", lineHeight: 1 }}>×</button>
     </div>
@@ -395,7 +408,7 @@ function VideoViewer({ src, onClose }) {
   const realSrc = useFileUrl(src);
   if (!realSrc) return null;
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div onClick={(e) => e.stopPropagation()} style={{ position: "relative" }}>
         <video src={realSrc} controls autoPlay playsInline style={{ maxWidth: "92vw", maxHeight: "85vh", background: "#000" }} />
         <div onClick={onClose} style={{ position: "absolute", top: -34, right: 0, color: "#fff", fontSize: 26, cursor: "pointer" }}>×</div>
@@ -430,7 +443,7 @@ function AttachmentGallery({ files }) {
 }
 
 // Editable: pick photos/videos, they upload straight away and appear as thumbnails with a remove ×.
-function AttachmentField({ files, onChange, disabled }) {
+function AttachmentField({ files, onChange, disabled, folder }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const [img, setImg] = useState(null);
@@ -449,7 +462,7 @@ function AttachmentField({ files, onChange, disabled }) {
       const isImage = file.type.startsWith("image/");
       if (!isVideo && !isImage) { setError(`"${file.name}" isn't a photo or video.`); continue; }
       const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const path = `order-files/${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${safe}`;
+      const path = `${folder || "order-files"}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${safe}`;
       const up = await uploadCustomerFile(path, file, file.type);
       if (up.error) { setError(`Couldn't upload "${file.name}": ${up.error.message}`); continue; }
       added.push({ url: up.ref, name: file.name, type: isVideo ? "video" : "image" });
@@ -496,15 +509,18 @@ function AttachmentField({ files, onChange, disabled }) {
 const openFocus = { current: null };
 
 // `target` ({ type: "order" | "customer" | "model", id }) is what clicking the notification opens.
-async function notify(session, message, type, branch, target) {
+// `opts.internal` makes it a production-only notification: Sales can't read it and it's never pushed to shared devices.
+async function notify(session, message, type, branch, target, opts) {
   try {
+    const internal = !!(opts && opts.internal);
     const { data } = await supabase.from("notifications")
       .insert({
         message, type, created_by: session.name, branch: (branch !== undefined ? branch : session.branch) || null,
         target_type: target ? target.type : null, target_id: target ? String(target.id) : null,
+        internal,
       })
       .select("id").single();
-    if (data) {
+    if (data && !internal) {
       supabase.functions.invoke("push-service", {
         body: { action: "notify", notification_id: data.id, exclude_device_token: localStorage.getItem(DEVICE_KEY) || undefined },
       });   // fire and forget; the device that made the change is skipped
@@ -512,14 +528,31 @@ async function notify(session, message, type, branch, target) {
   } catch (e) { /* non-critical, ignore */ }
 }
 
-// Move an order to a new status, log it in its history, and notify.
-async function advanceOrder(session, order, toStatus, comment, extra) {
+const INTERNAL_STATUSES = ["material_assigned", "manpower_planned", "job_in_process", "job_pending_qc", "job_rework"];
+
+// Move an order to a new status. `files` (optional) are attached to the history entry (used for rejections).
+async function advanceOrder(session, order, toStatus, comment, extra, files) {
   const label = STATUS[toStatus].label;
   const note = comment ? `${label}: ${comment}` : label;
-  const history = [...(order.history || []), { at: new Date().toISOString(), by: session.name, note }];
+  const entry = { at: new Date().toISOString(), by: session.name, note };
+  if (toStatus === "job_accepted") { entry.internal = false; entry.public_note = STATUS.public_in_process.label; }
+  else if (INTERNAL_STATUSES.includes(toStatus)) entry.internal = true;
+  if (files && files.length) entry.attachments = files;
+  const history = [...(order.history || []), entry];
   const { error } = await supabase.from("job_orders").update({ status: toStatus, history, updated_at: new Date().toISOString(), ...(extra || {}) }).eq("id", order.id);
-  if (!error) notify(session, `${session.name}: ${label} — order ${order.jobOrderNo} (${order.name})${comment ? " — " + comment : ""}`, "status", order.branch, { type: "order", id: order.id });
+  if (!error) {
+    const internal = INTERNAL_STATUSES.includes(toStatus);
+    const shown = toStatus === "job_accepted" ? STATUS.public_in_process.label : label;
+    // no customer names in notifications — order number and model only
+    notify(session, `${session.name}: ${shown} — order ${order.jobOrderNo} (${order.model})${comment ? " — " + comment : ""}`, "status", order.branch, { type: "order", id: order.id }, { internal });
+  }
   return { error };
+}
+
+async function startTailoring(session, order) {
+  const now = new Date().toISOString();
+  await supabase.from("job_order_tailors").update({ started_at: now }).eq("job_order_id", order.id).is("started_at", null);
+  return advanceOrder(session, order, "job_in_process", null, { production_started_at: now });
 }
 
 // Stop the clock: close the tailors' work and move the order to Pending Quality Check
@@ -968,6 +1001,8 @@ export default function App() {
     </>
   );
 
+  setViewerRole(profile ? profile.role : null);
+
   if (session === undefined) return <Loading text="Loading…" />;
   if (!session) return <LoginGate />;
   if (profile === null) return <NoProfileScreen onSignOut={() => supabase.auth.signOut()} />;
@@ -1085,6 +1120,7 @@ function Shell({ session, subpage, setSubpage, onLogout, onLock, children, notif
 }
 
 function StatusTag({ status }) {
+  status = maskStatus(status);
   const s = STATUS[status] || { label: status, color: "#1A1A1A" };
   return <span style={{ color: s.color, fontWeight: 700, fontSize: 13 }}>{s.label.toUpperCase()}</span>;
 }
@@ -1572,15 +1608,17 @@ function LockScreen({ profile, onUnlock }) {
 
 /* ---------------- Records table (shared) ---------------- */
 
-function RecordsToolbar({ query, setQuery, statusFilter, setStatusFilter }) {
+function RecordsToolbar({ query, setQuery, statusFilter, setStatusFilter, noPII }) {
+  const seesAll = VIEWER_ROLE === "production" || VIEWER_ROLE === "admin";
+  const statusList = Object.entries(STATUS).filter(([k]) => (seesAll ? k !== "public_in_process" : !PRODUCTION_ONLY.includes(k)));
   return (
     <div className="no-print" style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 18, flexWrap: "wrap", justifyContent: "center" }}>
       <span style={{ fontSize: 13, fontWeight: 600 }}>SEARCH BY:</span>
-      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name / Mobile No / Job Order" style={{ ...inputStyle, width: 260 }} />
+      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={noPII ? "Job Order No / Model / Colour" : "Name / Mobile No / Job Order"} style={{ ...inputStyle, width: 260 }} />
       <span style={{ fontSize: 13, fontWeight: 600 }}>STATUS TYPE:</span>
       <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ ...inputStyle, width: 200 }}>
         <option value="all">All statuses</option>
-        {Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        {statusList.map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
       </select>
     </div>
   );
@@ -1597,13 +1635,13 @@ function SalesTabs({ subpage, setSubpage }) {
   );
 }
 
-function OrderTable({ orders, onOpen, editableStatuses, showDelete, onDelete }) {
+function OrderTable({ orders, onOpen, editableStatuses, showDelete, onDelete, noPII }) {
   if (orders.length === 0) return <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No job orders found.</div>;
   return (
     <table>
       <thead>
         <tr style={{ borderBottom: "2px solid #1A1A1A", fontSize: 12.5, textAlign: "left" }}>
-          {["Job Order No", "Name", "Date", "DeliveryDate", "Mobile", "Model", "Salesperson", "Branch", "Status", "View", showDelete ? "Action" : null]
+          {["Job Order No", noPII ? null : "Name", "Date", "DeliveryDate", noPII ? null : "Mobile", "Model", "Salesperson", "Branch", "Status", "View", showDelete ? "Action" : null]
             .filter(Boolean).map((h) => <th key={h} style={{ padding: "9px 10px", fontWeight: 700 }}>{h}</th>)}
         </tr>
       </thead>
@@ -1611,10 +1649,10 @@ function OrderTable({ orders, onOpen, editableStatuses, showDelete, onDelete }) 
         {orders.map((o) => (
           <tr key={o.id} style={{ borderBottom: "1px solid #E5E5E5", fontSize: 13.5 }}>
             <td style={{ padding: "9px 10px" }} className="mono">{o.jobOrderNo || "—"}</td>
-            <td style={{ padding: "9px 10px" }}>{o.name}</td>
+            {!noPII && <td style={{ padding: "9px 10px" }}>{o.name}</td>}
             <td style={{ padding: "9px 10px" }}>{fmtDate(o.createdAt)}</td>
             <td style={{ padding: "9px 10px" }}>{fmtDate(o.deliveryDate)}</td>
-            <td style={{ padding: "9px 10px" }}>{o.mobile}</td>
+            {!noPII && <td style={{ padding: "9px 10px" }}>{o.mobile}</td>}
             <td style={{ padding: "9px 10px" }}>{o.model}</td>
             <td style={{ padding: "9px 10px" }}>{o.preparedBy}</td>
             <td style={{ padding: "9px 10px" }}>{o.branch}</td>
@@ -1628,16 +1666,19 @@ function OrderTable({ orders, onOpen, editableStatuses, showDelete, onDelete }) 
   );
 }
 
-function useFilteredOrders(orders, query, statusFilter) {
+function useFilteredOrders(orders, query, statusFilter, noPII) {
   return useMemo(() => {
     let list = orders;
-    if (statusFilter !== "all") list = list.filter((o) => o.status === statusFilter);
+    if (statusFilter !== "all") list = list.filter((o) => maskStatus(o.status) === statusFilter);
     if (query.trim()) {
       const q = query.toLowerCase();
-      list = list.filter((o) => o.name.toLowerCase().includes(q) || (o.mobile || "").includes(q) || (o.invoiceNo || "").toLowerCase().includes(q));
+      // Production can only search by order number, model and colour — never by who the customer is
+      list = noPII
+        ? list.filter((o) => String(o.jobOrderNo || "").toLowerCase().includes(q) || (o.model || "").toLowerCase().includes(q) || (o.color || "").toLowerCase().includes(q))
+        : list.filter((o) => o.name.toLowerCase().includes(q) || (o.mobile || "").includes(q) || (o.invoiceNo || "").toLowerCase().includes(q));
     }
     return list;
-  }, [orders, query, statusFilter]);
+  }, [orders, query, statusFilter, noPII]);
 }
 
 /* ================= Sales Panel ================= */
@@ -1703,7 +1744,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       history, updated_at: now,
     }).eq("id", editingOrderId);
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} edited order ${before?.jobOrderNo || ""} (${form.name}): ${changed.length ? changed.join(", ") : "no field changes"}`, "edit", form.branch || before?.branch, { type: "order", id: editingOrderId });
+    notify(session, `${session.name} edited order ${before?.jobOrderNo || ""} (${form.model}): ${changed.length ? changed.map((c) => c.split(" (")[0]).join(", ") : "no field changes"}`, "edit", form.branch || before?.branch, { type: "order", id: editingOrderId });
     await refresh(); setSubpage("records"); setSelectedId(editingOrderId); flash("Job order updated");
   };
 
@@ -1711,7 +1752,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     const { error } = await supabase.from("job_orders").update({ ...orderFieldsToDb(fields), updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
     const o = orders.find((x) => x.id === id);
-    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.name})`, "edit", o.branch, { type: "order", id: o.id });
+    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.model})`, "edit", o.branch, { type: "order", id: o.id });
     await refresh(); flash("Changes saved");
   };
 
@@ -1770,8 +1811,8 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     }
     await refresh();
     if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
-    else if (createOrders) { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement", undefined, { type: "customer", id: customer.mobile }); }
-    else { const exists = existing && existing.length > 0; flash(exists ? "Profile updated" : "Profile created"); notify(session, `${session.name} ${exists ? "updated" : "created"} the profile of ${customer.name}`, "profile", undefined, { type: "customer", id: customer.mobile }); }
+    else if (createOrders) { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement`, "requirement", undefined, { type: "customer", id: customer.mobile }); }
+    else { const exists = existing && existing.length > 0; flash(exists ? "Profile updated" : "Profile created"); notify(session, `${session.name} ${exists ? "updated" : "created"} a customer profile`, "profile", undefined, { type: "customer", id: customer.mobile }); }
     return true;
   };
 
@@ -1802,7 +1843,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     const history = [...current.history, { note, by: session.name, at: new Date().toISOString() }];
     const { error } = await supabase.from("job_orders").update({ status, history, updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name}: ${STATUS[status].label} — order ${current.jobOrderNo} (${current.name})${comment ? " — " + comment : ""}`, "status", current.branch, { type: "order", id: current.id });
+    notify(session, `${session.name}: ${STATUS[status].label} — order ${current.jobOrderNo} (${current.model})${comment ? " — " + comment : ""}`, "status", current.branch, { type: "order", id: current.id });
     await refresh(); flash(STATUS[status].label);
   };
 
@@ -1921,8 +1962,8 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>{isEdit ? "EDIT JOB ORDER" : "JOB ORDER"}</h2>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 6 }}>
-        <Field label="Name"><input style={inputStyle} value={form.name} onChange={set("name")} disabled={readOnly} /></Field>
-        <Field label="Mobile No"><input style={inputStyle} value={form.mobile} onChange={set("mobile")} disabled={readOnly} /></Field>
+        {!hidePII(session) && <Field label="Name"><input style={inputStyle} value={form.name} onChange={set("name")} disabled={readOnly} /></Field>}
+        {!hidePII(session) && <Field label="Mobile No"><input style={inputStyle} value={form.mobile} onChange={set("mobile")} disabled={readOnly} /></Field>}
         <Field label="Date"><input style={inputStyle} value={isEdit ? fmtDate(initialOrder.createdAt) : fmtDate(new Date())} disabled /></Field>
         <Field label="Job Order No"><input style={inputStyle} value={isEdit ? (initialOrder.jobOrderNo || "—") : "Auto-generated on save"} disabled /></Field>
         <Field label="Order Type"><select style={inputStyle} value={form.orderType} onChange={set("orderType")} disabled={readOnly}>{ORDER_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
@@ -2688,7 +2729,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   );
 }
 
-function RequirementsPage({ items, profiles, orders, canDelete, canCreateOrder, onCreateOrder, onDelete }) {
+function RequirementsPage({ items, profiles, orders, canDelete, canCreateOrder, onCreateOrder, onDelete, noPII }) {
   const [selected, setSelected] = useState(null);
   const [datePrompt, setDatePrompt] = useState(null);   // { row, date }
   const askCreate = (row) => { if (row.deliveryDate) onCreateOrder(row); else setDatePrompt({ row, date: "" }); };
@@ -2701,14 +2742,14 @@ function RequirementsPage({ items, profiles, orders, canDelete, canCreateOrder, 
       {rows.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No requirements saved yet.</div> : (
         <table>
           <thead><tr style={{ borderBottom: "2px solid #1A1A1A", fontSize: 12.5, textAlign: "left" }}>
-            <th style={{ padding: "9px 10px" }}>Name</th><th style={{ padding: "9px 10px" }}>Mobile</th><th style={{ padding: "9px 10px" }}>Model</th>
+            {!noPII && <th style={{ padding: "9px 10px" }}>Name</th>}{!noPII && <th style={{ padding: "9px 10px" }}>Mobile</th>}<th style={{ padding: "9px 10px" }}>Model</th>
             <th style={{ padding: "9px 10px" }}>Size</th><th style={{ padding: "9px 10px" }}>Date</th><th style={{ padding: "9px 10px" }}>Job Order No</th><th style={{ padding: "9px 10px" }}></th>
           </tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id} style={{ borderBottom: "1px solid #E5E5E5", fontSize: 13.5 }}>
-                <td style={{ padding: "9px 10px" }}>{r.profile.name}</td>
-                <td style={{ padding: "9px 10px" }}>{r.profile.mobile}</td>
+                {!noPII && <td style={{ padding: "9px 10px" }}>{r.profile.name}</td>}
+                {!noPII && <td style={{ padding: "9px 10px" }}>{r.profile.mobile}</td>}
                 <td style={{ padding: "9px 10px" }}>{r.model}</td>
                 <td style={{ padding: "9px 10px" }}>{r.recommendedSize || "—"}</td>
                 <td style={{ padding: "9px 10px" }}>{fmtDate(r.createdAt)}</td>
@@ -2723,7 +2764,7 @@ function RequirementsPage({ items, profiles, orders, canDelete, canCreateOrder, 
           </tbody>
         </table>
       )}
-      {selected && <RequirementDetail row={selected} onClose={() => setSelected(null)} />}
+      {selected && <RequirementDetail row={selected} noPII={noPII} onClose={() => setSelected(null)} />}
       {datePrompt && (
         <ConfirmDialog
           title="Delivery date needed" confirmLabel="Create job order"
@@ -2739,15 +2780,15 @@ function RequirementsPage({ items, profiles, orders, canDelete, canCreateOrder, 
   );
 }
 
-function RequirementDetail({ row, onClose }) {
+function RequirementDetail({ row, onClose, noPII }) {
   const p = row.profile;
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", justifyContent: "flex-end", zIndex: 50 }} className="no-print" onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", width: 520, maxWidth: "100%", height: "100%", overflowY: "auto", padding: "26px 28px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
-            <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20 }}>{p.name}</div>
-            <div style={{ fontSize: 13.5, color: "#8a8a8a" }}>{p.mobile} · {p.branch}</div>
+            <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20 }}>{noPII ? row.model : p.name}</div>
+            <div style={{ fontSize: 13.5, color: "#8a8a8a" }}>{noPII ? (p.branch || "") : `${p.mobile} · ${p.branch}`}</div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: "#8a8a8a" }}>×</button>
         </div>
@@ -2797,8 +2838,8 @@ function RequirementDetail({ row, onClose }) {
           </table>
         )}
 
-        <div style={{ fontWeight: 700, fontSize: 12.5, margin: "18px 0 6px" }}>CUSTOMER SIGNATURE</div>
-        {p.signature_url ? <SecureImg src={p.signature_url} alt="signature" style={{ border: "1px solid #E5E5E5", maxWidth: "100%", background: "#fff" }} /> : <div style={{ fontSize: 13, color: "#8a8a8a" }}>No signature captured for this profile.</div>}
+        {!noPII && <div style={{ fontWeight: 700, fontSize: 12.5, margin: "18px 0 6px" }}>CUSTOMER SIGNATURE</div>}
+        {noPII ? null : p.signature_url ? <SecureImg src={p.signature_url} alt="signature" style={{ border: "1px solid #E5E5E5", maxWidth: "100%", background: "#fff" }} /> : <div style={{ fontSize: 13, color: "#8a8a8a" }}>No signature captured for this profile.</div>}
       </div>
     </div>
   );
@@ -3966,7 +4007,7 @@ function CustomerDetail({ mobile, profiles, orders, session, refresh, onClose })
         branch: session.branch || (session.role === "admin" ? "Admin" : ""), created_by: session.name,
       });
     }
-    notify(session, `${session.name} updated ${form.name}'s fitted measurement`, "profile", undefined, { type: "customer", id: mobile });
+    notify(session, `${session.name} updated a customer's fitted measurement`, "profile", undefined, { type: "customer", id: mobile });
     setSaving(false);
     setEditing(false);
     await refresh();
@@ -4052,21 +4093,16 @@ function CustomerDetail({ mobile, profiles, orders, session, refresh, onClose })
 
 /* ---------------- Production cycle: assign & start, actions, record, calendar ---------------- */
 
-function AssignStartDialog({ order, models, session, onClose, onDone }) {
+// Stage 1: assign material (submitting it moves the order to "Material Assigned")
+function AssignMaterialDialog({ order, models, session, onClose, onDone }) {
   const model = models.find((m) => m.modelNo === order.model);
-  const [workers, setWorkers] = useState([]);
   const [mats, setMats] = useState(null);
-  const [crew, setCrew] = useState([{ worker_id: "", task: "" }]);
-  const [adding, setAdding] = useState(null);       // { name, department } while adding a new tailor
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const loadWorkers = () => supabase.from("workers").select("*").eq("active", true).order("name").then(({ data }) => setWorkers(data || []));
   useEffect(() => {
-    loadWorkers();
     if (!model) { setMats([]); return; }
-    // the materials this model needs (from "Material Used" in Add Model), meters to be filled in
     supabase.from("model_materials").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => {
       setMats((data || []).map((m) => {
         const n = parseFloat(m.quantity);
@@ -4076,54 +4112,31 @@ function AssignStartDialog({ order, models, session, onClose, onDone }) {
   }, []); // eslint-disable-line
 
   const setMat = (i, patch) => setMats((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  const setCrewRow = (i, patch) => setCrew((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  const pickWorker = (i, id) => { const w = workers.find((x) => x.id === id); setCrewRow(i, { worker_id: id, task: (w && w.department) || "" }); };
-
-  const saveNewWorker = async () => {
-    if (!adding.name.trim()) return;
-    const { error: e } = await supabase.from("workers").insert({ name: adding.name.trim(), department: adding.department.trim() || null });
-    if (e) { setError(e.code === "23505" ? "That tailor is already in the list." : e.message); return; }
-    setAdding(null); setError(""); loadWorkers();
-  };
-
   const validate = () => {
     for (const m of (mats || []).filter((r) => r.material_type.trim() || r.assigned.trim())) {
       if (!m.material_type.trim()) return "Every material row needs a material name.";
       if (m.assigned === "" || isNaN(parseFloat(m.assigned)) || parseFloat(m.assigned) < 0) return `Enter the meters assigned for ${m.material_type}.`;
     }
-    if (!crew.some((c) => c.worker_id)) return "Choose at least one tailor.";
     return "";
   };
   const short = (mats || []).filter((m) => { const r = parseFloat(m.required), a = parseFloat(m.assigned); return !isNaN(r) && !isNaN(a) && a < r; });
 
-  const doStart = async () => {
+  const doSave = async () => {
     setBusy(true); setError("");
-    const now = new Date().toISOString();
-    const matRows = (mats || []).filter((m) => m.material_type.trim()).map((m) => ({
+    const rows = (mats || []).filter((m) => m.material_type.trim()).map((m) => ({
       job_order_id: order.id, material_type: m.material_type.trim(), material_code: m.material_code || null,
       required_qty: m.required || null, assigned_qty: m.assigned || null, created_by: session.name,
     }));
-    const crewRows = crew.filter((c) => c.worker_id).map((c) => {
-      const w = workers.find((x) => x.id === c.worker_id);
-      return { job_order_id: order.id, worker_id: c.worker_id, worker_name: w ? w.name : "", task: c.task || null, started_at: now, assigned_by: session.name };
-    });
-    const fail = (msg) => { setError(msg); setBusy(false); setConfirm(false); };
-    let matIds = [];
-    if (matRows.length) {
-      const { data, error: e1 } = await supabase.from("job_order_materials").insert(matRows).select("id");
-      if (e1) { fail(e1.message); return; }
-      matIds = (data || []).map((r) => r.id);
+    let ids = [];
+    if (rows.length) {
+      const { data, error: e1 } = await supabase.from("job_order_materials").insert(rows).select("id");
+      if (e1) { setError(e1.message); setBusy(false); setConfirm(false); return; }
+      ids = (data || []).map((r) => r.id);
     }
-    const { data: crewData, error: e2 } = await supabase.from("job_order_tailors").insert(crewRows).select("id");
-    if (e2) {
-      if (matIds.length) await supabase.from("job_order_materials").delete().in("id", matIds);
-      fail(e2.message); return;
-    }
-    const { error: e3 } = await advanceOrder(session, order, "job_in_process", null, { production_started_at: now });
-    if (e3) {                                  // undo what was just saved so a retry doesn't double it up
-      if (matIds.length) await supabase.from("job_order_materials").delete().in("id", matIds);
-      await supabase.from("job_order_tailors").delete().in("id", (crewData || []).map((r) => r.id));
-      fail(e3.message); return;
+    const { error: e2 } = await advanceOrder(session, order, "material_assigned", null);
+    if (e2) {                                  // undo what was just saved so a retry doesn't double it up
+      if (ids.length) await supabase.from("job_order_materials").delete().in("id", ids);
+      setError(e2.message); setBusy(false); setConfirm(false); return;
     }
     setBusy(false);
     onDone && onDone();
@@ -4131,14 +4144,11 @@ function AssignStartDialog({ order, models, session, onClose, onDone }) {
 
   const th = { textAlign: "left", padding: "6px 8px", fontSize: 11.5, borderBottom: "2px solid #1A1A1A" };
   const td = { padding: "5px 8px", fontSize: 12.5 };
-
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 24 }}>
-      <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 860 }}>
-        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 2 }}>Assign material & tailors</div>
-        <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 18 }}>Order {order.jobOrderNo} · {order.name} · {order.model}{order.cut ? ` · ${order.cut}` : ""}{order.color ? ` · ${order.color}` : ""}</div>
-
-        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>MATERIAL</div>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 820 }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 2 }}>Assign material</div>
+        <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 14 }}>Order {order.jobOrderNo} · {order.model}{order.cut ? ` · ${order.cut}` : ""}{order.color ? ` · ${order.color}` : ""}</div>
         <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 8 }}>Filled from this model's "Material Used". Enter the meters actually issued; add anything extra below.</div>
         {mats === null ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>Loading…</div> : (
           <>
@@ -4162,22 +4172,98 @@ function AssignStartDialog({ order, models, session, onClose, onDone }) {
             <a className="link" style={{ fontSize: 12.5 }} onClick={() => setMats((rows) => [...rows, { material_type: "", material_code: "", required: "", assigned: "" }])}>+ Add another material</a>
           </>
         )}
+        {error && <div style={{ color: "#C1302B", fontSize: 13, marginTop: 14 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 22 }}>
+          <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 20px", fontSize: 14, fontWeight: 700 }}>Cancel</button>
+          <button onClick={() => { const v = validate(); if (v) setError(v); else { setError(""); setConfirm(true); } }} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 20px", fontSize: 14, fontWeight: 700 }}>Submit material</button>
+        </div>
+      </div>
+      {confirm && (
+        <ConfirmDialog title="Submit the material?" confirmLabel="Yes, submit" busy={busy} onCancel={() => setConfirm(false)} onConfirm={doSave}>
+          The job moves to <strong>Material Assigned</strong>. Tailors are assigned in the next step.
+          {short.length > 0 && <div style={{ marginTop: 8, color: "#C1302B" }}>Less material than the model needs: {short.map((m) => m.material_type).join(", ")}.</div>}
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
 
-        <div style={{ fontWeight: 700, fontSize: 13, margin: "22px 0 6px" }}>TAILORS</div>
-        <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 8 }}>The time stamp starts when you confirm.</div>
+// Stage 2: assign tailors (can be planned for any date)
+function AssignTailorsDialog({ order, session, onClose, onDone }) {
+  const today = localYmd(new Date());
+  const [workers, setWorkers] = useState([]);
+  const [crew, setCrew] = useState([{ worker_id: "", task: "", planned_date: today }]);
+  const [adding, setAdding] = useState(null);
+  const [error, setError] = useState("");
+  const [confirm, setConfirm] = useState(null);       // "start" | "plan" | "add"
+  const [busy, setBusy] = useState(false);
+  const running = order.status === "job_in_process";   // adding more people to a job that is already running
+
+  const loadWorkers = () => supabase.from("workers").select("*").eq("active", true).order("name").then(({ data }) => setWorkers(data || []));
+  useEffect(() => { loadWorkers(); }, []);
+  const setRow = (i, patch) => setCrew((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const pickWorker = (i, id) => { const w = workers.find((x) => x.id === id); setRow(i, { worker_id: id, task: (w && w.department) || "" }); };
+  const saveNewWorker = async () => {
+    if (!adding.name.trim()) return;
+    const { error: e } = await supabase.from("workers").insert({ name: adding.name.trim(), department: adding.department.trim() || null });
+    if (e) { setError(e.code === "23505" ? "That tailor is already in the list." : e.message); return; }
+    setAdding(null); setError(""); loadWorkers();
+  };
+  const validate = (mode) => {
+    if (!crew.some((c) => c.worker_id)) return "Choose at least one tailor.";
+    if (mode === "plan" && crew.some((c) => c.worker_id && (!c.planned_date || c.planned_date < today))) return "Planned dates can't be in the past.";
+    return "";
+  };
+
+  const doSave = async (mode) => {
+    setBusy(true); setError("");
+    const now = new Date().toISOString();
+    const startsNow = mode === "start" || mode === "add";
+    const rows = crew.filter((c) => c.worker_id).map((c) => {
+      const w = workers.find((x) => x.id === c.worker_id);
+      return { job_order_id: order.id, worker_id: c.worker_id, worker_name: w ? w.name : "", task: c.task || null, planned_date: c.planned_date || today, started_at: startsNow ? now : null, assigned_by: session.name };
+    });
+    const { data: saved, error: e1 } = await supabase.from("job_order_tailors").insert(rows).select("id");
+    if (e1) { setError(e1.message); setBusy(false); setConfirm(null); return; }
+    let res = { error: null };
+    if (mode === "start" && !running) {
+      await supabase.from("job_order_tailors").update({ started_at: now }).eq("job_order_id", order.id).is("started_at", null);   // also starts anyone planned earlier
+      res = await advanceOrder(session, order, "job_in_process", null, { production_started_at: now });
+    } else if (mode === "plan" && order.status === "material_assigned") {
+      const first = rows.map((r) => r.planned_date).sort()[0];
+      res = await advanceOrder(session, order, "manpower_planned", `planned from ${first}`);
+    }
+    if (res.error) {                           // undo what was just saved so a retry doesn't double it up
+      await supabase.from("job_order_tailors").delete().in("id", (saved || []).map((r) => r.id));
+      setError(res.error.message); setBusy(false); setConfirm(null); return;
+    }
+    setBusy(false);
+    onDone && onDone();
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 24 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 760 }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 2 }}>{running ? "Add tailors" : "Assign tailors"}</div>
+        <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 14 }}>Order {order.jobOrderNo} · {order.model}{order.cut ? ` · ${order.cut}` : ""}{order.color ? ` · ${order.color}` : ""}</div>
+        <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 10 }}>
+          Give each tailor the day they will work on it — a future date plans the work ahead and shows it on the Production Calendar.
+          {!running && " The time stamp only starts when you press “Assign & start tailoring now” (or later, “Start tailoring”)."}
+        </div>
         {crew.map((c, i) => (
           <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
-            <select value={c.worker_id} onChange={(e) => pickWorker(i, e.target.value)} style={{ ...inputStyle, width: 220 }}>
+            <select value={c.worker_id} onChange={(e) => pickWorker(i, e.target.value)} style={{ ...inputStyle, width: 210 }}>
               <option value="">Choose a tailor…</option>
               {workers.map((w) => <option key={w.id} value={w.id}>{w.name}{w.department ? ` — ${w.department}` : ""}</option>)}
             </select>
-            <input value={c.task} onChange={(e) => setCrewRow(i, { task: e.target.value })} placeholder="Task / department" list="dept-list" style={{ ...inputStyle, width: 200 }} />
+            <input value={c.task} onChange={(e) => setRow(i, { task: e.target.value })} placeholder="Task / department" list="dept-list" style={{ ...inputStyle, width: 170 }} />
+            <input type="date" value={c.planned_date} min={running ? undefined : today} onChange={(e) => setRow(i, { planned_date: e.target.value })} style={{ ...inputStyle, width: 150 }} />
             {crew.length > 1 && <a className="link" style={{ color: "#C1302B", fontSize: 11 }} onClick={() => setCrew((rows) => rows.filter((_, j) => j !== i))}>Remove</a>}
           </div>
         ))}
         <datalist id="dept-list">{["Cutting", "Stitching", "Finishing", "Embroidery", "Pressing"].map((d) => <option key={d} value={d} />)}</datalist>
-        <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center" }}>
-          <a className="link" style={{ fontSize: 12.5 }} onClick={() => setCrew((rows) => [...rows, { worker_id: "", task: "" }])}>+ Add another tailor</a>
+        <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", marginTop: 4 }}>
+          <a className="link" style={{ fontSize: 12.5 }} onClick={() => setCrew((rows) => [...rows, { worker_id: "", task: "", planned_date: today }])}>+ Add another tailor</a>
           {adding ? (
             <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
               <input value={adding.name} onChange={(e) => setAdding({ ...adding, name: e.target.value })} placeholder="New tailor's name" style={{ ...inputStyle, width: 160 }} />
@@ -4187,77 +4273,113 @@ function AssignStartDialog({ order, models, session, onClose, onDone }) {
             </span>
           ) : <a className="link" style={{ fontSize: 12.5 }} onClick={() => setAdding({ name: "", department: "" })}>+ New tailor (not in the list yet)</a>}
         </div>
-
         {error && <div style={{ color: "#C1302B", fontSize: 13, marginTop: 14 }}>{error}</div>}
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 22 }}>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 22, flexWrap: "wrap" }}>
           <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 20px", fontSize: 14, fontWeight: 700 }}>Cancel</button>
-          <button onClick={() => { const v = validate(); if (v) setError(v); else { setError(""); setConfirm(true); } }} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 20px", fontSize: 14, fontWeight: 700 }}>Assign & start tailoring</button>
+          {running ? (
+            <button onClick={() => { const v = validate("add"); if (v) setError(v); else { setError(""); setConfirm("add"); } }} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 20px", fontSize: 14, fontWeight: 700 }}>Add tailors</button>
+          ) : (
+            <>
+              <button onClick={() => { const v = validate("plan"); if (v) setError(v); else { setError(""); setConfirm("plan"); } }} style={{ background: "#fff", border: "1px solid #1A1A1A", borderRadius: 4, padding: "10px 20px", fontSize: 14, fontWeight: 700 }}>Save plan — start later</button>
+              <button onClick={() => { const v = validate("start"); if (v) setError(v); else { setError(""); setConfirm("start"); } }} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 20px", fontSize: 14, fontWeight: 700 }}>Assign & start tailoring now</button>
+            </>
+          )}
         </div>
       </div>
-
-      {confirm && (
-        <ConfirmDialog title="Start tailoring now?" confirmLabel="Yes, start" busy={busy} onCancel={() => setConfirm(false)} onConfirm={doStart}>
-          The job moves to <strong>Job In Progress</strong> and its time stamp starts at this moment.
-          {short.length > 0 && <div style={{ marginTop: 8, color: "#C1302B" }}>Less material than the model needs: {short.map((m) => m.material_type).join(", ")}.</div>}
-        </ConfirmDialog>
-      )}
+      {confirm === "start" && <ConfirmDialog title="Start tailoring now?" confirmLabel="Yes, start" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => doSave("start")}>The job moves to <strong>Job In Progress</strong> and its time stamp starts at this moment.</ConfirmDialog>}
+      {confirm === "plan" && <ConfirmDialog title="Save the plan?" confirmLabel="Yes, save plan" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => doSave("plan")}>The tailors are planned on their dates and show on the Production Calendar. The time stamp starts later, when you press <strong>Start tailoring</strong>.</ConfirmDialog>}
+      {confirm === "add" && <ConfirmDialog title="Add these tailors?" confirmLabel="Yes, add" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => doSave("add")}>They are added to the running job.</ConfirmDialog>}
     </div>
   );
 }
 
 function ProductionActions({ order, session, models, onDone, flash }) {
-  const [dlg, setDlg] = useState(null);       // "accept" | "reject" | "assign" | "complete" | "bridge"
+  const [dlg, setDlg] = useState(null);
   const [reason, setReason] = useState("");
+  const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [counts, setCounts] = useState({ mats: 0, crew: 0 });
+  const live = ["job_created", "job_accepted", "material_assigned", "manpower_planned", "job_in_process", "job_pending_qc"];
+
+  useEffect(() => {
+    if (session.role !== "production" && session.role !== "admin") return;
+    supabase.from("job_order_materials").select("id", { count: "exact", head: true }).eq("job_order_id", order.id).then(({ count }) => setCounts((c) => ({ ...c, mats: count || 0 })));
+    supabase.from("job_order_tailors").select("id", { count: "exact", head: true }).eq("job_order_id", order.id).then(({ count }) => setCounts((c) => ({ ...c, crew: count || 0 })));
+  }, [order.id, order.status]);
+
   if (session.role !== "production" && session.role !== "admin") return null;
   const s = order.status;
-  if (!["job_created", "job_accepted", "job_in_process", "job_pending_qc"].includes(s)) return null;
+  if (!live.includes(s)) return null;
 
   const run = async (fn, okMsg) => {
     setBusy(true);
     const { error } = await fn();
-    setBusy(false); setDlg(null); setReason("");
+    setBusy(false); setDlg(null); setReason(""); setFiles([]);
     if (error) flash && flash("Error: " + error.message); else { flash && flash(okMsg); onDone && onDone(); }
   };
   const btn = (bg) => ({ background: bg, color: "#fff", border: "none", borderRadius: 4, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" });
+  const accepted = s !== "job_created";
+  const chip = (ok, text, off) => <span style={{ fontSize: 11.5, padding: "3px 10px", borderRadius: 12, background: ok ? "#E7F4EA" : "#FBEAE9", color: ok ? "#2F8F46" : "#C1302B", fontWeight: 600 }}>{ok ? "✓ " : "○ "}{ok ? text : off}</span>;
 
   return (
     <div style={{ ...cardStyle, marginBottom: 16 }}>
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>PRODUCTION</div>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>PRODUCTION</div>
+      {accepted && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {chip(true, "Accepted", "")}
+          {chip(counts.mats > 0 || ["material_assigned", "manpower_planned", "job_in_process", "job_pending_qc"].includes(s), "Material assigned", "Material not assigned")}
+          {chip(counts.crew > 0, "Tailors assigned", "Tailors not assigned")}
+          {chip(["job_in_process", "job_pending_qc"].includes(s), "Started", "Not started")}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         {s === "job_created" && (<>
           <button style={btn("#2F8F46")} onClick={() => setDlg("accept")}>Accept</button>
           <button style={btn("#C1302B")} onClick={() => setDlg("reject")}>Reject</button>
         </>)}
-        {s === "job_accepted" && <button style={btn("#1A1A1A")} onClick={() => setDlg("assign")}>Assign material & tailors</button>}
-        {s === "job_in_process" && <button style={btn("#2F8F46")} onClick={() => setDlg("complete")}>Mark as completed</button>}
+        {s === "job_accepted" && <button style={btn("#1A1A1A")} onClick={() => setDlg("material")}>Assign material</button>}
+        {s === "material_assigned" && <button style={btn("#1A1A1A")} onClick={() => setDlg("tailors")}>Assign tailors</button>}
+        {s === "manpower_planned" && (<>
+          <button style={btn("#2F8F46")} onClick={() => setDlg("start")}>Start tailoring</button>
+          <button style={btn("#8a8a8a")} onClick={() => setDlg("tailors")}>Add / plan more tailors</button>
+        </>)}
+        {s === "job_in_process" && (<>
+          <button style={btn("#2F8F46")} onClick={() => setDlg("complete")}>Mark as completed</button>
+          <button style={btn("#8a8a8a")} onClick={() => setDlg("tailors")}>Add tailors</button>
+        </>)}
         {s === "job_pending_qc" && <button style={btn("#8a8a8a")} onClick={() => setDlg("bridge")}>Quality check passed (temporary step)</button>}
       </div>
 
       {dlg === "accept" && (
         <ConfirmDialog title="Accept this job order?" confirmLabel="Yes, accept" busy={busy} onCancel={() => setDlg(null)}
           onConfirm={() => run(() => advanceOrder(session, order, "job_accepted", null, { accepted_at: new Date().toISOString(), accepted_by: session.name }), "Job order accepted")}>
-          Order {order.jobOrderNo} for {order.name}. Next you'll assign the material and tailors.
+          Order {order.jobOrderNo} · {order.model}. Next you'll assign the material, then the tailors.
         </ConfirmDialog>
       )}
       {dlg === "reject" && (
-        <ConfirmDialog title="Reject this job order?" confirmLabel="Yes, reject" busy={busy} confirmDisabled={!reason.trim()} onCancel={() => setDlg(null)}
-          onConfirm={() => run(() => advanceOrder(session, order, "job_rejected", reason.trim()), "Job order rejected")}>
+        <ConfirmDialog title="Reject this job order?" confirmLabel="Yes, reject" busy={busy} confirmDisabled={!reason.trim()} onCancel={() => { setDlg(null); setFiles([]); setReason(""); }}
+          onConfirm={() => run(() => advanceOrder(session, order, "job_rejected", reason.trim(), null, files), "Job order rejected")}>
           <div style={{ marginBottom: 8 }}>Tell Sales why, so they can fix it and send it again.</div>
-          <textarea value={reason} onChange={(e) => setReason(e.target.value)} style={{ ...inputStyle, minHeight: 70 }} placeholder="Reason (required)" />
+          <textarea value={reason} onChange={(e) => setReason(e.target.value)} style={{ ...inputStyle, minHeight: 70, marginBottom: 12 }} placeholder="Reason (required)" />
+          <AttachmentField files={files} onChange={setFiles} folder="rejections" />
         </ConfirmDialog>
       )}
-      {dlg === "assign" && <AssignStartDialog order={order} models={models} session={session} onClose={() => setDlg(null)} onDone={() => { setDlg(null); flash && flash("Tailoring started"); onDone && onDone(); }} />}
+      {dlg === "material" && <AssignMaterialDialog order={order} models={models} session={session} onClose={() => setDlg(null)} onDone={() => { setDlg(null); flash && flash("Material assigned"); onDone && onDone(); }} />}
+      {dlg === "tailors" && <AssignTailorsDialog order={order} session={session} onClose={() => setDlg(null)} onDone={() => { setDlg(null); flash && flash("Tailors saved"); onDone && onDone(); }} />}
+      {dlg === "start" && (
+        <ConfirmDialog title="Start tailoring now?" confirmLabel="Yes, start" busy={busy} onCancel={() => setDlg(null)} onConfirm={() => run(() => startTailoring(session, order), "Tailoring started")}>
+          The job moves to <strong>Job In Progress</strong> and its time stamp starts at this moment.
+        </ConfirmDialog>
+      )}
       {dlg === "complete" && (
-        <ConfirmDialog title="Mark as completed?" confirmLabel="Yes, completed" busy={busy} onCancel={() => setDlg(null)}
-          onConfirm={() => run(() => completeProduction(session, order), "Marked as completed")}>
+        <ConfirmDialog title="Mark as completed?" confirmLabel="Yes, completed" busy={busy} onCancel={() => setDlg(null)} onConfirm={() => run(() => completeProduction(session, order), "Marked as completed")}>
           The time stamp stops and the order moves to <strong>Pending Quality Check</strong>.
         </ConfirmDialog>
       )}
       {dlg === "bridge" && (
         <ConfirmDialog title="Quality check passed?" confirmLabel="Yes" busy={busy} onCancel={() => setDlg(null)}
-          onConfirm={() => run(() => advanceOrder(session, order, "ready_to_deliver", "Quality check passed (temporary step)"), "Moved on")}>
-          Temporary step: the full quality-check checklist with sign-off arrives in the next update.
+          onConfirm={() => run(() => advanceOrder(session, order, "ready_in_production", "Quality check passed (temporary step)"), "Ready in Production")}>
+          The order becomes <strong>Ready in Production</strong>, which Sales can see. (Temporary step: the full quality-check checklist with sign-off comes in the next update.)
         </ConfirmDialog>
       )}
     </div>
@@ -4308,6 +4430,7 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
   const [crew, setCrew] = useState([]);
   const [pickedId, setPickedId] = useState(null);
   const [confirmDone, setConfirmDone] = useState(false);
+  const [confirmStart, setConfirmStart] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { supabase.from("job_order_tailors").select("*").then(({ data }) => setCrew(data || [])); }, [orders]);   // refreshes live when orders change
@@ -4319,13 +4442,22 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
     const s = new Date(o.productionStartedAt), e = o.productionCompletedAt ? new Date(o.productionCompletedAt) : null;
     return s <= b && (!e || e >= a);
   };
+  const dayISO = localYmd(day);
   const working = orders.filter((o) => activeOn(o, day));
-  const lanes = {};
+  // work planned for this day that hasn't started yet
+  const plannedRows = crew.filter((c) => c.planned_date === dayISO && !c.started_at && orders.some((o) => o.id === c.job_order_id && !o.productionStartedAt));
+
+  const lanes = {};    // tailor name -> [{ o, planned }]
   working.forEach((o) => {
     const rows = crew.filter((c) => c.job_order_id === o.id);
     const names = rows.length ? Array.from(new Set(rows.map((r) => r.worker_name))) : ["Unassigned"];
-    names.forEach((n) => { (lanes[n] = lanes[n] || []).push(o); });
+    names.forEach((n) => { (lanes[n] = lanes[n] || []).push({ o, planned: false }); });
   });
+  plannedRows.forEach((c) => {
+    const o = orders.find((x) => x.id === c.job_order_id);
+    if (o && !(lanes[c.worker_name] || []).some((x) => x.o.id === o.id)) (lanes[c.worker_name] = lanes[c.worker_name] || []).push({ o, planned: true });
+  });
+  const who = (o) => (hidePII(session) ? `${o.model}${o.color ? " · " + o.color : ""}` : `${o.name} · ${o.model}`);
   const laneNames = Object.keys(lanes).sort((a, b) => (a === "Unassigned" ? 1 : b === "Unassigned" ? -1 : a.localeCompare(b)));
   const isToday = bounds(day)[0].getTime() === bounds(new Date())[0].getTime();
   const shift = (n) => setDay((d) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; });
@@ -4333,7 +4465,15 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
   const picked = orders.find((o) => o.id === pickedId);
   const canAct = session.role === "production" || session.role === "admin";
   const today = localYmd(new Date());
-  const waiting = { accept: orders.filter((o) => o.status === "job_created").length, assign: orders.filter((o) => o.status === "job_accepted").length, qc: orders.filter((o) => o.status === "job_pending_qc").length };
+  const waiting = {
+    accept: orders.filter((o) => o.status === "job_created").length,
+    material: orders.filter((o) => o.status === "job_accepted").length,
+    tailors: orders.filter((o) => o.status === "material_assigned").length,
+    planned: orders.filter((o) => o.status === "manpower_planned").length,
+    qc: orders.filter((o) => o.status === "job_pending_qc").length,
+  };
+  const pickedCrew = picked ? crew.filter((c) => c.job_order_id === picked.id) : [];
+  const pickedPlanned = pickedCrew.filter((c) => !c.started_at && c.planned_date).map((c) => c.planned_date).sort();
 
   return (
     <div style={{ maxWidth: 1200, margin: "0 auto" }}>
@@ -4350,7 +4490,7 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
       <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 18, flexWrap: "wrap" }}>
         {strip.map((d) => {
           const sel = bounds(d)[0].getTime() === bounds(day)[0].getTime();
-          const n = orders.filter((o) => activeOn(o, d)).length;
+          const n = orders.filter((o) => activeOn(o, d)).length + crew.filter((c) => c.planned_date === localYmd(d) && !c.started_at).length;
           return (
             <div key={d.toISOString()} onClick={() => setDay(d)} style={{ width: 92, padding: "8px 4px", textAlign: "center", borderRadius: 6, cursor: "pointer", border: "1px solid " + (sel ? "#1A1A1A" : "#DDE1E7"), background: sel ? "#1A1A1A" : "#fff", color: sel ? "#fff" : "#1A1A1A" }}>
               <div style={{ fontSize: 11 }}>{d.toLocaleDateString([], { weekday: "short" })} {d.getDate()}</div>
@@ -4363,23 +4503,25 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
       <div style={{ display: "flex", gap: 12, justifyContent: "center", marginBottom: 18, flexWrap: "wrap", fontSize: 12.5 }}>
         <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Being made on this day: <strong>{working.length}</strong></span>
         <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Waiting to be accepted: <strong>{waiting.accept}</strong></span>
-        <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Waiting for material & tailors: <strong>{waiting.assign}</strong></span>
+        <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Waiting for material: <strong>{waiting.material}</strong></span>
+        <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Waiting for tailors: <strong>{waiting.tailors}</strong></span>
+        <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Planned (not started): <strong>{waiting.planned}</strong></span>
         <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Pending quality check: <strong>{waiting.qc}</strong></span>
       </div>
 
-      {working.length === 0 ? (
-        <div style={{ textAlign: "center", color: "#8a8a8a", padding: 40, fontSize: 14 }}>Nothing was being made on this day.</div>
+      {laneNames.length === 0 ? (
+        <div style={{ textAlign: "center", color: "#8a8a8a", padding: 40, fontSize: 14 }}>Nothing was being made{laneNames.length ? "" : " or planned"} on this day.</div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
           {laneNames.map((name) => (
             <div key={name} style={{ border: "1px solid #DDE1E7", borderRadius: 8, padding: 12 }}>
               <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 10, color: name === "Unassigned" ? "#C1302B" : "#1A1A1A" }}>👤 {name} <span style={{ color: "#8a8a8a", fontWeight: 400 }}>· {lanes[name].length}</span></div>
-              {lanes[name].map((o) => {
+              {lanes[name].map(({ o, planned }) => {
                 const overdue = o.deliveryDate && o.deliveryDate < today && !o.productionCompletedAt;
                 return (
-                  <div key={o.id} onClick={() => setPickedId(o.id)} style={{ border: "1px solid #E5E5E5", borderLeft: "4px solid " + (o.productionCompletedAt ? "#8a8a8a" : "#2F8F46"), borderRadius: 4, padding: "8px 10px", marginBottom: 8, cursor: "pointer", background: "#fff" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700 }}><span className="mono">{o.jobOrderNo}</span><span style={{ fontSize: 11, fontWeight: 400, color: "#8a8a8a" }}>{o.productionCompletedAt ? "done " + fmtTime(o.productionCompletedAt) : "since " + fmtTime(o.productionStartedAt)}</span></div>
-                    <div style={{ fontSize: 12 }}>{o.name} · {o.model}</div>
+                  <div key={o.id} onClick={() => setPickedId(o.id)} style={{ border: planned ? "1px dashed #8a8a8a" : "1px solid #E5E5E5", borderLeft: "4px " + (planned ? "dashed #8a8a8a" : "solid " + (o.productionCompletedAt ? "#8a8a8a" : "#2F8F46")), borderRadius: 4, padding: "8px 10px", marginBottom: 8, cursor: "pointer", background: planned ? "#FAFAFA" : "#fff" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700 }}><span className="mono">{o.jobOrderNo}</span><span style={{ fontSize: 11, fontWeight: 400, color: "#8a8a8a" }}>{planned ? "Planned" : o.productionCompletedAt ? "done " + fmtTime(o.productionCompletedAt) : "since " + fmtTime(o.productionStartedAt)}</span></div>
+                    <div style={{ fontSize: 12 }}>{who(o)}</div>
                     <div style={{ fontSize: 11, color: overdue ? "#C1302B" : "#8a8a8a", fontWeight: overdue ? 700 : 400 }}>Due {o.deliveryDate ? fmtDate(o.deliveryDate) : "—"}{overdue ? " · overdue" : ""}</div>
                   </div>
                 );
@@ -4396,26 +4538,35 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
               <ModelThumb model={(models || []).find((m) => m.modelNo === picked.model) || { id: null, modelNo: picked.model }} size={90} />
               <div>
                 <div className="mono" style={{ fontSize: 20, fontWeight: 700 }}>{picked.jobOrderNo}</div>
-                <div style={{ fontSize: 14 }}>{picked.name}</div>
+                {!hidePII(session) && <div style={{ fontSize: 14 }}>{picked.name}</div>}
                 <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{picked.model}{picked.cut ? ` · ${picked.cut}` : ""}{picked.color ? ` · ${picked.color}` : ""}</div>
                 <div style={{ marginTop: 4 }}><StatusTag status={picked.status} /></div>
               </div>
             </div>
             <div style={{ fontSize: 13, lineHeight: 1.8, marginBottom: 12 }}>
               <div><strong>Due:</strong> {picked.deliveryDate ? fmtDate(picked.deliveryDate) : "—"}</div>
+              {picked.status === "manpower_planned" && <div><strong>Planned for:</strong> {pickedPlanned.length ? Array.from(new Set(pickedPlanned)).map((d) => fmtDate(d)).join(", ") : "—"}</div>}
+              {(picked.status === "job_accepted" || picked.status === "material_assigned") && <div style={{ color: "#C1302B" }}>{picked.status === "job_accepted" ? "Still to do: assign material, then tailors" : "Still to do: assign tailors"}</div>}
               <div><strong>Started:</strong> {picked.productionStartedAt ? fmtDateTime(picked.productionStartedAt) : "—"}</div>
               <div><strong>{picked.productionCompletedAt ? "Time taken" : "Running for"}:</strong> {picked.productionStartedAt ? fmtDuration(new Date(picked.productionCompletedAt || Date.now()) - new Date(picked.productionStartedAt)) : "—"}</div>
               <div style={{ marginTop: 6 }}><strong>Working on it:</strong></div>
-              {crew.filter((c) => c.job_order_id === picked.id).map((c) => <div key={c.id}>👤 {c.worker_name}{c.task ? ` — ${c.task}` : ""} <span style={{ color: "#8a8a8a" }}>(since {fmtTime(c.started_at)}{c.finished_at ? `, finished ${fmtTime(c.finished_at)}` : ""})</span></div>)}
+              {crew.filter((c) => c.job_order_id === picked.id).map((c) => <div key={c.id}>👤 {c.worker_name}{c.task ? ` — ${c.task}` : ""} <span style={{ color: "#8a8a8a" }}>{c.started_at ? `(since ${fmtTime(c.started_at)}${c.finished_at ? `, finished ${fmtTime(c.finished_at)}` : ""})` : `(planned ${c.planned_date ? fmtDate(c.planned_date) : "—"})`}</span></div>)}
               {crew.filter((c) => c.job_order_id === picked.id).length === 0 && <div style={{ color: "#C1302B" }}>No tailor recorded</div>}
             </div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
               <button onClick={() => setPickedId(null)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Close</button>
               <button onClick={() => { setPickedId(null); onOpenOrder && onOpenOrder(picked.id); }} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Open full job order</button>
+              {canAct && picked.status === "manpower_planned" && <button onClick={() => setConfirmStart(true)} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Start tailoring</button>}
               {canAct && picked.status === "job_in_process" && <button onClick={() => setConfirmDone(true)} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Mark as completed</button>}
             </div>
           </div>
         </div>
+      )}
+      {confirmStart && picked && (
+        <ConfirmDialog title="Start tailoring now?" confirmLabel="Yes, start" busy={busy} onCancel={() => setConfirmStart(false)}
+          onConfirm={async () => { setBusy(true); const { error } = await startTailoring(session, picked); setBusy(false); setConfirmStart(false); setPickedId(null); if (error) flash("Error: " + error.message); else { flash("Tailoring started"); refresh(); } }}>
+          The job moves to <strong>Job In Progress</strong> and its time stamp starts at this moment.
+        </ConfirmDialog>
       )}
       {confirmDone && picked && (
         <ConfirmDialog title="Mark as completed?" confirmLabel="Yes, completed" busy={busy} onCancel={() => setConfirmDone(false)}
@@ -4473,6 +4624,8 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
       setTimeout(() => { const el = document.getElementById("order-history"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 150);
     }
   }, [order.id]); // eslint-disable-line
+  const seesInternal = role === "production" || role === "admin";
+  const pii = role === "production";                    // Production never sees the customer's name or mobile number
   const editable = canEditFields(order.status, role);
   const resubmittable = canResubmit(order.status, role);
   const actions = role === "production" ? productionActions(order.status) : role === "sales" ? salesActions(order.status) : [];
@@ -4489,7 +4642,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
           <div>
             <div className="mono" style={{ fontSize: 12, color: "#8a8a8a" }}>{order.invoiceNo}</div>
-            <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20 }}>{order.name}</div>
+            <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20 }}>{pii ? order.jobOrderNo : order.name}</div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: "#8a8a8a" }}>×</button>
         </div>
@@ -4497,8 +4650,13 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
 
         {!edit ? (
           <div style={{ marginTop: 16 }}>
+            {seesInternal && onViewFull && (
+              <div style={{ marginBottom: 14 }}>
+                <button onClick={() => onViewFull(order.id)} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "10px 18px", fontSize: 13, fontWeight: 700 }}>View full job order</button>
+              </div>
+            )}
             <ProductionActions order={order} session={session} models={models || []} onDone={onProductionDone} flash={flash} />
-            <Row l="Mobile" v={order.mobile} /><Row l="Order Type" v={order.orderType} />
+            {!pii && <Row l="Mobile" v={order.mobile} />}<Row l="Order Type" v={order.orderType} />
             <Row l="Model" v={order.model} />
             <Row l="Colour" v={order.color ? (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
@@ -4522,7 +4680,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
               {ALL_MEASURE_FIELDS.filter(([k]) => order.measurements && order.measurements[k]).map(([k, l]) => <div key={k}>{l}: {order.measurements[k]}</div>)}
             </div>
 
-            {onViewFull && (
+            {onViewFull && !seesInternal && (
               <button onClick={() => onViewFull(order.id)} style={{ marginTop: 14, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>View Full Job Order</button>
             )}
             {editable && onEditFull && (
@@ -4556,16 +4714,21 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
 
             <div id="order-history" style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid #E5E5E5" }}>
               <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", marginBottom: 8 }}>ACTIVITY LOG</div>
-              {order.history.slice().reverse().map((h, i) => (
-                <div key={i} style={{ fontSize: 12.5, marginBottom: 8 }}>
-                  <div>{h.note}</div>
-                  <div className="mono" style={{ fontSize: 10.5, color: "#8a8a8a" }}>{h.by} · {fmtDateTime(h.at)}</div>
-                </div>
-              ))}
+              {order.history.filter((h) => seesInternal || !h.internal).slice().reverse().map((h, i) => {
+                let note = seesInternal ? h.note : (h.public_note || h.note);
+                if (pii) note = (note || "").replace(/(Name|Mobile) \([^)]*→[^)]*\)/g, "$1 (changed)");   // edit entries quote the old and new customer details
+                return (
+                  <div key={i} style={{ fontSize: 12.5, marginBottom: 8 }}>
+                    <div>{note}</div>
+                    {h.attachments && h.attachments.length > 0 && <div style={{ margin: "6px 0" }}><AttachmentGallery files={h.attachments} /></div>}
+                    <div className="mono" style={{ fontSize: 10.5, color: "#8a8a8a" }}>{h.by} · {fmtDateTime(h.at)}</div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         ) : (
-          <EditFieldsForm order={order} onCancel={() => setEdit(false)} onSave={(fields) => { onSaveFields(order.id, fields); setEdit(false); }} />
+          <EditFieldsForm order={order} noPII={pii} onCancel={() => setEdit(false)} onSave={(fields) => { onSaveFields(order.id, fields); setEdit(false); }} />
         )}
       </div>
     </div>
@@ -4574,14 +4737,14 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
 
 function Row({ l, v }) { return <div style={{ display: "flex", fontSize: 13.5, marginBottom: 5 }}><div style={{ width: 130, color: "#8a8a8a" }}>{l}</div><div>{v}</div></div>; }
 
-function EditFieldsForm({ order, onCancel, onSave }) {
+function EditFieldsForm({ order, onCancel, onSave, noPII }) {
   const [form, setForm] = useState({ ...order, measurements: { ...order.measurements } });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const setMeasure = (k) => (e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }));
   return (
     <div style={{ marginTop: 14 }}>
-      <Field label="Name"><input style={inputStyle} value={form.name} onChange={set("name")} /></Field>
-      <Field label="Mobile"><input style={inputStyle} value={form.mobile} onChange={set("mobile")} /></Field>
+      {!noPII && <Field label="Name"><input style={inputStyle} value={form.name} onChange={set("name")} /></Field>}
+      {!noPII && <Field label="Mobile"><input style={inputStyle} value={form.mobile} onChange={set("mobile")} /></Field>}
       <Field label="Delivery Date"><input type="date" style={inputStyle} value={form.deliveryDate || ""} onChange={set("deliveryDate")} /></Field>
       <Field label="Comments"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.comments || ""} onChange={set("comments")} /></Field>
       <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", margin: "10px 0 6px" }}>MEASUREMENTS</div>
@@ -4589,7 +4752,7 @@ function EditFieldsForm({ order, onCancel, onSave }) {
         {ALL_MEASURE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form.measurements[k] || ""} onChange={setMeasure(k)} /></Field>)}
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button onClick={() => onSave({ name: form.name, mobile: form.mobile, deliveryDate: form.deliveryDate, comments: form.comments, measurements: form.measurements })} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Save Changes</button>
+        <button onClick={() => onSave({ ...(noPII ? {} : { name: form.name, mobile: form.mobile }), deliveryDate: form.deliveryDate, comments: form.comments, measurements: form.measurements })} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Save Changes</button>
         <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Cancel</button>
       </div>
     </div>
@@ -4604,15 +4767,16 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
   useEffect(() => {
     if (openRequest && openRequest.type === "order") { setSelectedId(openRequest.id); openFocus.current = openRequest.focus || null; clearOpenRequest(); }
   }, [openRequest]); // eslint-disable-line
-  const visible = orders.filter((o) => o.status !== "ready_to_deliver" && o.status !== "delivered");
-  const filtered = useFilteredOrders(visible, query, statusFilter);
+  const [editingOrderId, setEditingOrderId] = useState(null);
+  const visible = orders.filter((o) => !AFTER_PRODUCTION.includes(o.status));
+  const filtered = useFilteredOrders(visible, query, statusFilter, true);
   const selected = orders.find((o) => o.id === selectedId);
 
   const handleSaveFields = async (id, fields) => {
     const { error } = await supabase.from("job_orders").update({ ...orderFieldsToDb(fields), updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
     const o = orders.find((x) => x.id === id);
-    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.name})`, "edit", o.branch, { type: "order", id: o.id });
+    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.model})`, "edit", o.branch, { type: "order", id: o.id });
     await refresh(); flash("Changes saved");
   };
   const handleAction = async (id, to, comment) => {
@@ -4621,21 +4785,26 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
     const history = [...current.history, { note, by: session.name, at: new Date().toISOString() }];
     const { error } = await supabase.from("job_orders").update({ status: to, history, updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name}: ${STATUS[to].label} — order ${current.jobOrderNo} (${current.name})${comment ? " — " + comment : ""}`, "status", current.branch, { type: "order", id: current.id });
+    notify(session, `${session.name}: ${STATUS[to].label} — order ${current.jobOrderNo} (${current.model})${comment ? " — " + comment : ""}`, "status", current.branch, { type: "order", id: current.id });
     await refresh(); flash(STATUS[to].label);
   };
 
   if (subpage === "items") return <ModelBrowser models={config.models} canEdit={false} session={session} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />;
   if (subpage === "requirements") {
-    return <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={false} canCreateOrder={false} />;
+    return <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={false} canCreateOrder={false} noPII />;
+  }
+  if (subpage === "viewOrder") {
+    const viewing = orders.find((o) => o.id === editingOrderId);
+    if (viewing) return <JobOrderForm config={config} session={session} initialOrder={viewing} readOnly onCancel={() => setSubpage("records")} />;
   }
 
   return (
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL RECORDS</h2>
-      <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />
-      <OrderTable orders={filtered} onOpen={setSelectedId} editableStatuses={["job_rejected"]} />
-      {selected && <OrderDetail order={selected} role="production" session={session} onClose={() => setSelectedId(null)} onSaveFields={handleSaveFields} onAction={handleAction} models={config.models} flash={flash} onProductionDone={refresh} />}
+      <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} noPII />
+      <OrderTable orders={filtered} onOpen={setSelectedId} editableStatuses={["job_rejected"]} noPII />
+      {selected && <OrderDetail order={selected} role="production" session={session} onClose={() => setSelectedId(null)} onSaveFields={handleSaveFields} onAction={handleAction} models={config.models} flash={flash} onProductionDone={refresh}
+        onViewFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("viewOrder"); }} />}
     </div>
   );
 }
@@ -5094,21 +5263,21 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     const o = orders.find((x) => x.id === id);
     const { error } = await supabase.from("job_orders").delete().eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
-    if (o) notify(session, `${session.name} deleted order ${o.jobOrderNo} (${o.name})`, "delete", o.branch);
+    if (o) notify(session, `${session.name} deleted order ${o.jobOrderNo} (${o.model})`, "delete", o.branch);
     setSelectedId(null); await refresh(); flash("Record deleted");
   };
   const handleDeleteRequirement = async (id) => {
     const it = requirementItems.find((r) => r.id === id);
     const cust = it && profiles.find((p) => p.id === it.profileId);
     await supabase.from("requirement_items").delete().eq("id", id);
-    notify(session, `${session.name} deleted a requirement for ${cust ? cust.name : "a customer"}`, "delete", undefined, cust ? { type: "customer", id: cust.mobile } : undefined);
+    notify(session, `${session.name} deleted a requirement`, "delete", undefined, cust ? { type: "customer", id: cust.mobile } : undefined);
     await refresh(); flash("Requirement deleted");
   };
   const handleSaveFields = async (id, fields) => {
     const { error } = await supabase.from("job_orders").update({ ...orderFieldsToDb(fields), updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { flash("Error: " + error.message); return; }
     const o = orders.find((x) => x.id === id);
-    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.name})`, "edit", o.branch, { type: "order", id: o.id });
+    if (o) notify(session, `${session.name} edited order ${o.jobOrderNo} (${o.model})`, "edit", o.branch, { type: "order", id: o.id });
     await refresh(); flash("Changes saved");
   };
 
@@ -5163,7 +5332,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       history, updated_at: now,
     }).eq("id", editingOrderId);
     if (error) { flash("Error: " + error.message); return; }
-    notify(session, `${session.name} edited order ${before?.jobOrderNo || ""} (${form.name}): ${changed.length ? changed.join(", ") : "no field changes"}`, "edit", form.branch || before?.branch, { type: "order", id: editingOrderId });
+    notify(session, `${session.name} edited order ${before?.jobOrderNo || ""} (${form.model}): ${changed.length ? changed.map((c) => c.split(" (")[0]).join(", ") : "no field changes"}`, "edit", form.branch || before?.branch, { type: "order", id: editingOrderId });
     await refresh(); setSubpage("records"); setSelectedId(editingOrderId); flash("Job order updated");
   };
 
@@ -5222,8 +5391,8 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     }
     await refresh();
     if (createOrders && lastOrderId) { setSubpage("records"); setSelectedId(lastOrderId); flash("Job order(s) created"); }
-    else if (createOrders) { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement for ${customer.name}`, "requirement", undefined, { type: "customer", id: customer.mobile }); }
-    else { const exists = existing && existing.length > 0; flash(exists ? "Profile updated" : "Profile created"); notify(session, `${session.name} ${exists ? "updated" : "created"} the profile of ${customer.name}`, "profile", undefined, { type: "customer", id: customer.mobile }); }
+    else if (createOrders) { setSubpage("customers"); flash("Customer profile saved"); notify(session, `${session.name} saved a customer requirement`, "requirement", undefined, { type: "customer", id: customer.mobile }); }
+    else { const exists = existing && existing.length > 0; flash(exists ? "Profile updated" : "Profile created"); notify(session, `${session.name} ${exists ? "updated" : "created"} a customer profile`, "profile", undefined, { type: "customer", id: customer.mobile }); }
     return true;
   };
 
