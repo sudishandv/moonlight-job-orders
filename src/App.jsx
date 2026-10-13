@@ -117,6 +117,7 @@ const ROLE_HOME_CARDS = {
   sales: [
     ["🧵", "New Job Order", "Start one from scratch", "new"],
     ["📋", "All Records", "View and manage job orders", "records"],
+    ["📦", "Incoming Deliveries", "Deliveries coming to your branch", "incoming"],
     ["📐", "New Requirement", "Take fitting measurements", "requirement"],
     ["📄", "Requirement List", "Browse saved requirements", "requirements"],
     ["👤", "Customers", "Search profiles & history", "customers"],
@@ -126,6 +127,7 @@ const ROLE_HOME_CARDS = {
     ["📋", "Production Panel", "Orders awaiting production", "records"],
     ["📅", "Production Calendar", "What's being made today", "calendar"],
     ["✅", "Quality Check", "Finished pieces waiting to be checked", "qcqueue"],
+    ["🚚", "Delivery to Stores", "Send finished pieces to the branches", "deliveries"],
     ["🧥", "Item Details", "Browse the model catalog", "items"],
     ["📄", "Requirement List", "View saved requirements", "requirements"],
     ["🗂️", "Projects", "Design team projects", "projects"],
@@ -144,6 +146,8 @@ const ROLE_HOME_CARDS = {
     ["📅", "Production Calendar", "What's being made today", "calendar"],
     ["✅", "Quality Check", "Finished pieces waiting to be checked", "qcqueue"],
     ["📝", "Quality Checklist", "Edit the standard checks", "qcsetup"],
+    ["🚚", "Delivery to Stores", "Send finished pieces to the branches", "deliveries"],
+    ["📦", "Incoming Deliveries", "Deliveries coming to your branch", "incoming"],
     ["🔐", "PIN & Devices", "Set PINs, approve showroom iPads", "pins"],
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
@@ -516,14 +520,16 @@ const openFocus = { current: null };
 async function notify(session, message, type, branch, target, opts) {
   try {
     const internal = !!(opts && opts.internal);
-    const { data } = await supabase.from("notifications")
-      .insert({
-        message, type, created_by: session.name, branch: (branch !== undefined ? branch : session.branch) || null,
-        target_type: target ? target.type : null, target_id: target ? String(target.id) : null,
-        internal,
-      })
-      .select("id").single();
-    if (data && !internal) {
+    const row = {
+      message, type, created_by: session.name, branch: (branch !== undefined ? branch : session.branch) || null,
+      target_type: target ? target.type : null, target_id: target ? String(target.id) : null,
+      internal,
+    };
+    // Production-only notifications aren't pushed anywhere, so there is nothing to read back — and the person sending one
+    // (e.g. Sales accepting a delivery) isn't allowed to read it, which would make a "return the new row" insert fail.
+    if (internal) { await supabase.from("notifications").insert(row); return; }
+    const { data } = await supabase.from("notifications").insert(row).select("id").single();
+    if (data) {
       supabase.functions.invoke("push-service", {
         body: { action: "notify", notification_id: data.id, exclude_device_token: localStorage.getItem(DEVICE_KEY) || undefined },
       });   // fire and forget; the device that made the change is skipped
@@ -534,7 +540,7 @@ async function notify(session, message, type, branch, target, opts) {
 const INTERNAL_STATUSES = ["material_assigned", "manpower_planned", "job_in_process", "job_pending_qc", "job_rework"];
 
 // Move an order to a new status. `files` (optional) are attached to the history entry (used for rejections).
-async function advanceOrder(session, order, toStatus, comment, extra, files) {
+async function advanceOrder(session, order, toStatus, comment, extra, files, opts) {
   const label = STATUS[toStatus].label;
   const note = comment ? `${label}: ${comment}` : label;
   const entry = { at: new Date().toISOString(), by: session.name, note };
@@ -547,7 +553,8 @@ async function advanceOrder(session, order, toStatus, comment, extra, files) {
     const internal = INTERNAL_STATUSES.includes(toStatus);
     const shown = toStatus === "job_accepted" ? STATUS.public_in_process.label : label;
     // no customer names in notifications — order number and model only
-    notify(session, `${session.name}: ${shown} — order ${order.jobOrderNo} (${order.model})${comment ? " — " + comment : ""}`, "status", order.branch, { type: "order", id: order.id }, { internal });
+    // `silent` is used when one delivery moves several pieces: the delivery sends ONE notification instead of one per piece
+    if (!(opts && opts.silent)) notify(session, `${session.name}: ${shown} — order ${order.jobOrderNo} (${order.model})${comment ? " — " + comment : ""}`, "status", order.branch, { type: "order", id: order.id }, { internal });
   }
   return { error };
 }
@@ -1023,6 +1030,10 @@ export default function App() {
     } else if (type === "model" && role === "production") {
       await loadAll();
       setSubpage("items");
+    } else if (type === "delivery" && (role === "production" || role === "admin")) {
+      setSubpage("deliveries");
+    } else if (type === "delivery" && role === "sales") {
+      setSubpage("incoming");
     } else {
       return;                                                   // this role has no page for it — do nothing
     }
@@ -1091,6 +1102,12 @@ export default function App() {
       {subpage === "calendar" && (profile.role === "production" || profile.role === "admin") && (
         <ProductionCalendar orders={orders} models={config.models} session={profile} refresh={refresh} flash={flash} onOpenOrder={(id) => openTarget("order", id)} />
       )}
+      {subpage === "deliveries" && (profile.role === "production" || profile.role === "admin") && (
+        <DeliveryNotesPage orders={orders} session={profile} refresh={refresh} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
+      )}
+      {subpage === "incoming" && (profile.role === "sales" || profile.role === "admin") && (
+        <IncomingDeliveriesPage orders={orders} session={profile} refresh={refresh} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
+      )}
       {subpage === "qcqueue" && (profile.role === "production" || profile.role === "admin") && (
         <QcQueuePage orders={orders} session={profile} refresh={refresh} flash={flash} onOpenOrder={(id) => openTarget("order", id)} />
       )}
@@ -1098,19 +1115,19 @@ export default function App() {
       {subpage === "pins" && profile.role === "admin" && (
         <PinsPage users={allUsers} branches={config.branches.map((b) => b.name)} session={profile} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && profile.role === "sales" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && profile.role === "production" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && profile.role === "production" && (
         <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && profile.role === "admin" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && profile.role === "model_manager" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && profile.role === "model_manager" && (
         <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {toast && (
@@ -4706,7 +4723,9 @@ function WorkersManager({ flash }) {
 
 /* ---------------- Quality check ---------------- */
 
-function QualityCheckDialog({ order, session, onClose, onDone }) {
+function QualityCheckDialog({ order, session, stage = "production", onClose, onDone }) {
+  const isStore = stage === "store";
+  const readyLabel = isStore ? "Ready in Stores" : "Ready in Production";
   const [qc, setQc] = useState(null);
   const [error, setError] = useState("");
   const [notes, setNotes] = useState("");
@@ -4726,17 +4745,17 @@ function QualityCheckDialog({ order, session, onClose, onDone }) {
     startedRef.current = true;
     (async () => {
       // pick up a check that was started earlier (so ticks are never lost), otherwise start a new round
-      const { data: open } = await supabase.from("job_order_qc").select("*").eq("job_order_id", order.id).eq("stage", "production").eq("status", "in_progress").order("started_at", { ascending: false }).limit(1);
+      const { data: open } = await supabase.from("job_order_qc").select("*").eq("job_order_id", order.id).eq("stage", stage).eq("status", "in_progress").order("started_at", { ascending: false }).limit(1);
       if (open && open[0]) { checksRef.current = open[0].checks; setNotes(open[0].notes || ""); setQc(open[0]); return; }
-      const { data: all } = await supabase.from("job_order_qc").select("round").eq("job_order_id", order.id).eq("stage", "production");
+      const { data: all } = await supabase.from("job_order_qc").select("round").eq("job_order_id", order.id).eq("stage", stage);
       const round = (all || []).reduce((m, r) => Math.max(m, r.round), 0) + 1;
-      const { data: std } = await supabase.from("qc_checklist_items").select("*").eq("stage", "production").eq("active", true).order("sort_order");
+      const { data: std } = await supabase.from("qc_checklist_items").select("*").eq("stage", stage).eq("active", true).order("sort_order");
       const checks = buildQcChecks(order, std || []);
-      const { data: created, error: e } = await supabase.from("job_order_qc").insert({ job_order_id: order.id, stage: "production", round, checks, started_by: session.name }).select().single();
+      const { data: created, error: e } = await supabase.from("job_order_qc").insert({ job_order_id: order.id, stage, round, checks, started_by: session.name }).select().single();
       if (e) { setError(e.message); return; }
       checksRef.current = created.checks;
       setQc(created);
-      notify(session, `${session.name} started the quality check — order ${order.jobOrderNo} (${order.model})`, "status", order.branch, { type: "order", id: order.id }, { internal: true });
+      notify(session, `${session.name} started the ${isStore ? "store re-check" : "quality check"} — order ${order.jobOrderNo} (${order.model})`, "status", order.branch, { type: "order", id: order.id }, { internal: !isStore });
     })();
   }, []); // eslint-disable-line
 
@@ -4758,16 +4777,16 @@ function QualityCheckDialog({ order, session, onClose, onDone }) {
   const doPass = async () => {
     setBusy(true); setError("");
     const blob = sigRef.current ? await new Promise((r) => sigRef.current.toBlob(r, "image/png")) : null;
-    const up = blob ? await uploadCustomerFile(`qc-signatures/${order.id}-${Date.now()}.png`, blob, "image/png") : { error: { message: "no signature drawn" } };
+    const up = blob ? await uploadCustomerFile(`${isStore ? "store-qc-signatures" : "qc-signatures"}/${order.id}-${Date.now()}.png`, blob, "image/png") : { error: { message: "no signature drawn" } };
     if (up.error) { setError("Couldn't save the signature: " + up.error.message); setBusy(false); setMode(null); return; }
     const { error: e1 } = await supabase.from("job_order_qc").update({
       status: "passed", confirmed: true, signature_url: up.ref, notes: notes || null, completed_by: session.name, completed_at: new Date().toISOString(),
     }).eq("id", qc.id);
     if (e1) { setError(e1.message); setBusy(false); setMode(null); return; }
-    const { error: e2 } = await advanceOrder(session, order, "ready_in_production", null);
+    const { error: e2 } = await advanceOrder(session, order, isStore ? "ready_in_stores" : "ready_in_production", null);
     setBusy(false);
     if (e2) { setError(e2.message); setMode(null); return; }
-    onDone && onDone("Quality check passed — Ready in Production");
+    onDone && onDone(`${isStore ? "Re-check" : "Quality check"} passed — ${readyLabel}`);
   };
 
   const doFail = async () => {
@@ -4776,7 +4795,7 @@ function QualityCheckDialog({ order, session, onClose, onDone }) {
       status: "failed", fail_reason: reason.trim(), fail_attachments: files, notes: notes || null, completed_by: session.name, completed_at: new Date().toISOString(),
     }).eq("id", qc.id);
     if (e1) { setError(e1.message); setBusy(false); setMode(null); return; }
-    const { error: e2 } = await advanceOrder(session, order, "job_rework", reason.trim(), null, files);
+    const { error: e2 } = await advanceOrder(session, order, "job_rework", isStore ? `Sent back from ${order.branch}: ${reason.trim()}` : reason.trim(), null, files);
     setBusy(false);
     if (e2) { setError(e2.message); setMode(null); return; }
     onDone && onDone("Sent back for rework");
@@ -4787,7 +4806,7 @@ function QualityCheckDialog({ order, session, onClose, onDone }) {
       <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 780 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
-            <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20 }}>Quality check{qc ? ` · round ${qc.round}` : ""}</div>
+            <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20 }}>{isStore ? "Store re-check" : "Quality check"}{qc ? ` · round ${qc.round}` : ""}</div>
             <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 10 }}>Order {order.jobOrderNo} · {order.model}{order.cut ? ` · ${order.cut}` : ""}{order.color ? ` · ${order.color}` : ""}</div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 24, color: "#8a8a8a" }}>×</button>
@@ -4838,7 +4857,7 @@ function QualityCheckDialog({ order, session, onClose, onDone }) {
                   <button onClick={() => setFailing(true)} style={{ background: "#fff", border: "1px solid #C1302B", color: "#C1302B", borderRadius: 4, padding: "10px 18px", fontWeight: 700 }}>Needs rework</button>
                   <div style={{ display: "flex", gap: 10 }}>
                     <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 18px", fontWeight: 700 }}>Save & close</button>
-                    <button disabled={!(allDone && confirmed && signed)} onClick={() => setMode("pass")} style={{ background: allDone && confirmed && signed ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "10px 18px", fontWeight: 700 }}>Sign & submit — Ready in Production</button>
+                    <button disabled={!(allDone && confirmed && signed)} onClick={() => setMode("pass")} style={{ background: allDone && confirmed && signed ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "10px 18px", fontWeight: 700 }}>Sign & submit — {readyLabel}</button>
                   </div>
                 </div>
                 {!(allDone && confirmed && signed) && <div style={{ fontSize: 11.5, color: "#8a8a8a", textAlign: "right", marginTop: 6 }}>{!allDone ? "Tick every line" : !confirmed ? "Tick the confirmation" : "Sign above"} to submit.</div>}
@@ -4848,7 +4867,7 @@ function QualityCheckDialog({ order, session, onClose, onDone }) {
         )}
       </div>
 
-      {mode === "pass" && <ConfirmDialog title="Submit the quality check?" confirmLabel="Yes, submit" busy={busy} onCancel={() => setMode(null)} onConfirm={doPass}>Order {order.jobOrderNo} becomes <strong>Ready in Production</strong>, and your signature and the time stamps are saved.</ConfirmDialog>}
+      {mode === "pass" && <ConfirmDialog title={isStore ? "Submit the re-check?" : "Submit the quality check?"} confirmLabel="Yes, submit" busy={busy} onCancel={() => setMode(null)} onConfirm={doPass}>Order {order.jobOrderNo} becomes <strong>{readyLabel}</strong>, and your signature and the time stamps are saved.</ConfirmDialog>}
       {mode === "fail" && <ConfirmDialog title="Send back for rework?" confirmLabel="Yes, send back" busy={busy} onCancel={() => setMode(null)} onConfirm={doFail}>The order goes back to <strong>Rework</strong> with your reason{files.length ? " and photos" : ""}.</ConfirmDialog>}
     </div>
   );
@@ -4858,7 +4877,7 @@ function QualityCheckDialog({ order, session, onClose, onDone }) {
 function QcRecord({ order }) {
   const [rows, setRows] = useState([]);
   useEffect(() => {
-    const load = () => supabase.from("job_order_qc").select("*").eq("job_order_id", order.id).eq("stage", "production").order("round").then(({ data }) => setRows(data || []));
+    const load = () => supabase.from("job_order_qc").select("*").eq("job_order_id", order.id).order("started_at").then(({ data }) => setRows(data || []));
     load();
     // a check can be started or ticked without the order's status changing — follow it live
     const channel = supabase.channel("qc-record-" + order.id)
@@ -4873,7 +4892,7 @@ function QcRecord({ order }) {
       {rows.map((r) => (
         <div key={r.id} style={{ marginBottom: 14, paddingBottom: 12, borderBottom: "1px solid #EEE" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: r.status === "passed" ? "#2F8F46" : r.status === "failed" ? "#C1302B" : "#D98E2B" }}>
-            Round {r.round} — {r.status === "passed" ? "Passed" : r.status === "failed" ? "Sent back for rework" : "In progress"}
+            {r.stage === "store" ? "Store re-check" : "Production check"} — Round {r.round} — {r.status === "passed" ? "Passed" : r.status === "failed" ? "Sent back for rework" : "In progress"}
           </div>
           <div style={{ fontSize: 12, color: "#8a8a8a", marginBottom: 6 }}>
             Started {fmtDateTime(r.started_at)} by {r.started_by}
@@ -4986,6 +5005,353 @@ function QcSetupPage({ flash }) {
   );
 }
 
+/* ---------------- Delivery to stores ---------------- */
+
+async function createDeliveryNote(session, { branch, sendAt, carriedBy, notes, orders }) {
+  const { data: note, error } = await supabase.from("delivery_notes")
+    .insert({ branch, send_at: sendAt, carried_by: carriedBy || null, notes: notes || null, created_by: session.name }).select().single();
+  if (error) return { error };
+  const { error: e2 } = await supabase.from("delivery_note_items").insert(orders.map((o) => ({ delivery_note_id: note.id, job_order_id: o.id })));
+  if (e2) return { error: e2 };
+  for (const o of orders) await advanceOrder(session, o, "in_transit", `${note.note_no} to ${branch}`, null, null, { silent: true });
+  notify(session, `Delivery ${note.note_no} is on its way to ${branch}: ${orders.length} piece${orders.length === 1 ? "" : "s"}`, "delivery", branch, { type: "delivery", id: note.id });
+  return { note };
+}
+
+// items: [{ id, order }], received: { itemId: true/false }
+async function acceptDelivery(session, note, items, received) {
+  const now = new Date().toISOString();
+  const missing = [];
+  let got = 0;
+  for (const it of items) {
+    const ok = !!received[it.id];
+    await supabase.from("delivery_note_items").update({ received: ok, received_at: now }).eq("id", it.id);
+    if (ok) { got++; await advanceOrder(session, it.order, "store_received", `${note.note_no} accepted at ${note.branch}`, null, null, { silent: true }); }
+    else { missing.push(it.order); await advanceOrder(session, it.order, "ready_in_production", `Not received at ${note.branch} (${note.note_no})`, null, null, { silent: true }); }
+  }
+  const status = missing.length === 0 ? "accepted" : "partial";
+  const { error } = await supabase.from("delivery_notes").update({ status, accepted_by: session.name, accepted_at: now }).eq("id", note.id);
+  notify(session, `${note.note_no} ${missing.length ? "arrived with missing pieces" : "was accepted"} at ${note.branch}: ${got} of ${items.length} received${missing.length ? " — not received: " + missing.map((o) => o.jobOrderNo).join(", ") : ""}`,
+    "delivery", note.branch, { type: "delivery", id: note.id }, { internal: true });   // Production and Admin only
+  return { error };
+}
+
+// Opens a clean A4 delivery note in a new window and prints it
+function printDeliveryNote(note, rows) {
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const w = window.open("", "_blank");
+  if (!w) { window.alert("Please allow pop-ups to print the delivery note."); return; }
+  w.document.write(`<!doctype html><html><head><title>Delivery note ${esc(note.note_no)}</title><style>
+    @page { size: A4 portrait; margin: 12mm; }
+    body { font-family: Georgia, serif; color: #111; font-size: 13px; }
+    h1 { font-size: 20px; letter-spacing: 2px; margin: 0 0 8px; }
+    .meta div { margin: 2px 0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+    th, td { border: 1px solid #999; padding: 6px 8px; text-align: left; }
+    th { background: #f2f2f2; }
+    .sign { display: flex; gap: 40px; margin-top: 70px; }
+    .sign div { flex: 1; border-top: 1px solid #333; padding-top: 4px; font-size: 12px; }
+  </style></head><body>
+  <h1>MOONLIGHT CONCEPT — DELIVERY NOTE</h1>
+  <div class="meta">
+    <div><strong>Note no:</strong> ${esc(note.note_no)}</div><div><strong>From:</strong> Production</div><div><strong>To:</strong> ${esc(note.branch)}</div>
+    <div><strong>Sent:</strong> ${esc(new Date(note.send_at).toLocaleString())}</div>
+    ${note.carried_by ? `<div><strong>Carried by:</strong> ${esc(note.carried_by)}</div>` : ""}${note.notes ? `<div><strong>Notes:</strong> ${esc(note.notes)}</div>` : ""}
+  </div>
+  <table><thead><tr><th>#</th><th>Job order</th><th>Model</th><th>Colour</th><th>Cut</th><th>Due</th><th style="width:70px">Received</th></tr></thead><tbody>
+  ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.no)}</td><td>${esc(r.model)}</td><td>${esc(r.color)}</td><td>${esc(r.cut)}</td><td>${esc(r.due)}</td><td></td></tr>`).join("")}
+  </tbody></table>
+  <div style="margin-top:10px"><strong>Total pieces:</strong> ${rows.length}</div>
+  <div class="sign"><div>Sent by (Production)</div><div>Received by (${esc(note.branch)})</div></div>
+  <script>window.onload = function () { window.print(); };<\/script></body></html>`);
+  w.document.close();
+}
+
+const DN_STATUS = { sent: ["On the way", "#3B6FA0"], accepted: ["Accepted", "#2F8F46"], partial: ["Partly received", "#C1302B"] };
+
+// Production / Admin: the "Delivery to Stores" page
+function DeliveryNotesPage({ orders, session, refresh, flash, openRequest, clearOpenRequest }) {
+  const nowLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+  const [notes, setNotes] = useState([]);
+  const [items, setItems] = useState([]);
+  const [selected, setSelected] = useState([]);
+  const [sendAt, setSendAt] = useState(nowLocal());
+  const [carriedBy, setCarriedBy] = useState("");
+  const [noteText, setNoteText] = useState("");
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [viewId, setViewId] = useState(null);
+
+  const load = async () => {
+    const { data: n } = await supabase.from("delivery_notes").select("*").order("created_at", { ascending: false }).limit(60);
+    setNotes(n || []);
+    const ids = (n || []).map((x) => x.id);
+    if (ids.length) { const { data: it } = await supabase.from("delivery_note_items").select("*").in("delivery_note_id", ids); setItems(it || []); } else setItems([]);
+  };
+  useEffect(() => { load(); }, [orders]); // eslint-disable-line
+  useEffect(() => { if (openRequest && openRequest.type === "delivery") { setViewId(openRequest.id); clearOpenRequest(); } }, [openRequest]); // eslint-disable-line
+
+  const ready = orders.filter((o) => o.status === "ready_in_production").sort((a, b) => (a.branch || "").localeCompare(b.branch || "") || String(a.jobOrderNo).localeCompare(String(b.jobOrderNo)));
+  const chosen = ready.filter((o) => selected.includes(o.id));
+  const branch = chosen[0] ? chosen[0].branch : "";
+  const toggle = (o) => setSelected((s) => (s.includes(o.id) ? s.filter((x) => x !== o.id) : [...s, o.id]));
+  const byBranch = ready.reduce((m, o) => { (m[o.branch || "—"] = m[o.branch || "—"] || []).push(o); return m; }, {});
+
+  const doSend = async () => {
+    setBusy(true);
+    const res = await createDeliveryNote(session, { branch, sendAt: new Date(sendAt).toISOString(), carriedBy: carriedBy.trim(), notes: noteText.trim(), orders: chosen });
+    setBusy(false); setConfirm(false);
+    if (res.error) { flash("Error: " + res.error.message); return; }
+    flash(`Delivery ${res.note.note_no} sent to ${branch}`);
+    setSelected([]); setCarriedBy(""); setNoteText(""); setSendAt(nowLocal()); refresh(); load();
+  };
+
+  const rowsOf = (noteId) => items.filter((i) => i.delivery_note_id === noteId).map((i) => {
+    const o = orders.find((x) => x.id === i.job_order_id) || {};
+    return { id: i.id, orderId: o.id, no: o.jobOrderNo, model: o.model, color: o.color || "", cut: o.cut || "", due: o.deliveryDate ? fmtDate(o.deliveryDate) : "", received: i.received };
+  });
+  const viewNote = notes.find((n) => n.id === viewId);
+  const th = { textAlign: "left", padding: "8px 10px", fontSize: 12.5, borderBottom: "2px solid #1A1A1A" };
+  const td = { padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5" };
+
+  return (
+    <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 18 }}>DELIVERY TO STORES</h2>
+
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>READY IN PRODUCTION ({ready.length})</div>
+      {ready.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14, padding: "6px 0 24px" }}>No finished pieces are waiting to be sent.</div> : (
+        <div style={{ marginBottom: 20 }}>
+          {Object.entries(byBranch).map(([b, list]) => (
+            <div key={b} style={{ border: "1px solid #DDE1E7", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                <strong>🏬 {b}</strong>
+                <a className="link" style={{ fontSize: 12.5 }} onClick={() => setSelected(list.map((o) => o.id))}>Select all for {b}</a>
+              </div>
+              {list.map((o) => {
+                const off = branch && o.branch !== branch;
+                return (
+                  <label key={o.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "9px 6px", borderBottom: "1px solid #F0F0F0", opacity: off ? 0.4 : 1, cursor: off ? "not-allowed" : "pointer" }}>
+                    <input type="checkbox" disabled={off} checked={selected.includes(o.id)} onChange={() => toggle(o)} style={{ width: 20, height: 20 }} />
+                    <span className="mono" style={{ fontWeight: 700, minWidth: 70 }}>{o.jobOrderNo}</span>
+                    <span style={{ flex: 1, fontSize: 13.5 }}>{o.model}{o.cut ? ` · ${o.cut}` : ""}{o.color ? ` · ${o.color}` : ""}</span>
+                    <span style={{ fontSize: 12, color: "#8a8a8a" }}>Due {o.deliveryDate ? fmtDate(o.deliveryDate) : "—"}</span>
+                  </label>
+                );
+              })}
+            </div>
+          ))}
+
+          {chosen.length > 0 && (
+            <div style={{ ...cardStyle, marginTop: 14 }}>
+              <div style={{ fontWeight: 700, marginBottom: 10 }}>New delivery note — {chosen.length} piece{chosen.length === 1 ? "" : "s"} to {branch}</div>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <div><div style={label13}>Date & time</div><input type="datetime-local" value={sendAt} onChange={(e) => setSendAt(e.target.value)} style={{ ...inputStyle, width: 220 }} /></div>
+                <div><div style={label13}>Carried by (optional)</div><input value={carriedBy} onChange={(e) => setCarriedBy(e.target.value)} placeholder="Driver / van" style={{ ...inputStyle, width: 200 }} /></div>
+                <div style={{ flex: 1, minWidth: 220 }}><div style={label13}>Notes (optional)</div><input value={noteText} onChange={(e) => setNoteText(e.target.value)} style={inputStyle} /></div>
+              </div>
+              <div style={{ textAlign: "right", marginTop: 12 }}>
+                <button onClick={() => setConfirm(true)} disabled={!sendAt} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 20px", fontWeight: 700 }}>Create delivery note & send</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "24px 0 8px" }}>DELIVERY NOTES</div>
+      {notes.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14 }}>No delivery notes yet.</div> : (
+        <table>
+          <thead><tr><th style={th}>Note</th><th style={th}>To</th><th style={th}>Sent</th><th style={th}>Pieces</th><th style={th}>Status</th><th style={th}></th></tr></thead>
+          <tbody>
+            {notes.map((n) => {
+              const st = DN_STATUS[n.status] || [n.status, "#1A1A1A"];
+              return (
+                <tr key={n.id}>
+                  <td style={td} className="mono">{n.note_no}</td><td style={td}>{n.branch}</td><td style={td}>{fmtDateTime(n.send_at)}</td>
+                  <td style={td}>{items.filter((i) => i.delivery_note_id === n.id).length}</td>
+                  <td style={{ ...td, color: st[1], fontWeight: 700 }}>{st[0]}</td>
+                  <td style={td}><a className="link" onClick={() => setViewId(n.id)}>View</a></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {viewNote && (
+        <div onClick={() => setViewId(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 620, maxHeight: "90vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <div><div className="mono" style={{ fontSize: 20, fontWeight: 700 }}>{viewNote.note_no}</div><div style={{ fontSize: 13, color: "#5a5a5a" }}>To {viewNote.branch} · {fmtDateTime(viewNote.send_at)}{viewNote.carried_by ? ` · carried by ${viewNote.carried_by}` : ""}</div></div>
+              <button onClick={() => setViewId(null)} style={{ background: "none", border: "none", fontSize: 24, color: "#8a8a8a" }}>×</button>
+            </div>
+            <div style={{ fontSize: 13, margin: "8px 0", color: (DN_STATUS[viewNote.status] || [])[1], fontWeight: 700 }}>{(DN_STATUS[viewNote.status] || [viewNote.status])[0]}{viewNote.accepted_at ? ` — ${viewNote.accepted_by}, ${fmtDateTime(viewNote.accepted_at)}` : ""}</div>
+            {viewNote.notes && <div style={{ fontSize: 13, marginBottom: 8 }}>Notes: {viewNote.notes}</div>}
+            {rowsOf(viewNote.id).map((r) => (
+              <div key={r.id} style={{ display: "flex", gap: 12, padding: "8px 0", borderBottom: "1px solid #F0F0F0", fontSize: 13.5, alignItems: "center" }}>
+                <span className="mono" style={{ fontWeight: 700, minWidth: 70 }}>{r.no}</span><span style={{ flex: 1 }}>{r.model}{r.cut ? ` · ${r.cut}` : ""}{r.color ? ` · ${r.color}` : ""}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: r.received === true ? "#2F8F46" : r.received === false ? "#C1302B" : "#8a8a8a" }}>{r.received === true ? "Received" : r.received === false ? "Not received" : "On the way"}</span>
+              </div>
+            ))}
+            <div style={{ textAlign: "right", marginTop: 14 }}>
+              <button onClick={() => printDeliveryNote(viewNote, rowsOf(viewNote.id))} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Print delivery note</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirm && (
+        <ConfirmDialog title={`Send ${chosen.length} piece${chosen.length === 1 ? "" : "s"} to ${branch}?`} confirmLabel="Yes, send" busy={busy} onCancel={() => setConfirm(false)} onConfirm={doSend}>
+          A numbered delivery note is created, the pieces move to <strong>Delivery to Stores</strong>, and {branch} is notified that the delivery is coming.
+          <ul style={{ margin: "10px 0 0 18px", padding: 0 }}>{chosen.map((o) => <li key={o.id}>{o.jobOrderNo} — {o.model}{o.color ? ` · ${o.color}` : ""}</li>)}</ul>
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
+// Sales / Admin: the "Incoming Deliveries" page (accept, then re-check)
+function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, clearOpenRequest }) {
+  const [notes, setNotes] = useState([]);
+  const [items, setItems] = useState([]);
+  const [openId, setOpenId] = useState(null);
+  const [received, setReceived] = useState({});
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(null);
+  const [qcOpen, setQcOpen] = useState({});
+
+  const load = async () => {
+    const { data: n } = await supabase.from("delivery_notes").select("*").order("created_at", { ascending: false }).limit(40);
+    setNotes(n || []);
+    const ids = (n || []).map((x) => x.id);
+    if (ids.length) { const { data: it } = await supabase.from("delivery_note_items").select("*").in("delivery_note_id", ids); setItems(it || []); } else setItems([]);
+    const { data: q } = await supabase.from("job_order_qc").select("job_order_id, checks").eq("stage", "store").eq("status", "in_progress");
+    setQcOpen(Object.fromEntries((q || []).map((r) => [r.job_order_id, r])));
+  };
+  useEffect(() => { load(); }, [orders]); // eslint-disable-line
+  useEffect(() => { if (openRequest && openRequest.type === "delivery") { setOpenId(openRequest.id); clearOpenRequest(); } }, [openRequest]); // eslint-disable-line
+
+  const mine = (o) => session.role === "admin" || o.branch === session.branch;
+  const rowsOf = (noteId) => items.filter((i) => i.delivery_note_id === noteId).map((i) => ({ id: i.id, order: orders.find((x) => x.id === i.job_order_id) || {}, received: i.received }));
+  const note = notes.find((n) => n.id === openId);
+  const rows = note ? rowsOf(note.id) : [];
+  useEffect(() => { if (note && note.status === "sent") setReceived(Object.fromEntries(rowsOf(note.id).map((r) => [r.id, true]))); }, [openId, items.length]); // eslint-disable-line
+
+  const incoming = notes.filter((n) => n.status === "sent");
+  const recent = notes.filter((n) => n.status !== "sent").slice(0, 12);
+  const toCheck = orders.filter((o) => o.status === "store_received" && mine(o));
+  const notReceived = rows.filter((r) => !received[r.id]).length;
+
+  const doAccept = async () => {
+    setBusy(true);
+    const { error } = await acceptDelivery(session, note, rows.filter((r) => r.order && r.order.id), received);
+    setBusy(false); setConfirm(false);
+    if (error) { flash("Error: " + error.message); return; }
+    flash(`${note.note_no} accepted`); setOpenId(null); refresh(); load();
+  };
+
+  const th = { textAlign: "left", padding: "8px 10px", fontSize: 12.5, borderBottom: "2px solid #1A1A1A" };
+  const td = { padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5" };
+
+  return (
+    <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 18 }}>INCOMING DELIVERIES</h2>
+
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>ON THE WAY — TO ACCEPT ({incoming.length})</div>
+      {incoming.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14, padding: "6px 0 22px" }}>No deliveries are on the way.</div> : incoming.map((n) => (
+        <div key={n.id} onClick={() => setOpenId(n.id)} style={{ border: "1px solid #BBD0E6", background: "#F4F8FC", borderRadius: 8, padding: "12px 16px", marginBottom: 10, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div><span className="mono" style={{ fontWeight: 700, fontSize: 15 }}>{n.note_no}</span> · from Production to {n.branch}<div style={{ fontSize: 12.5, color: "#5a5a5a" }}>Sent {fmtDateTime(n.send_at)} · {items.filter((i) => i.delivery_note_id === n.id).length} pieces{n.carried_by ? ` · carried by ${n.carried_by}` : ""}</div></div>
+          <button style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px", fontWeight: 700 }}>Open & accept</button>
+        </div>
+      ))}
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "22px 0 8px" }}>ACCEPTED — WAITING FOR RE-CHECK ({toCheck.length})</div>
+      {toCheck.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14 }}>Nothing is waiting for a re-check.</div> : (
+        <table>
+          <thead><tr><th style={th}>Job order</th><th style={th}>Model</th><th style={th}>Colour</th><th style={th}>Due</th><th style={th}>Re-check</th><th style={th}></th></tr></thead>
+          <tbody>
+            {toCheck.map((o) => { const r = qcOpen[o.id]; return (
+              <tr key={o.id}>
+                <td style={td} className="mono">{o.jobOrderNo}</td><td style={td}>{o.model}{o.cut ? ` · ${o.cut}` : ""}</td><td style={td}>{o.color || "—"}</td>
+                <td style={td}>{o.deliveryDate ? fmtDate(o.deliveryDate) : "—"}</td>
+                <td style={{ ...td, color: r ? "#D98E2B" : "#8a8a8a", fontWeight: 600 }}>{r ? `In progress (${r.checks.filter((c) => c.ok).length}/${r.checks.length})` : "Not started"}</td>
+                <td style={td}><button onClick={() => setChecking(o)} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontWeight: 700, fontSize: 12.5 }}>{r ? "Continue" : "Start re-check"}</button></td>
+              </tr>
+            ); })}
+          </tbody>
+        </table>
+      )}
+
+      {recent.length > 0 && (
+        <>
+          <div style={{ fontWeight: 700, fontSize: 13, margin: "26px 0 8px" }}>RECENT DELIVERIES</div>
+          {recent.map((n) => { const st = DN_STATUS[n.status] || [n.status, "#1A1A1A"]; return (
+            <div key={n.id} onClick={() => setOpenId(n.id)} style={{ display: "flex", justifyContent: "space-between", padding: "8px 4px", borderBottom: "1px solid #EEE", cursor: "pointer", fontSize: 13.5 }}>
+              <span><span className="mono" style={{ fontWeight: 700 }}>{n.note_no}</span> · {n.branch} · {fmtDateTime(n.send_at)}</span><span style={{ color: st[1], fontWeight: 700 }}>{st[0]}</span>
+            </div>
+          ); })}
+        </>
+      )}
+
+      {note && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 640, maxHeight: "92vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <div><div className="mono" style={{ fontSize: 20, fontWeight: 700 }}>{note.note_no}</div><div style={{ fontSize: 13, color: "#5a5a5a" }}>From Production to {note.branch} · sent {fmtDateTime(note.send_at)}{note.carried_by ? ` · carried by ${note.carried_by}` : ""}</div></div>
+              <button onClick={() => setOpenId(null)} style={{ background: "none", border: "none", fontSize: 24, color: "#8a8a8a" }}>×</button>
+            </div>
+            {note.notes && <div style={{ fontSize: 13, margin: "8px 0" }}>Notes: {note.notes}</div>}
+            <div style={{ fontSize: 12.5, color: "#8a8a8a", margin: "10px 0 6px" }}>{note.status === "sent" ? "Tick each piece that has actually arrived." : (DN_STATUS[note.status] || [note.status])[0] + (note.accepted_at ? ` — ${note.accepted_by}, ${fmtDateTime(note.accepted_at)}` : "")}</div>
+            {rows.map((r) => (
+              <label key={r.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 6px", borderBottom: "1px solid #F0F0F0", cursor: note.status === "sent" ? "pointer" : "default" }}>
+                {note.status === "sent"
+                  ? <input type="checkbox" checked={!!received[r.id]} onChange={() => setReceived((m) => ({ ...m, [r.id]: !m[r.id] }))} style={{ width: 22, height: 22 }} />
+                  : <span style={{ width: 22, textAlign: "center", fontWeight: 700, color: r.received ? "#2F8F46" : "#C1302B" }}>{r.received ? "✓" : "✗"}</span>}
+                <span className="mono" style={{ fontWeight: 700, minWidth: 70 }}>{r.order.jobOrderNo}</span>
+                <span style={{ flex: 1, fontSize: 13.5 }}>{r.order.model}{r.order.cut ? ` · ${r.order.cut}` : ""}{r.order.color ? ` · ${r.order.color}` : ""}</span>
+                <span style={{ fontSize: 12, color: "#8a8a8a" }}>Due {r.order.deliveryDate ? fmtDate(r.order.deliveryDate) : "—"}</span>
+              </label>
+            ))}
+            {note.status === "sent" && notReceived > 0 && <div style={{ color: "#C1302B", fontSize: 12.5, marginTop: 10 }}>{notReceived} piece{notReceived === 1 ? "" : "s"} not ticked — they go back to Production as "not received".</div>}
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
+              <button onClick={() => setOpenId(null)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Close</button>
+              {note.status === "sent" && <button onClick={() => setConfirm(true)} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Accept delivery</button>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirm && note && (
+        <ConfirmDialog title={`Accept ${note.note_no}?`} confirmLabel="Yes, accept" busy={busy} onCancel={() => setConfirm(false)} onConfirm={doAccept}>
+          {rows.length - notReceived} piece{rows.length - notReceived === 1 ? "" : "s"} become <strong>Delivery Accepted — Re-Quality Check</strong>.
+          {notReceived > 0 && <div style={{ marginTop: 8, color: "#C1302B" }}>{notReceived} piece{notReceived === 1 ? "" : "s"} not received will go back to Ready in Production.</div>}
+        </ConfirmDialog>
+      )}
+      {checking && <QualityCheckDialog order={checking} session={session} stage="store" onClose={() => { setChecking(null); refresh(); load(); }} onDone={(msg) => { setChecking(null); flash(msg); refresh(); load(); }} />}
+    </div>
+  );
+}
+
+// The order side panel for Sales / Admin: the store re-check
+function StoreActions({ order, session, onDone, flash }) {
+  const [dlg, setDlg] = useState(false);
+  const [open, setOpen] = useState(false);
+  const mine = session.role === "admin" || (session.role === "sales" && order.branch === session.branch);
+  useEffect(() => {
+    if (!mine || order.status !== "store_received") return;
+    supabase.from("job_order_qc").select("id").eq("job_order_id", order.id).eq("stage", "store").eq("status", "in_progress").limit(1).then(({ data }) => setOpen(!!(data && data[0])));
+  }, [order.id, order.status]); // eslint-disable-line
+  if (!mine || !["in_transit", "store_received"].includes(order.status)) return null;
+  return (
+    <div style={{ ...cardStyle, marginBottom: 16 }}>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>STORE</div>
+      {order.status === "in_transit" && <div style={{ fontSize: 13 }}>This piece is on its way to the store. Accept it from <strong>Incoming Deliveries</strong> on the Home dashboard.</div>}
+      {order.status === "store_received" && <button onClick={() => setDlg(true)} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 18px", fontSize: 13, fontWeight: 700 }}>{open ? "Continue re-check" : "Start re-quality check"}</button>}
+      {dlg && <QualityCheckDialog order={order} session={session} stage="store" onClose={() => { setDlg(false); onDone && onDone(); }} onDone={(msg) => { setDlg(false); flash && flash(msg); onDone && onDone(); }} />}
+    </div>
+  );
+}
+
 /* ---------------- Order detail ---------------- */
 
 function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, onResubmit, onDelete, onEditFull, onViewFull, models, flash, onProductionDone }) {
@@ -5030,6 +5396,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
               </div>
             )}
             <ProductionActions order={order} session={session} models={models || []} onDone={onProductionDone} flash={flash} />
+            <StoreActions order={order} session={session} onDone={onProductionDone} flash={flash} />
             {!pii && <Row l="Mobile" v={order.mobile} />}<Row l="Order Type" v={order.orderType} />
             <Row l="Model" v={order.model} />
             <Row l="Colour" v={order.color ? (
@@ -5084,7 +5451,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
             {onDelete && <button onClick={() => onDelete(order.id)} style={{ marginTop: 16, background: "#fff", border: "1px solid #C1302B", color: "#C1302B", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Delete Record</button>}
 
             {seesInternal && <ProductionInfo order={order} />}
-            {seesInternal && <QcRecord order={order} />}
+            {(seesInternal || role === "sales") && <QcRecord order={order} />}
 
             <div id="order-history" style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid #E5E5E5" }}>
               <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", marginBottom: 8 }}>ACTIVITY LOG</div>
