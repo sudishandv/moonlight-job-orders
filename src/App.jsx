@@ -773,8 +773,12 @@ export default function App() {
       });
   }, [session?.user?.id]);
 
-  const loadAll = useCallback(async () => {
-    const [{ data: branches }, { data: salespersons }, { data: models }, { data: ords }, { data: profs }, { data: reqItems }, { data: projs }, { data: collabs }, { data: users }, { data: tasks }, { data: projModels }] = await Promise.all([
+  // Re-reads all the data and swaps it in quietly (no loading screen, no page state reset). Quick repeat calls are
+  // coalesced so an older response can never overwrite a newer one, and a failed read (e.g. a dropped connection)
+  // never replaces data that is already on screen.
+  const loadState = React.useRef({ running: null, again: false, loadedOnce: false });
+  const doLoad = useCallback(async () => {
+    const results = await Promise.all([
       supabase.from("branches").select("*").order("name"),
       supabase.from("salespersons").select("*").order("name"),
       supabase.from("models").select("*").order("model_no"),
@@ -787,6 +791,9 @@ export default function App() {
       supabase.from("project_tasks").select("*"),
       supabase.from("project_models").select("*"),
     ]);
+    if (results.some((r) => r.error) && loadState.current.loadedOnce) return;
+    const [{ data: branches }, { data: salespersons }, { data: models }, { data: ords }, { data: profs }, { data: reqItems }, { data: projs }, { data: collabs }, { data: users }, { data: tasks }, { data: projModels }] = results;
+    loadState.current.loadedOnce = true;
     setConfig({ branches: branches || [], salespersons: salespersons || [], models: (models || []).map(dbToModel) });
     setOrders((ords || []).map(dbToOrder));
     setProfiles((profs || []).map((p) => ({ ...p, createdAt: p.created_at, updatedAt: p.updated_at })));
@@ -804,6 +811,15 @@ export default function App() {
     setProjectTasks(tasks || []);
     setProjectModels(projModels || []);
   }, []);
+  const loadAll = useCallback(() => {
+    const st = loadState.current;
+    if (st.running) { st.again = true; return st.running; }   // a read is already going: run once more after it, so this call sees the latest data
+    st.running = (async () => {
+      try { do { st.again = false; await doLoad(); } while (st.again); }
+      finally { st.running = null; }
+    })();
+    return st.running;
+  }, [doLoad]);
 
   useEffect(() => { if (profile) loadAll(); }, [profile, loadAll]);
 
@@ -821,6 +837,33 @@ export default function App() {
     const interval = setInterval(loadNotifications, 30000);
     return () => clearInterval(interval);
   }, [profile, loadNotifications]);
+
+  // Live updates: refresh a moment after anyone changes something.
+  useEffect(() => {
+    if (!profile) return;
+    let timer = null;
+    let lastRun = 0;
+    const run = () => { lastRun = Date.now(); loadAll(); loadNotifications(); };
+    const refreshSoon = () => {                       // bunch quick changes together; never more than once every 2.5 s
+      clearTimeout(timer);
+      const wait = Math.max(600, 2500 - (Date.now() - lastRun));
+      timer = setTimeout(run, wait);
+    };
+
+    const channel = supabase.channel("live-data");
+    ["job_orders", "requirement_items", "customer_profiles", "models", "branches"].forEach((table) => {
+      channel.on("postgres_changes", { event: "*", schema: "public", table }, refreshSoon);
+    });
+    channel.on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications" }, () => loadNotifications());   // bell + chime straight away
+    channel.subscribe();
+
+    // iPads drop the connection while asleep: catch up the moment the screen wakes, and as a safety net every 2 minutes
+    const onVisible = () => { if (document.visibilityState === "visible") refreshSoon(); };
+    document.addEventListener("visibilitychange", onVisible);
+    const safety = setInterval(refreshSoon, 120000);
+
+    return () => { clearTimeout(timer); clearInterval(safety); document.removeEventListener("visibilitychange", onVisible); supabase.removeChannel(channel); };
+  }, [profile?.id]); // eslint-disable-line
 
   // Read this device's settings once signed in; register the service worker; keep the push subscription fresh.
   useEffect(() => {
