@@ -57,7 +57,7 @@ const maskStatus = (status, role = VIEWER_ROLE) =>
   (role === "production" || role === "admin" || !PRODUCTION_ONLY.includes(status)) ? status : "public_in_process";
 const hidePII = (session) => !!session && session.role === "production";   // Production never sees a customer's name or mobile number
 // Statuses after production hands the order on: Production's own list drops them
-const AFTER_PRODUCTION = ["ready_in_production", "in_transit", "store_received", "ready_in_stores", "delivery_assigned", "ready_to_deliver", "delivered"];
+const AFTER_PRODUCTION = ["in_transit", "store_received", "ready_in_stores", "delivery_assigned", "ready_to_deliver", "delivered"];
 
 const MEASURE_FIELDS = [
   ["shoulder", "Shoulder"], ["chest", "Chest"], ["waist", "Waist"], ["hips", "Hips"],
@@ -568,6 +568,33 @@ const fmtDuration = (ms) => {
   return [d ? d + "d" : "", h ? h + "h" : "", (m % 60) + "m"].filter(Boolean).join(" ");
 };
 const fmtTime = (iso) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—");
+
+// Switches on the compact print layout, measures the page, and shrinks it just enough to fit one A4 sheet.
+function usePrintFit(ref) {
+  useEffect(() => {
+    const PAGE_W = (194 / 25.4) * 96;     // printable width  (A4 210mm minus 8mm margins), in CSS pixels
+    const PAGE_H = (279 / 25.4) * 96;     // printable height (A4 297mm minus 8mm margins and a little spare)
+    const before = () => {
+      const el = ref.current;
+      if (!el) return;
+      document.documentElement.classList.add("print-compact");
+      el.style.setProperty("--print-zoom", "1");
+      el.style.width = PAGE_W + "px";
+      const h = el.scrollHeight;                              // height with the compact layout at paper width
+      const z = Math.max(0.5, Math.min(1, PAGE_H / h));
+      el.style.setProperty("--print-zoom", String(z));
+      el.style.width = PAGE_W / z + "px";                     // after shrinking, use the full paper width
+    };
+    const after = () => {
+      const el = ref.current;
+      document.documentElement.classList.remove("print-compact");
+      if (el) { el.style.removeProperty("--print-zoom"); el.style.width = ""; }
+    };
+    window.addEventListener("beforeprint", before);
+    window.addEventListener("afterprint", after);
+    return () => { window.removeEventListener("beforeprint", before); window.removeEventListener("afterprint", after); };
+  }, []); // eslint-disable-line
+}
 
 function NotificationBell({ session, notifications, refreshNotifications, onOpen }) {
   const [open, setOpen] = useState(false);
@@ -1089,7 +1116,24 @@ function GlobalStyle() {
       button { cursor: pointer; }
       table { border-collapse: collapse; width: 100%; }
       a.link { color: #1A1A1A; text-decoration: underline; cursor: pointer; }
-      @media print { .no-print { display: none !important; } }
+      @media print {
+        @page { size: A4 portrait; margin: 8mm; }
+        html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .no-print { display: none !important; }
+      }
+      /* applied by the print-fit code, only between "print" being pressed and the print dialog closing */
+      html.print-compact .no-print { display: none !important; }
+      html.print-compact .shell-content { padding: 0 !important; }
+      html.print-compact .print-sheet { zoom: var(--print-zoom, 1); }
+      html.print-compact .print-sheet h2 { margin: 0 0 6px !important; font-size: 16px !important; }
+      html.print-compact .print-sheet input,
+      html.print-compact .print-sheet select,
+      html.print-compact .print-sheet textarea {
+        border: 0 !important; border-bottom: 1px solid #cfcfcf !important; border-radius: 0 !important; background: transparent !important;
+        box-shadow: none !important; padding: 1px 0 !important; height: auto !important; min-height: 0 !important; font-size: 11px !important;
+        color: #000 !important; -webkit-text-fill-color: #000; opacity: 1 !important; -webkit-appearance: none; appearance: none; resize: none;
+      }
+      html.print-compact .print-sheet img { max-height: 64px; }
       @keyframes mc-spin { to { transform: rotate(360deg); } }
     `}</style>
   );
@@ -1114,7 +1158,7 @@ function Shell({ session, subpage, setSubpage, onLogout, onLock, children, notif
           <NotificationBell session={session} notifications={notifications} refreshNotifications={refreshNotifications} onOpen={onOpenNotification} />
         </div>
       </div>
-      <div style={{ padding: "26px 30px 60px" }}>{children}</div>
+      <div className="shell-content" style={{ padding: "26px 30px 60px" }}>{children}</div>
     </div>
   );
 }
@@ -1920,6 +1964,8 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
   const [pickedSize, setPickedSize] = useState("");
   const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [showAllFields, setShowAllFields] = useState(false);
+  const printRef = React.useRef(null);
+  usePrintFit(printRef);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const setMeasure = (k) => (e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }));
   const model = config.models.find((m) => m.modelNo === form.model);
@@ -1959,7 +2005,7 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
     : (catalogLoaded && !showAllFields) ? ALL_MEASURE_FIELDS.filter(([k]) => form.measurements[k]) : ALL_MEASURE_FIELDS;
 
   return (
-    <div>
+    <div ref={printRef} className="print-sheet">
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>{isEdit ? "EDIT JOB ORDER" : "JOB ORDER"}</h2>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 6 }}>
         {!hidePII(session) && <Field label="Name"><input style={inputStyle} value={form.name} onChange={set("name")} disabled={readOnly} /></Field>}
@@ -1974,7 +2020,7 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
       </div>
 
       <div style={{ margin: "0 0 16px" }}>
-        <ColorPicker colors={modelColors} value={form.color} disabled={readOnly}
+        <ColorPicker colors={readOnly ? modelColors.filter((c) => c.color_name === form.color) : modelColors} value={form.color} disabled={readOnly}
           onChange={(v) => setForm((f) => ({ ...f, color: v.name, colorSwatch: v.swatch }))} />
       </div>
 
@@ -2081,7 +2127,9 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
           {!readOnly && <input type="file" accept="image/*,video/*" onChange={(e) => setFile(e.target.files?.[0] || null)} style={inputStyle} />}
         </Field>
       </div>
-      <Field label="Comments"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.comments} onChange={set("comments")} disabled={readOnly} /></Field>
+      {readOnly
+        ? <Field label="Comments"><div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{form.comments || "—"}</div></Field>
+        : <Field label="Comments"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.comments} onChange={set("comments")} /></Field>}
 
       <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 20 }}>
         <button onClick={() => window.print()} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>PRINT / SAVE PDF</button>
@@ -4686,7 +4734,6 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
             {editable && onEditFull && (
               <button onClick={() => onEditFull(order.id)} style={{ marginTop: 14, marginLeft: 8, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Edit Full Job Order</button>
             )}
-            <button onClick={() => window.print()} style={{ marginTop: 14, marginLeft: 8, background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Print</button>
             {resubmittable && <button onClick={() => onResubmit(order.id)} style={{ marginTop: 14, marginLeft: 8, background: "#2F8F46", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Resubmit to Production</button>}
 
             {actions.length > 0 && (
@@ -4710,7 +4757,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
 
             {onDelete && <button onClick={() => onDelete(order.id)} style={{ marginTop: 16, background: "#fff", border: "1px solid #C1302B", color: "#C1302B", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Delete Record</button>}
 
-            <ProductionInfo order={order} />
+            {seesInternal && <ProductionInfo order={order} />}
 
             <div id="order-history" style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid #E5E5E5" }}>
               <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", marginBottom: 8 }}>ACTIVITY LOG</div>
