@@ -2120,7 +2120,6 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     };
     const { data, error } = await supabase.from("job_orders").insert(row).select().single();
     if (error) { flash("Error: " + error.message); return; }
-    await saveDriverAddress(form.collection, { mobile: form.mobile });
     notify(session, `${session.name} created job order ${jobNo}`, "job_order", row.branch, { type: "order", id: data.id });
     await refresh();
     setSubpage("records");
@@ -2182,7 +2181,6 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       profile = result.data; pErr = result.error;
     }
     if (pErr) { flash("Error: " + pErr.message); return false; }
-    if (createOrders) await saveDriverAddress(collection, { id: profile.id });
 
     const validItems = items.filter((it) => !it.error);
     const jobNumbers = createOrders && validItems.length > 0 ? await nextJobOrderNumbers(validItems.length) : [];
@@ -2246,7 +2244,6 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     if (error) { flash("Error: " + error.message); return; }
     notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order", branch, { type: "order", id: order.id });
     await supabase.from("requirement_items").update({ job_order_id: order.id }).eq("id", row.id);
-    await saveDriverAddress(row.collection, { id: row.profile.id });
     await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created");
   };
 
@@ -2322,45 +2319,13 @@ const collectionFromOrder = (o) => ({
   method: o.collectionMethod || "", address: o.collectionAddress || "", mapLink: o.collectionMapLink || "",
   courier: o.collectionCourier || "DHL", ref: o.collectionRef || "", notes: o.collectionNotes || "",
 });
-const collectionProblem = (c) => {
-  if (!c || !c.method) return "Choose how the customer will receive the order.";
-  if (c.method === "driver" && !c.address.trim() && !c.mapLink.trim()) return "Enter the delivery address (or a map link) for the driver.";
-  if (c.method === "courier" && (!c.courier.trim() || !c.address.trim())) return "Choose the courier and enter the destination address with the country.";
-  return "";
-};
-const collectionToDb = (c) => ({
-  collection_method: c.method || null,
-  collection_address: !c.method || c.method === "store_pickup" ? null : c.address.trim() || null,
-  collection_map_link: c.method === "driver" ? c.mapLink.trim() || null : null,
-  collection_courier: c.method === "courier" ? c.courier.trim() || null : null,
-  collection_ref: c.method === "courier" ? c.ref.trim() || null : null,
-  collection_notes: !c.method || c.method === "store_pickup" ? null : c.notes.trim() || null,
-});
-const collectionToFields = (c) => ({   // the same thing with the app's field names, for the quick-edit save
-  collectionMethod: c.method || null,
-  collectionAddress: !c.method || c.method === "store_pickup" ? null : c.address.trim() || null,
-  collectionMapLink: c.method === "driver" ? c.mapLink.trim() || null : null,
-  collectionCourier: c.method === "courier" ? c.courier.trim() || null : null,
-  collectionRef: c.method === "courier" ? c.ref.trim() || null : null,
-  collectionNotes: !c.method || c.method === "store_pickup" ? null : c.notes.trim() || null,
-});
-const saveDriverAddress = (c, profileMatch) => (c && c.method === "driver" && c.address.trim()
-  ? supabase.from("customer_profiles").update({ address: c.address.trim(), map_link: c.mapLink.trim() || null }).match(profileMatch)
-  : Promise.resolve());
+// only the choice is stored on the order now
+const collectionProblem = (c) => (!c || !c.method ? "Choose how the customer will receive the order." : "");
+const collectionToDb = (c) => ({ collection_method: c && c.method ? c.method : null });
+const collectionToFields = (c) => ({ collectionMethod: c && c.method ? c.method : null });
 
-function CollectionPicker({ value, onChange, disabled, error, mobile }) {
+function CollectionPicker({ value, onChange, disabled, error }) {
   const c = value || EMPTY_COLLECTION;
-  const set = (patch) => onChange({ ...c, ...patch });
-  const known = CARRIERS.filter((x) => x !== "Other");
-  const [otherMode, setOtherMode] = useState(!!c.courier && !known.includes(c.courier));
-
-  useEffect(() => {   // a saved address makes the next delivery quicker
-    if (disabled || c.method !== "driver" || c.address || !mobile || String(mobile).replace(/\D/g, "").length < 6) return;
-    supabase.from("customer_profiles").select("address,map_link").eq("mobile", mobile).limit(1).then(({ data }) => {
-      if (data && data[0] && data[0].address) onChange({ ...c, address: data[0].address, mapLink: c.mapLink || data[0].map_link || "" });
-    });
-  }, [c.method, mobile]); // eslint-disable-line
-
   return (
     <div style={{ marginTop: 18, marginBottom: 6 }}>
       <div style={label13}>{disabled ? "Collection" : "How will the customer receive it? *"}</div>
@@ -2368,7 +2333,7 @@ function CollectionPicker({ value, onChange, disabled, error, mobile }) {
         {Object.entries(COLLECTION).map(([k, m]) => {
           const on = c.method === k;
           return (
-            <div key={k} onClick={() => !disabled && set({ method: k })}
+            <div key={k} onClick={() => !disabled && onChange({ ...c, method: k })}
               style={{ flex: "1 1 190px", cursor: disabled ? "default" : "pointer", border: "2px solid " + (on ? "#1A1A1A" : error && !c.method ? "#C1302B" : "#DDE1E7"), background: on ? "#F4F8FC" : "#fff", borderRadius: 10, padding: "12px 14px", opacity: disabled && !on ? 0.45 : 1 }}>
               <div style={{ fontSize: 22 }}>{m.icon}</div>
               <div style={{ fontWeight: 700, fontSize: 14 }}>{m.label}</div>
@@ -2377,31 +2342,6 @@ function CollectionPicker({ value, onChange, disabled, error, mobile }) {
           );
         })}
       </div>
-
-      {c.method === "driver" && (
-        <div style={{ marginTop: 12, padding: 12, background: "#FAFBFC", border: "1px solid #E5E8EC", borderRadius: 8 }}>
-          <Field label="Delivery address *"><textarea style={{ ...inputStyle, minHeight: 60 }} value={c.address} disabled={disabled} onChange={(e) => set({ address: e.target.value })} placeholder="Area, street, building, landmark…" /></Field>
-          <Field label="Map link (optional)"><input style={inputStyle} value={c.mapLink} disabled={disabled} onChange={(e) => set({ mapLink: e.target.value })} placeholder="Paste a Google Maps / WhatsApp location link" /></Field>
-          <Field label="Notes for the driver (optional)"><input style={inputStyle} value={c.notes} disabled={disabled} onChange={(e) => set({ notes: e.target.value })} placeholder="e.g. call before arriving" /></Field>
-        </div>
-      )}
-      {c.method === "courier" && (
-        <div style={{ marginTop: 12, padding: 12, background: "#FAFBFC", border: "1px solid #E5E8EC", borderRadius: 8 }}>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ minWidth: 160 }}>
-              <Field label="Courier *">
-                <select style={inputStyle} disabled={disabled} value={otherMode ? "Other" : c.courier} onChange={(e) => { if (e.target.value === "Other") { setOtherMode(true); set({ courier: "" }); } else { setOtherMode(false); set({ courier: e.target.value }); } }}>
-                  {CARRIERS.map((x) => <option key={x}>{x}</option>)}
-                </select>
-              </Field>
-            </div>
-            {otherMode && <div style={{ minWidth: 160 }}><Field label="Courier name *"><input style={inputStyle} disabled={disabled} value={c.courier} onChange={(e) => set({ courier: e.target.value })} /></Field></div>}
-            <div style={{ flex: 1, minWidth: 180 }}><Field label="E-commerce order ref"><input style={inputStyle} disabled={disabled} value={c.ref} onChange={(e) => set({ ref: e.target.value })} /></Field></div>
-          </div>
-          <Field label="Destination address (with the country) *"><textarea style={{ ...inputStyle, minHeight: 60 }} value={c.address} disabled={disabled} onChange={(e) => set({ address: e.target.value })} /></Field>
-          <Field label="Notes (optional)"><input style={inputStyle} value={c.notes} disabled={disabled} onChange={(e) => set({ notes: e.target.value })} /></Field>
-        </div>
-      )}
       {error && <div style={{ color: "#C1302B", fontSize: 12.5, marginTop: 6 }}>{error}</div>}
     </div>
   );
@@ -8050,7 +7990,6 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     };
     const { data, error } = await supabase.from("job_orders").insert(row).select().single();
     if (error) { flash("Error: " + error.message); return; }
-    await saveDriverAddress(form.collection, { mobile: form.mobile });
     notify(session, `${session.name} created job order ${jobNo}`, "job_order", row.branch, { type: "order", id: data.id });
     await refresh();
     setSubpage("records");
@@ -8104,7 +8043,6 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       profile = result.data; pErr = result.error;
     }
     if (pErr) { flash("Error: " + pErr.message); return false; }
-    if (createOrders) await saveDriverAddress(collection, { id: profile.id });
 
     const validItems = items.filter((it) => !it.error);
     const jobNumbers = createOrders && validItems.length > 0 ? await nextJobOrderNumbers(validItems.length) : [];
@@ -8168,7 +8106,6 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     if (error) { flash("Error: " + error.message); return; }
     notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order", branch, { type: "order", id: order.id });
     await supabase.from("requirement_items").update({ job_order_id: order.id }).eq("id", row.id);
-    await saveDriverAddress(row.collection, { id: row.profile.id });
     await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created");
   };
 
