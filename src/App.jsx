@@ -123,6 +123,7 @@ const ROLE_HOME_CARDS = {
     ["📐", "New Requirement", "Take fitting measurements", "requirement"],
     ["📄", "Requirement List", "Browse saved requirements", "requirements"],
     ["👤", "Customers", "Search profiles & history", "customers"],
+    ["🔔", "Notifications", "Everything that has happened", "notifications"],
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
   production: [
@@ -132,6 +133,7 @@ const ROLE_HOME_CARDS = {
     ["🚚", "Delivery to Stores", "Send finished pieces to the branches", "deliveries"],
     ["🧥", "Item Details", "Browse the model catalog", "items"],
     ["📄", "Requirement List", "View saved requirements", "requirements"],
+    ["🔔", "Notifications", "Everything that has happened", "notifications"],
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
   admin: [
@@ -151,12 +153,14 @@ const ROLE_HOME_CARDS = {
     ["🚚", "Delivery to Stores", "Send finished pieces to the branches", "deliveries"],
     ["📦", "Incoming Deliveries", "Deliveries coming to your branch", "incoming"],
     ["🔐", "PIN & Devices", "Set PINs, approve showroom iPads", "pins"],
+    ["🔔", "Notifications", "Everything that has happened", "notifications"],
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
   model_manager: [
     ["➕", "Add Model", "Create a new style", "models"],
     ["🧥", "View Models", "Browse & edit the catalog", "viewmodels"],
     ["📊", "Analytics", "Which models and orders perform best", "analytics"],
+    ["🔔", "Notifications", "Everything that has happened", "notifications"],
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
 };
@@ -169,17 +173,19 @@ function computeTasks(profile, orders, sentNotes) {
   const list = orders || [];
   const mine = (o) => role === "admin" || o.branch === profile.branch;
   const count = (status, filter) => list.filter((o) => o.status === status && (!filter || filter(o))).length;
-  const put = (key, parts) => {
+  const put = (key, parts, info) => {
     const live = parts.filter((p) => p[0] > 0);
     const total = live.reduce((s, p) => s + p[0], 0);
-    if (total > 0) t[key] = { count: total, label: live.map((p) => `${p[0]} ${p[1]}`).join(" · ") };
+    if (total > 0 || info > 0) t[key] = { count: total, label: live.map((p) => `${p[0]} ${p[1]}`).join(" · "), info: info > 0 ? `${info} in process` : "" };
   };
+  const inProd = list.filter((o) => ["job_accepted", "material_assigned", "manpower_planned", "job_in_process", "job_rework"].includes(o.status)).length;                 // what Production sees
+  const inProdSales = list.filter((o) => mine(o) && ["job_accepted", "material_assigned", "manpower_planned", "job_in_process", "job_pending_qc", "job_rework"].includes(o.status)).length;  // what Sales sees as "Job In Process"
   const prod = role === "production" || role === "admin";
   const sales = role === "sales" || role === "admin";
   const records = [];
   if (prod) records.push([count("job_created"), "to accept"], [count("job_accepted"), "need material"], [count("material_assigned"), "need tailors"], [count("manpower_planned"), "to start"], [count("job_rework"), "for rework"]);
   if (sales) records.push([count("job_rejected", mine), "to fix & resend"]);
-  put("records", records);
+  put("records", records, prod ? inProd : inProdSales);
   if (prod) {
     put("qcqueue", [[count("job_pending_qc"), "to quality check"]]);
     put("deliveries", [[count("ready_in_production"), "ready to send"]]);
@@ -198,14 +204,16 @@ function HomePage({ session, setSubpage, tasks }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
         {cards.map(([icon, title, desc, target]) => {
           const task = tasks && tasks[target];
+          const urgent = task && task.count > 0;
           return (
             <div key={target} onClick={() => setSubpage(target)}
-              style={{ position: "relative", border: "1px solid " + (task ? "#E8B9B6" : "#DDE1E7"), borderRadius: 4, padding: "26px 16px", textAlign: "center", cursor: "pointer", background: task ? "#FFFAFA" : "#fff" }}>
-              {task && <span style={{ position: "absolute", top: 8, right: 8, minWidth: 24, height: 24, padding: "0 7px", borderRadius: 12, background: "#C1302B", color: "#fff", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 4px rgba(193,48,43,0.4)" }}>{task.count}</span>}
+              style={{ position: "relative", border: "1px solid " + (urgent ? "#E8B9B6" : "#DDE1E7"), borderRadius: 4, padding: "26px 16px", textAlign: "center", cursor: "pointer", background: urgent ? "#FFFAFA" : "#fff" }}>
+              {urgent && <span style={{ position: "absolute", top: 8, right: 8, minWidth: 24, height: 24, padding: "0 7px", borderRadius: 12, background: "#C1302B", color: "#fff", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 4px rgba(193,48,43,0.4)" }}>{task.count}</span>}
               <div style={{ fontSize: 26, marginBottom: 8 }}>{icon}</div>
               <div style={{ fontWeight: 700, fontSize: 13.5, letterSpacing: "0.03em", marginBottom: 4 }}>{title.toUpperCase()}</div>
               <div style={{ fontSize: 11, color: "#8a8a8a" }}>{desc}</div>
-              {task && <div style={{ fontSize: 11.5, color: "#C1302B", fontWeight: 700, marginTop: 6 }}>{task.label}</div>}
+              {urgent && <div style={{ fontSize: 11.5, color: "#C1302B", fontWeight: 700, marginTop: 6 }}>{task.label}</div>}
+              {task && task.info && <div style={{ fontSize: 11.5, color: "#B87400", fontWeight: 600, marginTop: urgent ? 2 : 6 }}>{task.info}</div>}
             </div>
           );
         })}
@@ -688,9 +696,42 @@ function usePrintFit(ref) {
   }, []); // eslint-disable-line
 }
 
-function NotificationBell({ session, notifications, refreshNotifications, onOpen }) {
+function ModelPeek({ order, models }) {
+  const [open, setOpen] = useState(false);
+  const model = (models || []).find((m) => m.modelNo === order.model);
+  if (!model) return <span>{order.model}</span>;
+  return (
+    <>
+      <span onClick={() => setOpen(true)} title="Tap to see the picture" style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "zoom-in" }}>
+        <ModelThumb model={model} size={48} style={{ borderRadius: 4 }} />
+        <span style={{ color: "#3B6FA0", fontWeight: 700, textDecoration: "underline" }}>{order.model}</span>
+      </span>
+      {open && (
+        <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 10, padding: 16 }}>
+          <div style={{ color: "#fff", fontWeight: 700, fontSize: 16 }}>{order.model}{model.styleName ? ` — ${model.styleName}` : ""}</div>
+          <div onClick={(e) => e.stopPropagation()}><ModelThumb model={model} width={380} height={520} fit="contain" /></div>
+          <div style={{ color: "#ccc", fontSize: 12 }}>Tap anywhere to close</div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function FullOrderButton({ onClick }) {
+  return (
+    <button onClick={onClick} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "#F4F8FC", border: "1.5px solid #3B6FA0", color: "#2F5F8F", borderRadius: 10, padding: "13px 18px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+      <span>📄 View full job order</span><span style={{ fontSize: 18 }}>›</span>
+    </button>
+  );
+}
+
+function NotificationBell({ session, notifications, refreshNotifications, onOpen, onViewAll }) {
   const [open, setOpen] = useState(false);
   const wrapperRef = React.useRef(null);
+  const [dismissed, setDismissed] = useState(new Set());
+  const [clearedOverride, setClearedOverride] = useState(null);
+  const [lastSeenOverride, setLastSeenOverride] = useState(null);
+
   useEffect(() => {
     if (!open) return;
     const onOutside = (e) => { if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setOpen(false); };
@@ -700,9 +741,15 @@ function NotificationBell({ session, notifications, refreshNotifications, onOpen
     document.addEventListener("keydown", onEsc);
     return () => { document.removeEventListener("mousedown", onOutside); document.removeEventListener("touchstart", onOutside); document.removeEventListener("keydown", onEsc); };
   }, [open]);
-  const [lastSeenOverride, setLastSeenOverride] = useState(null);
+
+  useEffect(() => {
+    supabase.from("notification_dismissals").select("notification_id").then(({ data }) => setDismissed(new Set((data || []).map((d) => d.notification_id))));
+  }, [session.id]);
+
+  const clearedAt = clearedOverride || (session.notifications_cleared_at ? new Date(session.notifications_cleared_at) : new Date(0));
+  const visible = notifications.filter((n) => new Date(n.created_at) > clearedAt && !dismissed.has(n.id));
   const lastSeen = lastSeenOverride || (session.notifications_last_seen_at ? new Date(session.notifications_last_seen_at) : new Date(0));
-  const unread = notifications.filter((n) => new Date(n.created_at) > lastSeen).length;
+  const unread = visible.filter((n) => new Date(n.created_at) > lastSeen).length;
 
   const toggle = async () => {
     const opening = !open;
@@ -713,6 +760,15 @@ function NotificationBell({ session, notifications, refreshNotifications, onOpen
       await supabase.from("profiles").update({ notifications_last_seen_at: now }).eq("id", session.id);
       await refreshNotifications();
     }
+  };
+  const dismiss = async (n) => {
+    setDismissed((s) => new Set([...s, n.id]));
+    await supabase.from("notification_dismissals").insert({ user_id: session.id, notification_id: n.id });
+  };
+  const clearAll = async () => {
+    const now = new Date();
+    setClearedOverride(now);
+    await supabase.from("profiles").update({ notifications_cleared_at: now.toISOString() }).eq("id", session.id);
   };
 
   return (
@@ -729,18 +785,158 @@ function NotificationBell({ session, notifications, refreshNotifications, onOpen
         <span>Notifications</span>
       </span>
       {open && (
-        <div className="no-print" style={{ position: "absolute", top: 26, right: 0, width: 300, maxHeight: 380, overflowY: "auto", background: "#fff", border: "1px solid #C9CDD3", borderRadius: 6, boxShadow: "0 10px 28px rgba(0,0,0,0.14)", zIndex: 200, padding: 12, textAlign: "left" }}>
-          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, letterSpacing: "0.03em" }}>RECENT ACTIVITY</div>
-          {notifications.length === 0 ? <div style={{ fontSize: 12, color: "#8a8a8a" }}>Nothing yet.</div> : notifications.slice(0, 20).map((n) => (
-            <div key={n.id} onClick={() => { setOpen(false); onOpen && onOpen(n); }}
-              style={{ fontSize: 12, padding: "8px 6px", borderBottom: "1px solid #E5E5E5", cursor: "pointer", borderRadius: 3 }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-              <div>{n.message}</div>
-              <div className="mono" style={{ fontSize: 10.5, color: "#8a8a8a", marginTop: 2 }}>{fmtDateTime(n.created_at)}</div>
+        <div className="no-print" style={{ position: "absolute", top: 26, right: 0, width: 330, maxHeight: 440, overflowY: "auto", background: "#fff", border: "1px solid #C9CDD3", borderRadius: 6, boxShadow: "0 10px 28px rgba(0,0,0,0.14)", zIndex: 200, padding: 12, textAlign: "left" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.03em" }}>RECENT ACTIVITY</div>
+            {visible.length > 0 && <a className="link" style={{ fontSize: 12, color: "#C1302B" }} onClick={clearAll}>Clear all</a>}
+          </div>
+          {visible.length === 0 ? <div style={{ fontSize: 12, color: "#8a8a8a", padding: "6px 0" }}>You're all caught up.</div> : visible.slice(0, 20).map((n) => (
+            <div key={n.id} style={{ display: "flex", gap: 6, alignItems: "flex-start", borderBottom: "1px solid #E5E5E5" }}>
+              <div onClick={() => { setOpen(false); onOpen && onOpen(n); }} style={{ flex: 1, fontSize: 12, padding: "8px 6px", cursor: "pointer", borderRadius: 3 }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+                <div>{n.message}</div>
+                <div className="mono" style={{ fontSize: 10.5, color: "#8a8a8a", marginTop: 2 }}>{fmtDateTime(n.created_at)}</div>
+              </div>
+              <span title="Clear this one" onClick={() => dismiss(n)} style={{ cursor: "pointer", color: "#9aa0a8", fontSize: 16, padding: "6px 4px" }}>×</span>
             </div>
           ))}
+          <div style={{ textAlign: "center", paddingTop: 10 }}><a className="link" style={{ fontSize: 12.5 }} onClick={() => { setOpen(false); onViewAll && onViewAll(); }}>View all notifications →</a></div>
         </div>
       )}
+    </div>
+  );
+}
+
+const NOTE_TYPES = { status: "Status changes", job_order: "New job orders", edit: "Edits", delete: "Deletions", delivery: "Deliveries", profile: "Customers", requirement: "Requirements", model: "Models", project: "Projects" };
+
+function NotificationsPage({ orders, session, onOpen }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [more, setMore] = useState(false);
+  const [view, setView] = useState("date");        // "date" | "order"
+  const [range, setRange] = useState("7");         // "1" | "7" | "30" | "all" | "custom"
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [q, setQ] = useState("");
+  const [type, setType] = useState("all");
+  const [openGroups, setOpenGroups] = useState({});
+  const PAGE = 300;
+
+  const since = (days) => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - (days - 1)); return d.toISOString(); };
+  const load = async (append) => {
+    setLoading(true);
+    let query = supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(PAGE + 1);
+    if (range === "1" || range === "7" || range === "30") query = query.gte("created_at", since(parseInt(range, 10)));
+    if (range === "custom") {
+      if (from) query = query.gte("created_at", new Date(from + "T00:00:00").toISOString());
+      if (to) query = query.lte("created_at", new Date(to + "T23:59:59").toISOString());
+    }
+    if (append && rows.length) query = query.lt("created_at", rows[rows.length - 1].created_at);
+    const { data } = await query;
+    const list = data || [];
+    setMore(list.length > PAGE);
+    setRows(append ? [...rows, ...list.slice(0, PAGE)] : list.slice(0, PAGE));
+    setLoading(false);
+  };
+  useEffect(() => { load(false); }, [range, from, to]); // eslint-disable-line
+  useEffect(() => { if (!loading) load(false); }, [orders]); // eslint-disable-line   (new activity shows up by itself)
+
+  const orderOf = (n) => (n.target_type === "order" ? orders.find((o) => o.id === n.target_id) : null);
+  const needle = q.trim().toLowerCase();
+  const list = rows.filter((n) => {
+    if (type !== "all" && n.type !== type) return false;
+    if (!needle) return true;
+    const o = orderOf(n);
+    return (n.message || "").toLowerCase().includes(needle) || (o && String(o.jobOrderNo).toLowerCase().includes(needle)) || (n.created_by || "").toLowerCase().includes(needle);
+  });
+
+  const dayLabel = (iso) => {
+    const d = new Date(iso); const t = new Date(); const y = new Date(); y.setDate(t.getDate() - 1);
+    if (d.toDateString() === t.toDateString()) return "Today";
+    if (d.toDateString() === y.toDateString()) return "Yesterday";
+    return d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  };
+  const byDate = [];
+  list.forEach((n) => { const k = dayLabel(n.created_at); const last = byDate[byDate.length - 1]; if (last && last.k === k) last.items.push(n); else byDate.push({ k, items: [n] }); });
+
+  const groups = {};
+  list.forEach((n) => { const k = n.target_type === "order" ? n.target_id : "other"; (groups[k] = groups[k] || []).push(n); });
+  const byOrder = Object.entries(groups)
+    .map(([k, items]) => ({ k, order: k === "other" ? null : orders.find((o) => o.id === k), items }))
+    .sort((a, b) => new Date(b.items[0].created_at) - new Date(a.items[0].created_at));
+
+  const types = Array.from(new Set(rows.map((r) => r.type).filter(Boolean)));
+  const pill = (on) => ({ padding: "6px 16px", fontSize: 12.5, borderRadius: 14, cursor: "pointer", border: "1px solid " + (on ? "#1A1A1A" : "#DDE1E7"), background: on ? "#1A1A1A" : "#fff", color: on ? "#fff" : "#1A1A1A" });
+  const Item = ({ n }) => (
+    <div onClick={() => onOpen && onOpen(n)} style={{ display: "flex", gap: 12, padding: "9px 6px", borderBottom: "1px solid #F0F0F0", cursor: "pointer", alignItems: "baseline" }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "#F7F7F5")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+      <span className="mono" style={{ fontSize: 11.5, color: "#8a8a8a", minWidth: 64 }}>{new Date(n.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+      <span style={{ flex: 1, fontSize: 13.5 }}>{n.message}</span>
+      <span style={{ fontSize: 11, color: "#8a8a8a", whiteSpace: "nowrap" }}>{NOTE_TYPES[n.type] || n.type}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ maxWidth: 960, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 6 }}>NOTIFICATIONS</h2>
+      <div style={{ textAlign: "center", fontSize: 12, color: "#8a8a8a", marginBottom: 16 }}>The full record of what has happened, as far as it concerns you. Clearing the bell never removes anything from here.</div>
+
+      <div className="no-print" style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 12, flexWrap: "wrap" }}>
+        <button style={pill(view === "date")} onClick={() => setView("date")}>By date</button>
+        <button style={pill(view === "order")} onClick={() => setView("order")}>By job order</button>
+      </div>
+      <div className="no-print" style={{ display: "flex", gap: 10, justifyContent: "center", marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <select value={range} onChange={(e) => setRange(e.target.value)} style={{ ...inputStyle, width: 150 }}>
+          <option value="1">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="all">All time</option><option value="custom">Pick dates…</option>
+        </select>
+        {range === "custom" && (<><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={{ ...inputStyle, width: 150 }} /><span>to</span><input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={{ ...inputStyle, width: 150 }} /></>)}
+        <select value={type} onChange={(e) => setType(e.target.value)} style={{ ...inputStyle, width: 170 }}>
+          <option value="all">All kinds</option>{types.map((t) => <option key={t} value={t}>{NOTE_TYPES[t] || t}</option>)}
+        </select>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search order no, person, words…" style={{ ...inputStyle, width: 240 }} />
+      </div>
+
+      <div style={{ fontSize: 12, color: "#8a8a8a", marginBottom: 8 }}>{loading ? "Loading…" : `${list.length} notification${list.length === 1 ? "" : "s"}`}</div>
+
+      {!loading && list.length === 0 && <div style={{ textAlign: "center", color: "#8a8a8a", padding: 40, fontSize: 14 }}>Nothing in this period.</div>}
+
+      {view === "date" && byDate.map((g) => (
+        <div key={g.k} style={{ marginBottom: 18 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, padding: "6px 6px", background: "#F4F5F7", borderRadius: 4, marginBottom: 4 }}>{g.k} <span style={{ color: "#8a8a8a", fontWeight: 400 }}>· {g.items.length}</span></div>
+          {g.items.map((n) => <Item key={n.id} n={n} />)}
+        </div>
+      ))}
+
+      {view === "order" && byOrder.map((g) => {
+        const isOpen = openGroups[g.k] !== undefined ? openGroups[g.k] : false;
+        return (
+          <div key={g.k} style={{ border: "1px solid #E1E5EA", borderRadius: 8, marginBottom: 10 }}>
+            <div onClick={() => setOpenGroups((s) => ({ ...s, [g.k]: !isOpen }))} style={{ display: "flex", gap: 12, alignItems: "center", padding: "11px 14px", cursor: "pointer", flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: "#8a8a8a" }}>{isOpen ? "▾" : "▸"}</span>
+              {g.k === "other" ? <strong>Other activity (not about one order)</strong> : (
+                <>
+                  <span className="mono" style={{ fontWeight: 700, fontSize: 15 }}>{g.order ? g.order.jobOrderNo : "Removed order"}</span>
+                  {g.order && <span style={{ fontSize: 13, color: "#5a5a5a" }}>{g.order.model}{g.order.color ? ` · ${g.order.color}` : ""}</span>}
+                  {g.order && <StatusTag status={g.order.status} />}
+                </>
+              )}
+              <span style={{ marginLeft: "auto", fontSize: 12, color: "#8a8a8a" }}>{g.items.length} update{g.items.length === 1 ? "" : "s"} · last {fmtDateTime(g.items[0].created_at)}</span>
+            </div>
+            {isOpen && (
+              <div style={{ padding: "0 14px 8px", borderTop: "1px solid #F0F0F0" }}>
+                {[...g.items].reverse().map((n) => (
+                  <div key={n.id} onClick={() => onOpen && onOpen(n)} style={{ display: "flex", gap: 12, padding: "8px 4px", borderBottom: "1px solid #F7F7F7", cursor: "pointer", alignItems: "baseline" }}>
+                    <span className="mono" style={{ fontSize: 11.5, color: "#8a8a8a", minWidth: 130 }}>{fmtDateTime(n.created_at)}</span>
+                    <span style={{ flex: 1, fontSize: 13.5 }}>{n.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {more && <div style={{ textAlign: "center", marginTop: 16 }}><button onClick={() => load(true)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 22px", fontWeight: 700 }}>Load older notifications</button></div>}
     </div>
   );
 }
@@ -775,7 +971,7 @@ function DashboardMenu({ session, setSubpage, onLogout, onLock, tasks }) {
             <div key={target} onClick={() => go(target)} style={{ padding: "8px 10px", fontSize: 12.5, cursor: "pointer", borderRadius: 4 }}
               onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
               {icon} {title}
-              {tasks && tasks[target] && <span style={{ float: "right", background: "#C1302B", color: "#fff", borderRadius: 10, padding: "0 7px", fontSize: 11, fontWeight: 700 }}>{tasks[target].count}</span>}
+              {tasks && tasks[target] && tasks[target].count > 0 && <span style={{ float: "right", background: "#C1302B", color: "#fff", borderRadius: 10, padding: "0 7px", fontSize: 11, fontWeight: 700 }}>{tasks[target].count}</span>}
             </div>
           ))}
           <div style={{ borderTop: "1px solid #E5E5E5", margin: "4px 0" }} />
@@ -1179,22 +1375,23 @@ export default function App() {
         <QcQueuePage orders={orders} session={profile} refresh={refresh} flash={flash} onOpenOrder={(id) => openTarget("order", id)} />
       )}
       {subpage === "qcsetup" && profile.role === "admin" && <QcSetupPage flash={flash} />}
+      {subpage === "notifications" && <NotificationsPage orders={orders} session={profile} onOpen={openFromNotification} />}
       {subpage === "pins" && profile.role === "admin" && (
         <PinsPage users={allUsers} branches={config.branches.map((b) => b.name)} session={profile} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && profile.role === "sales" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && profile.role === "production" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && profile.role === "production" && (
         <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && profile.role === "admin" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && profile.role === "model_manager" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && profile.role === "model_manager" && (
         <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {toast && (
@@ -1271,7 +1468,7 @@ function Shell({ session, subpage, setSubpage, onLogout, onLock, children, notif
         <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.03em", display: "flex", gap: 14, alignItems: "center" }}>
           <span><span style={{ color: "#8a8a8a" }}>{session.name} ·</span> {ROLE_LABEL[session.role].toUpperCase()}</span>
           <DashboardMenu session={session} setSubpage={setSubpage} onLogout={onLogout} onLock={onLock} tasks={tasks} />
-          <NotificationBell session={session} notifications={notifications} refreshNotifications={refreshNotifications} onOpen={onOpenNotification} />
+          <NotificationBell session={session} notifications={notifications} refreshNotifications={refreshNotifications} onOpen={onOpenNotification} onViewAll={() => setSubpage("notifications")} />
         </div>
       </div>
       <div className="shell-content" style={{ padding: "26px 30px 60px" }}>{children}</div>
@@ -4499,38 +4696,66 @@ function ProductionActions({ order, session, models, onDone, flash }) {
     setBusy(false); setDlg(null); setReason(""); setFiles([]);
     if (error) flash && flash("Error: " + error.message); else { flash && flash(okMsg); onDone && onDone(); }
   };
-  const btn = (bg) => ({ background: bg, color: "#fff", border: "none", borderRadius: 4, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" });
-  const accepted = s !== "job_created";
-  const chip = (ok, text, off) => <span style={{ fontSize: 11.5, padding: "3px 10px", borderRadius: 12, background: ok ? "#E7F4EA" : "#FBEAE9", color: ok ? "#2F8F46" : "#C1302B", fontWeight: 600 }}>{ok ? "✓ " : "○ "}{ok ? text : off}</span>;
+  const pbtn = (bg, outline) => ({
+    display: "inline-flex", alignItems: "center", gap: 8, minHeight: 46, padding: "11px 20px", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer",
+    background: outline ? "#fff" : bg, color: outline ? bg : "#fff", border: outline ? `1.5px solid ${bg}` : "none", boxShadow: outline ? "none" : "0 2px 6px rgba(0,0,0,0.16)",
+  });
+  const steps = ["Accepted", "Material", "Tailors", "Started", "Completed"];
+  const doneCount = { job_created: 0, job_accepted: 1, material_assigned: 2, manpower_planned: 3, job_in_process: 4, job_rework: 4, job_pending_qc: 5 }[s] || 0;
+  const hint = {
+    job_created: "Review the job order, then accept or reject it.",
+    job_accepted: "Assign the material for this order.",
+    material_assigned: "Assign tailors — for today or planned for a future date.",
+    manpower_planned: "Start tailoring when the tailors begin work.",
+    job_in_process: "Mark it as completed when tailoring is finished.",
+    job_pending_qc: "Run the quality check on the finished piece.",
+    job_rework: "This piece was sent back — start the rework.",
+  }[s];
+  const accent = { job_created: "#D98E2B", job_rework: "#C1302B", job_pending_qc: "#3B6FA0" }[s] || "#2F8F46";
 
   return (
-    <div style={{ ...cardStyle, marginBottom: 16 }}>
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>PRODUCTION</div>
-      {accepted && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-          {chip(true, "Accepted", "")}
-          {chip(counts.mats > 0 || ["material_assigned", "manpower_planned", "job_in_process", "job_pending_qc"].includes(s), "Material assigned", "Material not assigned")}
-          {chip(counts.crew > 0, "Tailors assigned", "Tailors not assigned")}
-          {chip(["job_in_process", "job_pending_qc", "job_rework"].includes(s), "Started", "Not started")}
+    <div style={{ background: "#fff", border: "1px solid #E1E5EA", borderLeft: `5px solid ${accent}`, borderRadius: 10, padding: "16px 18px", marginBottom: 18, boxShadow: "0 2px 10px rgba(20,30,50,0.06)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.08em", color: "#5a5a5a" }}>PRODUCTION</div>
+        <StatusTag status={s} />
+      </div>
+
+      {s !== "job_created" && (
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+          {steps.map((label, i) => {
+            const done = i < doneCount, current = i === doneCount;
+            return (
+              <React.Fragment key={label}>
+                <div style={{ textAlign: "center", minWidth: 54 }}>
+                  <div style={{ width: 26, height: 26, margin: "0 auto", borderRadius: 13, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, background: done ? "#2F8F46" : "#fff", color: done ? "#fff" : current ? accent : "#9aa0a8", border: done ? "none" : `2px solid ${current ? accent : "#D5D9DE"}` }}>{done ? "✓" : i + 1}</div>
+                  <div style={{ fontSize: 10.5, marginTop: 3, color: done || current ? "#1A1A1A" : "#9aa0a8", fontWeight: current ? 700 : 400 }}>{label}</div>
+                </div>
+                {i < steps.length - 1 && <div style={{ flex: 1, height: 2, background: i < doneCount - 1 ? "#2F8F46" : "#E1E5EA", marginBottom: 16 }} />}
+              </React.Fragment>
+            );
+          })}
         </div>
       )}
+
+      <div style={{ fontSize: 13, color: "#5a5a5a", marginBottom: 14 }}>{hint}</div>
+
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         {s === "job_created" && (<>
-          <button style={btn("#2F8F46")} onClick={() => setDlg("accept")}>Accept</button>
-          <button style={btn("#C1302B")} onClick={() => setDlg("reject")}>Reject</button>
+          <button style={pbtn("#2F8F46")} onClick={() => setDlg("accept")}>✔ Accept job order</button>
+          <button style={pbtn("#C1302B", true)} onClick={() => setDlg("reject")}>✖ Reject</button>
         </>)}
-        {s === "job_accepted" && <button style={btn("#1A1A1A")} onClick={() => setDlg("material")}>Assign material</button>}
-        {s === "material_assigned" && <button style={btn("#1A1A1A")} onClick={() => setDlg("tailors")}>Assign tailors</button>}
+        {s === "job_accepted" && <button style={pbtn("#1A1A1A")} onClick={() => setDlg("material")}>📦 Assign material</button>}
+        {s === "material_assigned" && <button style={pbtn("#1A1A1A")} onClick={() => setDlg("tailors")}>👥 Assign tailors</button>}
         {s === "manpower_planned" && (<>
-          <button style={btn("#2F8F46")} onClick={() => setDlg("start")}>Start tailoring</button>
-          <button style={btn("#8a8a8a")} onClick={() => setDlg("tailors")}>Add / plan more tailors</button>
+          <button style={pbtn("#2F8F46")} onClick={() => setDlg("start")}>▶ Start tailoring</button>
+          <button style={pbtn("#5a5a5a", true)} onClick={() => setDlg("tailors")}>👥 Add / plan more tailors</button>
         </>)}
         {s === "job_in_process" && (<>
-          <button style={btn("#2F8F46")} onClick={() => setDlg("complete")}>Mark as completed</button>
-          <button style={btn("#8a8a8a")} onClick={() => setDlg("tailors")}>Add tailors</button>
+          <button style={pbtn("#2F8F46")} onClick={() => setDlg("complete")}>✅ Mark as completed</button>
+          <button style={pbtn("#5a5a5a", true)} onClick={() => setDlg("tailors")}>👥 Add tailors</button>
         </>)}
-        {s === "job_pending_qc" && <button style={btn("#1A1A1A")} onClick={() => setDlg("qc")}>{qcOpen ? "Continue quality check" : "Start quality check"}</button>}
-        {s === "job_rework" && <button style={btn("#C1302B")} onClick={() => setDlg("rework")}>Start rework</button>}
+        {s === "job_pending_qc" && <button style={pbtn("#1A1A1A")} onClick={() => setDlg("qc")}>🔍 {qcOpen ? "Continue quality check" : "Start quality check"}</button>}
+        {s === "job_rework" && <button style={pbtn("#C1302B")} onClick={() => setDlg("rework")}>🔧 Start rework</button>}
       </div>
 
       {dlg === "accept" && (
@@ -5657,15 +5882,11 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
 
         {!edit ? (
           <div style={{ marginTop: 16 }}>
-            {seesInternal && onViewFull && (
-              <div style={{ marginBottom: 14 }}>
-                <button onClick={() => onViewFull(order.id)} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "10px 18px", fontSize: 13, fontWeight: 700 }}>View full job order</button>
-              </div>
-            )}
+            {seesInternal && onViewFull && <div style={{ marginBottom: 14 }}><FullOrderButton onClick={() => onViewFull(order.id)} /></div>}
             <ProductionActions order={order} session={session} models={models || []} onDone={onProductionDone} flash={flash} />
             <StoreActions order={order} session={session} onDone={onProductionDone} flash={flash} />
             {!pii && <Row l="Mobile" v={order.mobile} />}<Row l="Order Type" v={order.orderType} />
-            <Row l="Model" v={order.model} />
+            <Row l="Model" v={<ModelPeek order={order} models={models} />} />
             <Row l="Colour" v={order.color ? (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                 {order.colorSwatch && <img src={order.colorSwatch} alt="" style={{ width: 28, height: 28, borderRadius: 4, objectFit: "cover", border: "1px solid #E5E5E5" }} />}
@@ -5688,9 +5909,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
               {ALL_MEASURE_FIELDS.filter(([k]) => order.measurements && order.measurements[k]).map(([k, l]) => <div key={k}>{l}: {order.measurements[k]}</div>)}
             </div>
 
-            {onViewFull && !seesInternal && (
-              <button onClick={() => onViewFull(order.id)} style={{ marginTop: 14, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>View Full Job Order</button>
-            )}
+            {onViewFull && !seesInternal && <div style={{ marginTop: 14 }}><FullOrderButton onClick={() => onViewFull(order.id)} /></div>}
             {editable && onEditFull && (
               <button onClick={() => onEditFull(order.id)} style={{ marginTop: 14, marginLeft: 8, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}>Edit Full Job Order</button>
             )}
