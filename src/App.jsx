@@ -58,6 +58,8 @@ const maskStatus = (status, role = VIEWER_ROLE) =>
 const hidePII = (session) => !!session && session.role === "production";   // Production never sees a customer's name or mobile number
 // Statuses after production hands the order on: Production's own list drops them
 const AFTER_PRODUCTION = ["in_transit", "store_received", "ready_in_stores", "delivery_assigned", "ready_to_deliver", "delivered"];
+// "Delivered to stores" = everything from Delivery to Stores onwards, so a piece is never lost from view
+const DELIVERED_STATUSES = AFTER_PRODUCTION;
 
 const MEASURE_FIELDS = [
   ["shoulder", "Shoulder"], ["chest", "Chest"], ["waist", "Waist"], ["hips", "Hips"],
@@ -523,7 +525,7 @@ async function notify(session, message, type, branch, target, opts) {
     const row = {
       message, type, created_by: session.name, branch: (branch !== undefined ? branch : session.branch) || null,
       target_type: target ? target.type : null, target_id: target ? String(target.id) : null,
-      internal,
+      internal, hide_from_production: !!(opts && opts.hideFromProduction),
     };
     // Production-only notifications aren't pushed anywhere, so there is nothing to read back — and the person sending one
     // (e.g. Sales accepting a delivery) isn't allowed to read it, which would make a "return the new row" insert fail.
@@ -554,7 +556,8 @@ async function advanceOrder(session, order, toStatus, comment, extra, files, opt
     const shown = toStatus === "job_accepted" ? STATUS.public_in_process.label : label;
     // no customer names in notifications — order number and model only
     // `silent` is used when one delivery moves several pieces: the delivery sends ONE notification instead of one per piece
-    if (!(opts && opts.silent)) notify(session, `${session.name}: ${shown} — order ${order.jobOrderNo} (${order.model})${comment ? " — " + comment : ""}`, "status", order.branch, { type: "order", id: order.id }, { internal });
+    const hideProd = ["store_received", "ready_in_stores", "delivery_assigned", "delivered"].includes(toStatus);   // the showroom side stays out of Production's feed
+    if (!(opts && opts.silent)) notify(session, `${session.name}: ${shown} — order ${order.jobOrderNo} (${order.model})${comment ? " — " + comment : ""}`, "status", order.branch, { type: "order", id: order.id }, { internal, hideFromProduction: hideProd });
   }
   return { error };
 }
@@ -565,9 +568,31 @@ async function startTailoring(session, order) {
   return advanceOrder(session, order, "job_in_process", null, { production_started_at: now });
 }
 
+// Production sends a piece back, or a store does: a list of points, each with a comment and optional photos
+async function raiseRework(session, order, source, points, comment) {
+  const { data: all } = await supabase.from("job_order_rework").select("round").eq("job_order_id", order.id);
+  const round = (all || []).reduce((m, r) => Math.max(m, r.round), 0) + 1;
+  const clean = points.filter((p) => p.text.trim()).map((p, i) => ({
+    id: "p" + (i + 1), text: p.text.trim(), files: p.files || [], fixed: false, fixed_at: null, fixed_by: null, response: "", response_files: [],
+  }));
+  const { data, error } = await supabase.from("job_order_rework")
+    .insert({ job_order_id: order.id, round, source, branch: order.branch, raised_by: session.name, comment: comment || null, points: clean }).select().single();
+  return { rework: data, error };
+}
+
 // Back to the tailors after a failed quality check
 async function startRework(session, order) {
+  const { data: rw } = await supabase.from("job_order_rework").select("id").eq("job_order_id", order.id).eq("status", "open").order("round", { ascending: false }).limit(1);
+  if (rw && rw[0]) await supabase.from("job_order_rework").update({ status: "in_progress", started_at: new Date().toISOString(), started_by: session.name }).eq("id", rw[0].id);
   return advanceOrder(session, order, "job_in_process", "Rework started", { production_completed_at: null });
+}
+
+// the check list for the quality check that follows a rework: ONLY the points that were sent back
+function buildReworkChecks(rework) {
+  return (rework.points || []).map((p) => ({
+    key: "rw-" + p.id, group: "Rework points", label: p.text,
+    detail: p.fixed ? `Fixed by ${p.fixed_by}${p.response ? ": " + p.response : ""}` : "", ok: false, at: null, by: null,
+  }));
 }
 
 // The checklist for one order: the standard checks + this order's own requirements + its measurements.
@@ -1783,7 +1808,8 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
   useEffect(() => {
     if (openRequest && openRequest.type === "order") { setSelectedId(openRequest.id); openFocus.current = openRequest.focus || null; clearOpenRequest(); }
   }, [openRequest]); // eslint-disable-line
-  const filtered = useFilteredOrders(orders, query, statusFilter);
+  const [view, setView] = useState("all");
+  const filtered = useFilteredOrders(view === "delivered" ? orders.filter((o) => DELIVERED_STATUSES.includes(o.status)) : orders, query, statusFilter);
   const selected = orders.find((o) => o.id === selectedId);
 
   const handleCreate = async (form, file) => {
@@ -1971,6 +1997,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL RECORDS</h2>
       <SalesTabs subpage={subpage} setSubpage={setSubpage} />
+      <RecordsViewTabs value={view} onChange={setView} tabs={[["all", "All records", orders.length], ["delivered", "Delivered to stores", orders.filter((o) => DELIVERED_STATUSES.includes(o.status)).length]]} />
       <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />
       <div className="no-print" style={{ textAlign: "right", marginBottom: 10 }}>
         <button onClick={() => setSubpage("requirement")} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em", marginRight: 8 }}>+ NEW REQUIREMENT</button>
@@ -4286,7 +4313,7 @@ function AssignMaterialDialog({ order, models, session, onClose, onDone }) {
 }
 
 // Stage 2: assign tailors (can be planned for any date)
-function AssignTailorsDialog({ order, session, onClose, onDone }) {
+function AssignTailorsDialog({ order, session, reworkId, onClose, onDone }) {
   const today = localYmd(new Date());
   const [workers, setWorkers] = useState([]);
   const [crew, setCrew] = useState([{ worker_id: "", task: "", planned_date: today }]);
@@ -4318,7 +4345,7 @@ function AssignTailorsDialog({ order, session, onClose, onDone }) {
     const startsNow = mode === "start" || mode === "add";
     const rows = crew.filter((c) => c.worker_id).map((c) => {
       const w = workers.find((x) => x.id === c.worker_id);
-      return { job_order_id: order.id, worker_id: c.worker_id, worker_name: w ? w.name : "", task: c.task || null, planned_date: c.planned_date || today, started_at: startsNow ? now : null, assigned_by: session.name };
+      return { job_order_id: order.id, worker_id: c.worker_id, worker_name: w ? w.name : "", task: c.task || null, planned_date: c.planned_date || today, started_at: startsNow ? now : null, assigned_by: session.name, rework_id: reworkId || null };
     });
     const { data: saved, error: e1 } = await supabase.from("job_order_tailors").insert(rows).select("id");
     if (e1) { setError(e1.message); setBusy(false); setConfirm(null); return; }
@@ -4404,13 +4431,20 @@ function ProductionActions({ order, session, models, onDone, flash }) {
     supabase.from("job_order_tailors").select("id", { count: "exact", head: true }).eq("job_order_id", order.id).then(({ count }) => setCounts((c) => ({ ...c, crew: count || 0 })));
   }, [order.id, order.status]);
 
+  const [rework, setRework] = useState(null);
+  useEffect(() => {
+    if (session.role !== "production" && session.role !== "admin") return;
+    if (!["job_rework", "job_in_process"].includes(order.status)) { setRework(null); return; }
+    supabase.from("job_order_rework").select("*").eq("job_order_id", order.id).in("status", ["open", "in_progress"]).order("round", { ascending: false }).limit(1)
+      .then(({ data }) => setRework(data && data[0] ? data[0] : null));
+  }, [order.id, order.status]);
+
   const [qcOpen, setQcOpen] = useState(false);
-  const [lastFail, setLastFail] = useState("");
   useEffect(() => {
     if (session.role !== "production" && session.role !== "admin") return;
     if (order.status !== "job_pending_qc" && order.status !== "job_rework") return;
-    supabase.from("job_order_qc").select("status, fail_reason, started_at").eq("job_order_id", order.id).eq("stage", "production").order("started_at", { ascending: false }).limit(1)
-      .then(({ data }) => { const r = data && data[0]; setQcOpen(!!r && r.status === "in_progress"); setLastFail(r && r.status === "failed" ? r.fail_reason || "" : ""); });
+    supabase.from("job_order_qc").select("status, started_at").eq("job_order_id", order.id).eq("stage", "production").order("started_at", { ascending: false }).limit(1)
+      .then(({ data }) => { const r = data && data[0]; setQcOpen(!!r && r.status === "in_progress"); });
   }, [order.id, order.status]);
 
   if (session.role !== "production" && session.role !== "admin") return null;
@@ -4472,22 +4506,29 @@ function ProductionActions({ order, session, models, onDone, flash }) {
         </ConfirmDialog>
       )}
       {dlg === "material" && <AssignMaterialDialog order={order} models={models} session={session} onClose={() => setDlg(null)} onDone={() => { setDlg(null); flash && flash("Material assigned"); onDone && onDone(); }} />}
-      {dlg === "tailors" && <AssignTailorsDialog order={order} session={session} onClose={() => setDlg(null)} onDone={() => { setDlg(null); flash && flash("Tailors saved"); onDone && onDone(); }} />}
+      {dlg === "tailors" && <AssignTailorsDialog order={order} session={session} reworkId={rework && rework.status === "in_progress" ? rework.id : null} onClose={() => setDlg(null)} onDone={() => { setDlg(null); flash && flash("Tailors saved"); onDone && onDone(); }} />}
       {dlg === "start" && (
         <ConfirmDialog title="Start tailoring now?" confirmLabel="Yes, start" busy={busy} onCancel={() => setDlg(null)} onConfirm={() => run(() => startTailoring(session, order), "Tailoring started")}>
           The job moves to <strong>Job In Progress</strong> and its time stamp starts at this moment.
         </ConfirmDialog>
       )}
-      {dlg === "complete" && (
-        <ConfirmDialog title="Mark as completed?" confirmLabel="Yes, completed" busy={busy} onCancel={() => setDlg(null)} onConfirm={() => run(() => completeProduction(session, order), "Marked as completed")}>
-          The time stamp stops and the order moves to <strong>Pending Quality Check</strong>.
-        </ConfirmDialog>
-      )}
+      {dlg === "complete" && (rework && rework.status === "in_progress"
+        ? <ReworkCompleteDialog rework={rework} order={order} session={session} onClose={() => setDlg(null)} onDone={() => { setDlg(null); flash && flash("Rework completed"); onDone && onDone(); }} />
+        : (
+          <ConfirmDialog title="Mark as completed?" confirmLabel="Yes, completed" busy={busy} onCancel={() => setDlg(null)} onConfirm={() => run(() => completeProduction(session, order), "Marked as completed")}>
+            The time stamp stops and the order moves to <strong>Pending Quality Check</strong>.
+          </ConfirmDialog>
+        ))}
       {dlg === "qc" && <QualityCheckDialog order={order} session={session} onClose={() => { setDlg(null); onDone && onDone(); }} onDone={(msg) => { setDlg(null); flash && flash(msg); onDone && onDone(); }} />}
       {dlg === "rework" && (
         <ConfirmDialog title="Start the rework?" confirmLabel="Yes, start rework" busy={busy} onCancel={() => setDlg(null)} onConfirm={() => run(() => startRework(session, order), "Rework started")}>
-          The order goes back to <strong>Job In Progress</strong>. Use "Add tailors" afterwards if someone different will fix it.
-          {lastFail && <div style={{ marginTop: 8, color: "#C1302B" }}>Quality check said: {lastFail}</div>}
+          Sent back by {rework ? rework.raised_by : "—"}{rework && rework.source === "store" ? ` from ${rework.branch || "the store"}` : ""}. The order goes back to <strong>Job In Progress</strong>; use "Add tailors" if someone different will fix it.
+          {rework && rework.comment && <div style={{ marginTop: 8 }}>Comment: {rework.comment}</div>}
+          {rework && (rework.points || []).map((p, i) => (
+            <div key={p.id} style={{ marginTop: 8, padding: 8, background: "#FDF6F5", borderRadius: 4 }}>
+              <strong>{i + 1}.</strong> {p.text}{p.files && p.files.length > 0 && <div style={{ marginTop: 4 }}><AttachmentGallery files={p.files} /></div>}
+            </div>
+          ))}
         </ConfirmDialog>
       )}
     </div>
@@ -4736,8 +4777,9 @@ function QualityCheckDialog({ order, session, stage = "production", onClose, onD
   const startedRef = React.useRef(false);      // React runs effects twice in development — never start two checks
   const [mode, setMode] = useState(null);          // null | "pass" | "fail" (confirm pop-ups)
   const [failing, setFailing] = useState(false);   // shows the "needs rework" form
-  const [reason, setReason] = useState("");
-  const [files, setFiles] = useState([]);
+  const [points, setPoints] = useState([{ text: "", files: [] }]);   // the points to fix when sending back for rework
+  const [comment, setComment] = useState("");
+  const pointsOk = points.some((p) => p.text.trim());
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -4749,13 +4791,19 @@ function QualityCheckDialog({ order, session, stage = "production", onClose, onD
       if (open && open[0]) { checksRef.current = open[0].checks; setNotes(open[0].notes || ""); setQc(open[0]); return; }
       const { data: all } = await supabase.from("job_order_qc").select("round").eq("job_order_id", order.id).eq("stage", stage);
       const round = (all || []).reduce((m, r) => Math.max(m, r.round), 0) + 1;
-      const { data: std } = await supabase.from("qc_checklist_items").select("*").eq("stage", stage).eq("active", true).order("sort_order");
-      const checks = buildQcChecks(order, std || []);
-      const { data: created, error: e } = await supabase.from("job_order_qc").insert({ job_order_id: order.id, stage, round, checks, started_by: session.name }).select().single();
+      // after a rework, the production check covers ONLY the points that were sent back
+      let reworkRow = null;
+      if (stage === "production") {
+        const { data: rw } = await supabase.from("job_order_rework").select("*").eq("job_order_id", order.id).eq("status", "completed").order("round", { ascending: false }).limit(1);
+        reworkRow = rw && rw[0] ? rw[0] : null;
+      }
+      const { data: std } = reworkRow ? { data: [] } : await supabase.from("qc_checklist_items").select("*").eq("stage", stage).eq("active", true).order("sort_order");
+      const checks = reworkRow ? buildReworkChecks(reworkRow) : buildQcChecks(order, std || []);
+      const { data: created, error: e } = await supabase.from("job_order_qc").insert({ job_order_id: order.id, stage, round, checks, started_by: session.name, rework_id: reworkRow ? reworkRow.id : null }).select().single();
       if (e) { setError(e.message); return; }
       checksRef.current = created.checks;
       setQc(created);
-      notify(session, `${session.name} started the ${isStore ? "store re-check" : "quality check"} — order ${order.jobOrderNo} (${order.model})`, "status", order.branch, { type: "order", id: order.id }, { internal: !isStore });
+      notify(session, `${session.name} started the ${isStore ? "store re-check" : "quality check"} — order ${order.jobOrderNo} (${order.model})`, "status", order.branch, { type: "order", id: order.id }, { internal: !isStore, hideFromProduction: isStore });
     })();
   }, []); // eslint-disable-line
 
@@ -4772,17 +4820,19 @@ function QualityCheckDialog({ order, session, stage = "production", onClose, onD
   const checks = qc ? qc.checks : [];
   const done = checks.filter((c) => c.ok).length;
   const allDone = checks.length > 0 && done === checks.length;
-  const groups = ["Standard checks", "This order's requirements", "Measurements"].filter((g) => checks.some((c) => c.group === g));
+  const groups = ["Rework points", "Standard checks", "This order's requirements", "Measurements"].filter((g) => checks.some((c) => c.group === g));
 
   const doPass = async () => {
     setBusy(true); setError("");
     const blob = sigRef.current ? await new Promise((r) => sigRef.current.toBlob(r, "image/png")) : null;
     const up = blob ? await uploadCustomerFile(`${isStore ? "store-qc-signatures" : "qc-signatures"}/${order.id}-${Date.now()}.png`, blob, "image/png") : { error: { message: "no signature drawn" } };
-    if (up.error) { setError("Couldn't save the signature: " + up.error.message); setBusy(false); setMode(null); return; }
+    if (up.error) { setError(`Couldn't save the signature (${isStore ? "store-qc-signatures" : "qc-signatures"} as ${session.role}): ` + up.error.message); setBusy(false); setMode(null); return; }
     const { error: e1 } = await supabase.from("job_order_qc").update({
       status: "passed", confirmed: true, signature_url: up.ref, notes: notes || null, completed_by: session.name, completed_at: new Date().toISOString(),
     }).eq("id", qc.id);
     if (e1) { setError(e1.message); setBusy(false); setMode(null); return; }
+    // a re-check that follows a rework closes that rework
+    if (qc.rework_id) await supabase.from("job_order_rework").update({ status: "verified", verified_at: new Date().toISOString(), verified_by: session.name, qc_id: qc.id }).eq("id", qc.rework_id);
     const { error: e2 } = await advanceOrder(session, order, isStore ? "ready_in_stores" : "ready_in_production", null);
     setBusy(false);
     if (e2) { setError(e2.message); setMode(null); return; }
@@ -4791,11 +4841,17 @@ function QualityCheckDialog({ order, session, stage = "production", onClose, onD
 
   const doFail = async () => {
     setBusy(true); setError("");
+    const pts = points.filter((p) => p.text.trim());
+    const allFiles = pts.flatMap((p) => p.files || []);
+    const summary = `${pts.length} point${pts.length === 1 ? "" : "s"} to fix: ` + pts.map((p, i) => `${i + 1}. ${p.text.trim()}`).join("; ");
+    const { error: e0 } = await raiseRework(session, order, isStore ? "store" : "production", pts, comment.trim());
+    if (e0) { setError(e0.message); setBusy(false); setMode(null); return; }
     const { error: e1 } = await supabase.from("job_order_qc").update({
-      status: "failed", fail_reason: reason.trim(), fail_attachments: files, notes: notes || null, completed_by: session.name, completed_at: new Date().toISOString(),
+      status: "failed", fail_reason: summary, fail_attachments: allFiles, notes: notes || null, completed_by: session.name, completed_at: new Date().toISOString(),
     }).eq("id", qc.id);
     if (e1) { setError(e1.message); setBusy(false); setMode(null); return; }
-    const { error: e2 } = await advanceOrder(session, order, "job_rework", isStore ? `Sent back from ${order.branch}: ${reason.trim()}` : reason.trim(), null, files);
+    if (qc.rework_id) await supabase.from("job_order_rework").update({ status: "superseded" }).eq("id", qc.rework_id);   // the earlier rework didn't pass this check
+    const { error: e2 } = await advanceOrder(session, order, "job_rework", (isStore ? `Sent back from ${order.branch}: ` : "") + summary, null, allFiles);
     setBusy(false);
     if (e2) { setError(e2.message); setMode(null); return; }
     onDone && onDone("Sent back for rework");
@@ -4808,6 +4864,7 @@ function QualityCheckDialog({ order, session, stage = "production", onClose, onD
           <div>
             <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20 }}>{isStore ? "Store re-check" : "Quality check"}{qc ? ` · round ${qc.round}` : ""}</div>
             <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 10 }}>Order {order.jobOrderNo} · {order.model}{order.cut ? ` · ${order.cut}` : ""}{order.color ? ` · ${order.color}` : ""}</div>
+            {qc && qc.rework_id && <div style={{ fontSize: 12.5, fontWeight: 700, color: "#C1302B", marginBottom: 8 }}>Re-check after rework — only the points that were sent back</div>}
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 24, color: "#8a8a8a" }}>×</button>
         </div>
@@ -4825,7 +4882,7 @@ function QualityCheckDialog({ order, session, stage = "production", onClose, onD
                 {checks.filter((c) => c.group === g).map((c) => (
                   <div key={c.key} onClick={() => toggle(c.key)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "11px 12px", minHeight: 48, border: "1px solid " + (c.ok ? "#BFE0C7" : "#E5E5E5"), background: c.ok ? "#F2FAF4" : "#fff", borderRadius: 6, marginBottom: 6, cursor: "pointer" }}>
                     <div style={{ width: 26, height: 26, borderRadius: 5, border: "2px solid " + (c.ok ? "#2F8F46" : "#9aa0a8"), background: c.ok ? "#2F8F46" : "#fff", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, flexShrink: 0 }}>{c.ok ? "✓" : ""}</div>
-                    <div style={{ flex: 1, fontSize: 14 }}>{c.label}</div>
+                    <div style={{ flex: 1, fontSize: 14 }}>{c.label}{c.detail && <div style={{ fontSize: 12, color: "#5a5a5a", marginTop: 2 }}>{c.detail}</div>}</div>
                     <div className="mono" style={{ fontSize: 11, color: "#8a8a8a", textAlign: "right" }}>{c.ok ? <>{fmtTime(c.at)}<br />{c.by}</> : ""}</div>
                   </div>
                 ))}
@@ -4836,12 +4893,23 @@ function QualityCheckDialog({ order, session, stage = "production", onClose, onD
 
             {failing ? (
               <div style={{ border: "1px solid #E8B9B6", background: "#FDF6F5", borderRadius: 6, padding: 14, marginTop: 14 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Send back for rework</div>
-                <textarea value={reason} onChange={(e) => setReason(e.target.value)} style={{ ...inputStyle, minHeight: 70, marginBottom: 10 }} placeholder="What needs fixing? (required)" />
-                <AttachmentField files={files} onChange={setFiles} folder="rejections" />
+                <div style={{ fontWeight: 700, marginBottom: 2 }}>Send back for rework — list each point</div>
+                <div style={{ fontSize: 12, color: "#8a8a8a", marginBottom: 10 }}>The quality check that follows the rework will show exactly these points, one by one.</div>
+                {points.map((p, i) => (
+                  <div key={i} style={{ background: "#fff", border: "1px solid #E8D2D0", borderRadius: 6, padding: 10, marginBottom: 10 }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                      <div style={{ fontWeight: 700, paddingTop: 8, minWidth: 20 }}>{i + 1}.</div>
+                      <textarea value={p.text} onChange={(e) => setPoints((ps) => ps.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))} style={{ ...inputStyle, minHeight: 56 }} placeholder="What needs fixing?" />
+                      {points.length > 1 && <a className="link" style={{ color: "#C1302B", fontSize: 12, paddingTop: 8 }} onClick={() => setPoints((ps) => ps.filter((_, j) => j !== i))}>Remove</a>}
+                    </div>
+                    <div style={{ marginLeft: 28, marginTop: 8 }}><AttachmentField files={p.files} onChange={(f) => setPoints((ps) => ps.map((x, j) => (j === i ? { ...x, files: f } : x)))} folder="rework-files" /></div>
+                  </div>
+                ))}
+                <a className="link" style={{ fontSize: 13 }} onClick={() => setPoints((ps) => [...ps, { text: "", files: [] }])}>+ Add another point</a>
+                <textarea value={comment} onChange={(e) => setComment(e.target.value)} style={{ ...inputStyle, minHeight: 50, marginTop: 12 }} placeholder="Overall comment (optional)" />
                 <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 12 }}>
                   <button onClick={() => setFailing(false)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Back</button>
-                  <button disabled={!reason.trim()} onClick={() => setMode("fail")} style={{ background: reason.trim() ? "#C1302B" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Send back for rework</button>
+                  <button disabled={!pointsOk} onClick={() => setMode("fail")} style={{ background: pointsOk ? "#C1302B" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Send back for rework</button>
                 </div>
               </div>
             ) : (
@@ -4868,7 +4936,7 @@ function QualityCheckDialog({ order, session, stage = "production", onClose, onD
       </div>
 
       {mode === "pass" && <ConfirmDialog title={isStore ? "Submit the re-check?" : "Submit the quality check?"} confirmLabel="Yes, submit" busy={busy} onCancel={() => setMode(null)} onConfirm={doPass}>Order {order.jobOrderNo} becomes <strong>{readyLabel}</strong>, and your signature and the time stamps are saved.</ConfirmDialog>}
-      {mode === "fail" && <ConfirmDialog title="Send back for rework?" confirmLabel="Yes, send back" busy={busy} onCancel={() => setMode(null)} onConfirm={doFail}>The order goes back to <strong>Rework</strong> with your reason{files.length ? " and photos" : ""}.</ConfirmDialog>}
+      {mode === "fail" && <ConfirmDialog title="Send back for rework?" confirmLabel="Yes, send back" busy={busy} onCancel={() => setMode(null)} onConfirm={doFail}>The order goes back to <strong>Rework</strong> with your points{points.some((p) => (p.files || []).length) ? " and photos" : ""}.</ConfirmDialog>}
     </div>
   );
 }
@@ -4892,7 +4960,7 @@ function QcRecord({ order }) {
       {rows.map((r) => (
         <div key={r.id} style={{ marginBottom: 14, paddingBottom: 12, borderBottom: "1px solid #EEE" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: r.status === "passed" ? "#2F8F46" : r.status === "failed" ? "#C1302B" : "#D98E2B" }}>
-            {r.stage === "store" ? "Store re-check" : "Production check"} — Round {r.round} — {r.status === "passed" ? "Passed" : r.status === "failed" ? "Sent back for rework" : "In progress"}
+            {r.stage === "store" ? "Store re-check" : r.rework_id ? "Re-check after rework" : "Production check"} — Round {r.round} — {r.status === "passed" ? "Passed" : r.status === "failed" ? "Sent back for rework" : "In progress"}
           </div>
           <div style={{ fontSize: 12, color: "#8a8a8a", marginBottom: 6 }}>
             Started {fmtDateTime(r.started_at)} by {r.started_by}
@@ -4900,7 +4968,7 @@ function QcRecord({ order }) {
           </div>
           {r.fail_reason && <div style={{ fontSize: 12.5, color: "#C1302B", marginBottom: 6 }}>Reason: {r.fail_reason}{r.fail_attachments && r.fail_attachments.length > 0 && <div style={{ marginTop: 4 }}><AttachmentGallery files={r.fail_attachments} /></div>}</div>}
           <div style={{ fontSize: 12, columns: 2, columnGap: 20 }}>
-            {(r.checks || []).map((c) => <div key={c.key} style={{ breakInside: "avoid", marginBottom: 3 }}>{c.ok ? "✓" : "○"} {c.label}{c.ok && <span className="mono" style={{ color: "#8a8a8a" }}> · {fmtTime(c.at)} {c.by}</span>}</div>)}
+            {(r.checks || []).map((c) => <div key={c.key} style={{ breakInside: "avoid", marginBottom: 3 }}>{c.ok ? "✓" : "○"} {c.label}{c.detail && <span style={{ color: "#5a5a5a" }}> ({c.detail})</span>}{c.ok && <span className="mono" style={{ color: "#8a8a8a" }}> · {fmtTime(c.at)} {c.by}</span>}</div>)}
           </div>
           {r.notes && <div style={{ fontSize: 12.5, marginTop: 6 }}><strong>Notes:</strong> {r.notes}</div>}
           {r.signature_url && <div style={{ marginTop: 8 }}><div style={{ fontSize: 11.5, color: "#8a8a8a" }}>Signed by {r.completed_by}</div><SecureImg src={r.signature_url} style={{ width: 200, height: 60, objectFit: "contain", border: "1px solid #E5E5E5", borderRadius: 3, background: "#fff" }} /></div>}
@@ -5007,9 +5075,9 @@ function QcSetupPage({ flash }) {
 
 /* ---------------- Delivery to stores ---------------- */
 
-async function createDeliveryNote(session, { branch, sendAt, carriedBy, notes, orders }) {
+async function createDeliveryNote(session, { branch, sendAt, carriedBy, notes, orders, attachments }) {
   const { data: note, error } = await supabase.from("delivery_notes")
-    .insert({ branch, send_at: sendAt, carried_by: carriedBy || null, notes: notes || null, created_by: session.name }).select().single();
+    .insert({ branch, send_at: sendAt, carried_by: carriedBy || null, notes: notes || null, attachments: attachments || [], created_by: session.name }).select().single();
   if (error) return { error };
   const { error: e2 } = await supabase.from("delivery_note_items").insert(orders.map((o) => ({ delivery_note_id: note.id, job_order_id: o.id })));
   if (e2) return { error: e2 };
@@ -5062,6 +5130,7 @@ function printDeliveryNote(note, rows) {
   ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.no)}</td><td>${esc(r.model)}</td><td>${esc(r.color)}</td><td>${esc(r.cut)}</td><td>${esc(r.due)}</td><td></td></tr>`).join("")}
   </tbody></table>
   <div style="margin-top:10px"><strong>Total pieces:</strong> ${rows.length}</div>
+  ${note.attachments && note.attachments.length ? `<div>Photos / videos attached: ${note.attachments.length}</div>` : ""}
   <div class="sign"><div>Sent by (Production)</div><div>Received by (${esc(note.branch)})</div></div>
   <script>window.onload = function () { window.print(); };<\/script></body></html>`);
   w.document.close();
@@ -5081,6 +5150,7 @@ function DeliveryNotesPage({ orders, session, refresh, flash, openRequest, clear
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [viewId, setViewId] = useState(null);
+  const [attach, setAttach] = useState([]);
 
   const load = async () => {
     const { data: n } = await supabase.from("delivery_notes").select("*").order("created_at", { ascending: false }).limit(60);
@@ -5099,11 +5169,11 @@ function DeliveryNotesPage({ orders, session, refresh, flash, openRequest, clear
 
   const doSend = async () => {
     setBusy(true);
-    const res = await createDeliveryNote(session, { branch, sendAt: new Date(sendAt).toISOString(), carriedBy: carriedBy.trim(), notes: noteText.trim(), orders: chosen });
+    const res = await createDeliveryNote(session, { branch, sendAt: new Date(sendAt).toISOString(), carriedBy: carriedBy.trim(), notes: noteText.trim(), orders: chosen, attachments: attach });
     setBusy(false); setConfirm(false);
     if (res.error) { flash("Error: " + res.error.message); return; }
     flash(`Delivery ${res.note.note_no} sent to ${branch}`);
-    setSelected([]); setCarriedBy(""); setNoteText(""); setSendAt(nowLocal()); refresh(); load();
+    setSelected([]); setCarriedBy(""); setNoteText(""); setAttach([]); setSendAt(nowLocal()); refresh(); load();
   };
 
   const rowsOf = (noteId) => items.filter((i) => i.delivery_note_id === noteId).map((i) => {
@@ -5149,6 +5219,10 @@ function DeliveryNotesPage({ orders, session, refresh, flash, openRequest, clear
                 <div><div style={label13}>Carried by (optional)</div><input value={carriedBy} onChange={(e) => setCarriedBy(e.target.value)} placeholder="Driver / van" style={{ ...inputStyle, width: 200 }} /></div>
                 <div style={{ flex: 1, minWidth: 220 }}><div style={label13}>Notes (optional)</div><input value={noteText} onChange={(e) => setNoteText(e.target.value)} style={inputStyle} /></div>
               </div>
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: 12, color: "#8a8a8a", marginBottom: 4 }}>Photos / videos of the pieces being sent (recommended — proof of what left Production)</div>
+                <AttachmentField files={attach} onChange={setAttach} folder="delivery-files" />
+              </div>
               <div style={{ textAlign: "right", marginTop: 12 }}>
                 <button onClick={() => setConfirm(true)} disabled={!sendAt} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 20px", fontWeight: 700 }}>Create delivery note & send</button>
               </div>
@@ -5186,6 +5260,7 @@ function DeliveryNotesPage({ orders, session, refresh, flash, openRequest, clear
             </div>
             <div style={{ fontSize: 13, margin: "8px 0", color: (DN_STATUS[viewNote.status] || [])[1], fontWeight: 700 }}>{(DN_STATUS[viewNote.status] || [viewNote.status])[0]}{viewNote.accepted_at ? ` — ${viewNote.accepted_by}, ${fmtDateTime(viewNote.accepted_at)}` : ""}</div>
             {viewNote.notes && <div style={{ fontSize: 13, marginBottom: 8 }}>Notes: {viewNote.notes}</div>}
+            {viewNote.attachments && viewNote.attachments.length > 0 && <div style={{ margin: "10px 0" }}><div style={label13}>Photos / videos of the delivery</div><AttachmentGallery files={viewNote.attachments} /></div>}
             {rowsOf(viewNote.id).map((r) => (
               <div key={r.id} style={{ display: "flex", gap: 12, padding: "8px 0", borderBottom: "1px solid #F0F0F0", fontSize: 13.5, alignItems: "center" }}>
                 <span className="mono" style={{ fontWeight: 700, minWidth: 70 }}>{r.no}</span><span style={{ flex: 1 }}>{r.model}{r.cut ? ` · ${r.cut}` : ""}{r.color ? ` · ${r.color}` : ""}</span>
@@ -5301,6 +5376,7 @@ function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, 
               <button onClick={() => setOpenId(null)} style={{ background: "none", border: "none", fontSize: 24, color: "#8a8a8a" }}>×</button>
             </div>
             {note.notes && <div style={{ fontSize: 13, margin: "8px 0" }}>Notes: {note.notes}</div>}
+            {note.attachments && note.attachments.length > 0 && <div style={{ margin: "10px 0" }}><div style={label13}>Photos / videos of the delivery</div><AttachmentGallery files={note.attachments} /></div>}
             <div style={{ fontSize: 12.5, color: "#8a8a8a", margin: "10px 0 6px" }}>{note.status === "sent" ? "Tick each piece that has actually arrived." : (DN_STATUS[note.status] || [note.status])[0] + (note.accepted_at ? ` — ${note.accepted_by}, ${fmtDateTime(note.accepted_at)}` : "")}</div>
             {rows.map((r) => (
               <label key={r.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 6px", borderBottom: "1px solid #F0F0F0", cursor: note.status === "sent" ? "pointer" : "default" }}>
@@ -5348,6 +5424,118 @@ function StoreActions({ order, session, onDone, flash }) {
       {order.status === "in_transit" && <div style={{ fontSize: 13 }}>This piece is on its way to the store. Accept it from <strong>Incoming Deliveries</strong> on the Home dashboard.</div>}
       {order.status === "store_received" && <button onClick={() => setDlg(true)} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 18px", fontSize: 13, fontWeight: 700 }}>{open ? "Continue re-check" : "Start re-quality check"}</button>}
       {dlg && <QualityCheckDialog order={order} session={session} stage="store" onClose={() => { setDlg(false); onDone && onDone(); }} onDone={(msg) => { setDlg(false); flash && flash(msg); onDone && onDone(); }} />}
+    </div>
+  );
+}
+
+/* ---------------- Rework: point by point ---------------- */
+
+function ReworkCompleteDialog({ rework, order, session, onClose, onDone }) {
+  const [points, setPoints] = useState((rework.points || []).map((p) => ({ ...p })));
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const setP = (i, patch) => setPoints((ps) => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+  const toggle = (i) => setP(i, points[i].fixed ? { fixed: false, fixed_at: null, fixed_by: null } : { fixed: true, fixed_at: new Date().toISOString(), fixed_by: session.name });
+  const allFixed = points.length > 0 && points.every((p) => p.fixed);
+  const doDone = async () => {
+    setBusy(true); setError("");
+    const { error: e1 } = await supabase.from("job_order_rework").update({ points, status: "completed", completed_at: new Date().toISOString(), completed_by: session.name }).eq("id", rework.id);
+    if (e1) { setError(e1.message); setBusy(false); setConfirm(false); return; }
+    const { error: e2 } = await completeProduction(session, order);
+    setBusy(false);
+    if (e2) { setError(e2.message); setConfirm(false); return; }
+    onDone && onDone();
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 16 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 720 }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20 }}>Complete the rework · round {rework.round}</div>
+        <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 6 }}>Order {order.jobOrderNo} · {order.model}. Sent back by {rework.raised_by} ({rework.source === "store" ? `from ${rework.branch || "the store"}` : "quality check"}).</div>
+        {rework.comment && <div style={{ fontSize: 13, marginBottom: 10 }}>Comment: {rework.comment}</div>}
+        {points.map((p, i) => (
+          <div key={p.id} style={{ border: "1px solid " + (p.fixed ? "#BFE0C7" : "#E5E5E5"), background: p.fixed ? "#F2FAF4" : "#fff", borderRadius: 6, padding: 12, marginBottom: 10 }}>
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+              <div onClick={() => toggle(i)} style={{ width: 28, height: 28, borderRadius: 5, border: "2px solid " + (p.fixed ? "#2F8F46" : "#9aa0a8"), background: p.fixed ? "#2F8F46" : "#fff", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>{p.fixed ? "✓" : ""}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14 }}><strong>{i + 1}.</strong> {p.text}</div>
+                {p.files && p.files.length > 0 && <div style={{ margin: "6px 0" }}><AttachmentGallery files={p.files} /></div>}
+                <input value={p.response || ""} onChange={(e) => setP(i, { response: e.target.value })} placeholder="What was done? (optional)" style={{ ...inputStyle, marginTop: 6 }} />
+                <div style={{ marginTop: 6 }}><AttachmentField files={p.response_files || []} onChange={(f) => setP(i, { response_files: f })} folder="rework-files" /></div>
+                {p.fixed && <div className="mono" style={{ fontSize: 11, color: "#8a8a8a", marginTop: 4 }}>Fixed {fmtTime(p.fixed_at)} · {p.fixed_by}</div>}
+              </div>
+            </div>
+          </div>
+        ))}
+        {error && <div style={{ color: "#C1302B", fontSize: 13 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 18px", fontWeight: 700 }}>Cancel</button>
+          <button disabled={!allFixed} onClick={() => setConfirm(true)} style={{ background: allFixed ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "10px 18px", fontWeight: 700 }}>Mark rework as completed</button>
+        </div>
+        {!allFixed && <div style={{ fontSize: 11.5, color: "#8a8a8a", textAlign: "right", marginTop: 6 }}>Tick every point as fixed to complete.</div>}
+      </div>
+      {confirm && <ConfirmDialog title="Complete the rework?" confirmLabel="Yes, completed" busy={busy} onCancel={() => setConfirm(false)} onConfirm={doDone}>The time stamp stops and the order moves to <strong>Pending Quality Check</strong>, where only these points will be checked.</ConfirmDialog>}
+    </div>
+  );
+}
+
+// The Rework record on the order page (Production and Admin see every rework; Sales only the ones it sent back from a store)
+function ReworkRecord({ order }) {
+  const [rows, setRows] = useState([]);
+  const [crew, setCrew] = useState([]);
+  useEffect(() => {
+    const load = () => {
+      supabase.from("job_order_rework").select("*").eq("job_order_id", order.id).order("raised_at").then(({ data }) => setRows(data || []));
+      supabase.from("job_order_tailors").select("*").eq("job_order_id", order.id).not("rework_id", "is", null).then(({ data }) => setCrew(data || []));
+    };
+    load();
+    const channel = supabase.channel("rework-record-" + order.id)
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_order_rework", filter: `job_order_id=eq.${order.id}` }, load)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [order.id, order.status]);
+  if (rows.length === 0) return null;
+  const stat = { open: ["Waiting for Production", "#D98E2B"], in_progress: ["Being reworked", "#3B6FA0"], completed: ["Reworked — waiting for re-check", "#D98E2B"], verified: ["Verified by quality check", "#2F8F46"], superseded: ["Did not pass the re-check", "#C1302B"] };
+  return (
+    <div style={{ ...cardStyle, margin: "16px 0" }}>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>REWORK RECORD</div>
+      {rows.map((r) => {
+        const st = stat[r.status] || [r.status, "#1A1A1A"];
+        return (
+          <div key={r.id} style={{ marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid #EEE" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: st[1] }}>Round {r.round} — {st[0]}</div>
+            <div style={{ fontSize: 12, color: "#8a8a8a", marginBottom: 6 }}>
+              Sent back by {r.raised_by} ({r.source === "store" ? `from the store${r.branch ? ", " + r.branch : ""}` : "production quality check"}) · {fmtDateTime(r.raised_at)}
+              {r.started_at && <> · started {fmtDateTime(r.started_at)} by {r.started_by}</>}
+              {r.completed_at && <> · finished {fmtDateTime(r.completed_at)} by {r.completed_by}</>}
+              {r.verified_at && <> · verified {fmtDateTime(r.verified_at)} by {r.verified_by}</>}
+            </div>
+            {r.comment && <div style={{ fontSize: 12.5, marginBottom: 6 }}><strong>Comment:</strong> {r.comment}</div>}
+            {(r.points || []).map((p, i) => (
+              <div key={p.id} style={{ padding: "6px 0", borderTop: "1px dashed #EEE", fontSize: 12.5 }}>
+                <div><strong>{i + 1}.</strong> {p.text}</div>
+                {p.files && p.files.length > 0 && <div style={{ margin: "4px 0" }}><AttachmentGallery files={p.files} /></div>}
+                {(p.fixed || p.response) && <div style={{ color: "#2F8F46", marginTop: 2 }}>✓ {p.fixed_by ? `${p.fixed_by} · ${fmtTime(p.fixed_at)}` : ""}{p.response ? ` — ${p.response}` : ""}</div>}
+                {p.response_files && p.response_files.length > 0 && <div style={{ margin: "4px 0" }}><AttachmentGallery files={p.response_files} /></div>}
+              </div>
+            ))}
+            {crew.filter((c) => c.rework_id === r.id).length > 0 && (
+              <div style={{ fontSize: 12, marginTop: 6 }}><strong>Tailors:</strong> {crew.filter((c) => c.rework_id === r.id).map((c) => c.worker_name + (c.task ? ` (${c.task})` : "")).join(", ")}</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// All Records: switch between the working list and the pieces already delivered to the stores
+function RecordsViewTabs({ value, onChange, tabs }) {
+  return (
+    <div className="no-print" style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 14, flexWrap: "wrap" }}>
+      {tabs.map(([k, label, n]) => (
+        <button key={k} onClick={() => onChange(k)} style={{ padding: "7px 16px", fontSize: 13, borderRadius: 16, cursor: "pointer", border: "1px solid " + (value === k ? "#1A1A1A" : "#DDE1E7"), background: value === k ? "#1A1A1A" : "#fff", color: value === k ? "#fff" : "#1A1A1A" }}>{label}{n != null ? ` (${n})` : ""}</button>
+      ))}
     </div>
   );
 }
@@ -5452,6 +5640,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
 
             {seesInternal && <ProductionInfo order={order} />}
             {(seesInternal || role === "sales") && <QcRecord order={order} />}
+            {(seesInternal || role === "sales") && <ReworkRecord order={order} />}
 
             <div id="order-history" style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid #E5E5E5" }}>
               <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", marginBottom: 8 }}>ACTIVITY LOG</div>
@@ -5509,7 +5698,8 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
     if (openRequest && openRequest.type === "order") { setSelectedId(openRequest.id); openFocus.current = openRequest.focus || null; clearOpenRequest(); }
   }, [openRequest]); // eslint-disable-line
   const [editingOrderId, setEditingOrderId] = useState(null);
-  const visible = orders.filter((o) => !AFTER_PRODUCTION.includes(o.status));
+  const [view, setView] = useState("active");
+  const visible = orders.filter((o) => (view === "delivered" ? DELIVERED_STATUSES.includes(o.status) : view === "all" ? true : !AFTER_PRODUCTION.includes(o.status)));
   const filtered = useFilteredOrders(visible, query, statusFilter, true);
   const selected = orders.find((o) => o.id === selectedId);
 
@@ -5542,6 +5732,11 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
   return (
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL RECORDS</h2>
+      <RecordsViewTabs value={view} onChange={setView} tabs={[
+        ["active", "In production", orders.filter((o) => !AFTER_PRODUCTION.includes(o.status)).length],
+        ["delivered", "Delivered to stores", orders.filter((o) => DELIVERED_STATUSES.includes(o.status)).length],
+        ["all", "All", orders.length],
+      ]} />
       <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} noPII />
       <OrderTable orders={filtered} onOpen={setSelectedId} editableStatuses={["job_rejected"]} noPII />
       {selected && <OrderDetail order={selected} role="production" session={session} onClose={() => setSelectedId(null)} onSaveFields={handleSaveFields} onAction={handleAction} models={config.models} flash={flash} onProductionDone={refresh}
@@ -5997,7 +6192,8 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
   useEffect(() => {
     if (openRequest && openRequest.type === "order") { setSelectedId(openRequest.id); openFocus.current = openRequest.focus || null; clearOpenRequest(); }
   }, [openRequest]); // eslint-disable-line
-  const filtered = useFilteredOrders(orders, query, statusFilter);
+  const [view, setView] = useState("all");
+  const filtered = useFilteredOrders(view === "delivered" ? orders.filter((o) => DELIVERED_STATUSES.includes(o.status)) : orders, query, statusFilter);
   const selected = orders.find((o) => o.id === selectedId);
 
   const handleDeleteOrder = async (id) => {
@@ -6196,6 +6392,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL RECORDS</h2>
       <SalesTabs subpage={subpage} setSubpage={setSubpage} />
+      <RecordsViewTabs value={view} onChange={setView} tabs={[["all", "All records", orders.length], ["delivered", "Delivered to stores", orders.filter((o) => DELIVERED_STATUSES.includes(o.status)).length]]} />
       <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />
       <div className="no-print" style={{ textAlign: "right", marginBottom: 10 }}>
         <button onClick={() => setSubpage("requirement")} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em", marginRight: 8 }}>+ NEW REQUIREMENT</button>
