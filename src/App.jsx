@@ -161,7 +161,34 @@ const ROLE_HOME_CARDS = {
   ],
 };
 
-function HomePage({ session, setSubpage }) {
+// What is still waiting for this person, per tile. The numbers are real counts of work left, so they fall as the work is finished.
+function computeTasks(profile, orders, sentNotes) {
+  const t = {};
+  if (!profile) return t;
+  const role = profile.role;
+  const list = orders || [];
+  const mine = (o) => role === "admin" || o.branch === profile.branch;
+  const count = (status, filter) => list.filter((o) => o.status === status && (!filter || filter(o))).length;
+  const put = (key, parts) => {
+    const live = parts.filter((p) => p[0] > 0);
+    const total = live.reduce((s, p) => s + p[0], 0);
+    if (total > 0) t[key] = { count: total, label: live.map((p) => `${p[0]} ${p[1]}`).join(" · ") };
+  };
+  const prod = role === "production" || role === "admin";
+  const sales = role === "sales" || role === "admin";
+  const records = [];
+  if (prod) records.push([count("job_created"), "to accept"], [count("job_accepted"), "need material"], [count("material_assigned"), "need tailors"], [count("manpower_planned"), "to start"], [count("job_rework"), "for rework"]);
+  if (sales) records.push([count("job_rejected", mine), "to fix & resend"]);
+  put("records", records);
+  if (prod) {
+    put("qcqueue", [[count("job_pending_qc"), "to quality check"]]);
+    put("deliveries", [[count("ready_in_production"), "ready to send"]]);
+  }
+  if (sales) put("incoming", [[sentNotes || 0, "delivery to accept"], [count("store_received", mine), "to re-check"]]);
+  return t;
+}
+
+function HomePage({ session, setSubpage, tasks }) {
   const cards = ROLE_HOME_CARDS[session.role] || [];
   return (
     <div style={{ maxWidth: 760, margin: "0 auto" }}>
@@ -169,14 +196,19 @@ function HomePage({ session, setSubpage }) {
         <div style={{ fontSize: 13, color: "#8a8a8a" }}>Welcome back, {session.name}</div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
-        {cards.map(([icon, title, desc, target]) => (
-          <div key={target} onClick={() => setSubpage(target)}
-            style={{ border: "1px solid #DDE1E7", borderRadius: 4, padding: "26px 16px", textAlign: "center", cursor: "pointer" }}>
-            <div style={{ fontSize: 26, marginBottom: 8 }}>{icon}</div>
-            <div style={{ fontWeight: 700, fontSize: 13.5, letterSpacing: "0.03em", marginBottom: 4 }}>{title.toUpperCase()}</div>
-            <div style={{ fontSize: 11, color: "#8a8a8a" }}>{desc}</div>
-          </div>
-        ))}
+        {cards.map(([icon, title, desc, target]) => {
+          const task = tasks && tasks[target];
+          return (
+            <div key={target} onClick={() => setSubpage(target)}
+              style={{ position: "relative", border: "1px solid " + (task ? "#E8B9B6" : "#DDE1E7"), borderRadius: 4, padding: "26px 16px", textAlign: "center", cursor: "pointer", background: task ? "#FFFAFA" : "#fff" }}>
+              {task && <span style={{ position: "absolute", top: 8, right: 8, minWidth: 24, height: 24, padding: "0 7px", borderRadius: 12, background: "#C1302B", color: "#fff", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 4px rgba(193,48,43,0.4)" }}>{task.count}</span>}
+              <div style={{ fontSize: 26, marginBottom: 8 }}>{icon}</div>
+              <div style={{ fontWeight: 700, fontSize: 13.5, letterSpacing: "0.03em", marginBottom: 4 }}>{title.toUpperCase()}</div>
+              <div style={{ fontSize: 11, color: "#8a8a8a" }}>{desc}</div>
+              {task && <div style={{ fontSize: 11.5, color: "#C1302B", fontWeight: 700, marginTop: 6 }}>{task.label}</div>}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -591,7 +623,7 @@ async function startRework(session, order) {
 function buildReworkChecks(rework) {
   return (rework.points || []).map((p) => ({
     key: "rw-" + p.id, group: "Rework points", label: p.text,
-    detail: p.fixed ? `Fixed by ${p.fixed_by}${p.response ? ": " + p.response : ""}` : "", ok: false, at: null, by: null,
+    detail: (p.fixed ? `Fixed by ${p.fixed_by}${p.response ? ": " + p.response : ""}` : "") + (rework.verified_by ? ` · passed Production's check (${rework.verified_by})` : ""), ok: false, at: null, by: null,
   }));
 }
 
@@ -713,8 +745,9 @@ function NotificationBell({ session, notifications, refreshNotifications, onOpen
   );
 }
 
-function DashboardMenu({ session, setSubpage, onLogout, onLock }) {
+function DashboardMenu({ session, setSubpage, onLogout, onLock, tasks }) {
   const [open, setOpen] = useState(false);
+  const total = Object.values(tasks || {}).reduce((sum, t) => sum + t.count, 0);
   const wrapperRef = React.useRef(null);
   const cards = ROLE_HOME_CARDS[session.role] || [];
 
@@ -729,7 +762,7 @@ function DashboardMenu({ session, setSubpage, onLogout, onLock }) {
   return (
     <div ref={wrapperRef} style={{ position: "relative", display: "inline-block" }}>
       <button onClick={() => setOpen((o) => !o)} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "7px 16px", fontSize: 12.5, fontWeight: 700, letterSpacing: "0.03em", cursor: "pointer" }}>
-        DASHBOARD ▾
+        DASHBOARD ▾{total > 0 && <span style={{ marginLeft: 8, background: "#C1302B", color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>{total}</span>}
       </button>
       {open && (
         <div className="no-print" style={{ position: "absolute", top: 34, right: 0, minWidth: 210, background: "#fff", border: "1px solid #C9CDD3", borderRadius: 6, boxShadow: "0 10px 28px rgba(0,0,0,0.14)", zIndex: 200, padding: 6, textAlign: "left" }}>
@@ -742,6 +775,7 @@ function DashboardMenu({ session, setSubpage, onLogout, onLock }) {
             <div key={target} onClick={() => go(target)} style={{ padding: "8px 10px", fontSize: 12.5, cursor: "pointer", borderRadius: 4 }}
               onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F2F2")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
               {icon} {title}
+              {tasks && tasks[target] && <span style={{ float: "right", background: "#C1302B", color: "#fff", borderRadius: 10, padding: "0 7px", fontSize: 11, fontWeight: 700 }}>{tasks[target].count}</span>}
             </div>
           ))}
           <div style={{ borderTop: "1px solid #E5E5E5", margin: "4px 0" }} />
@@ -1040,6 +1074,14 @@ export default function App() {
     if (profile && profile.role !== "sales" && localStorage.getItem("ml_locked") === "1") { localStorage.removeItem("ml_locked"); setLocked(false); }
   }, [profile?.role]); // eslint-disable-line
 
+  // The red numbers on the dashboard tiles: what is still waiting for this person
+  const [sentNotes, setSentNotes] = useState(0);
+  useEffect(() => {
+    if (!profile || (profile.role !== "sales" && profile.role !== "admin")) return;
+    supabase.from("delivery_notes").select("id", { count: "exact", head: true }).eq("status", "sent").then(({ count }) => setSentNotes(count || 0));
+  }, [profile?.id, orders]); // eslint-disable-line   (the database only lets a showroom see its own branch's notes)
+  const tasks = useMemo(() => computeTasks(profile, orders, sentNotes), [profile, orders, sentNotes]);
+
   // Which page can each role use for each kind of target?
   const openTarget = useCallback(async (type, id, focus) => {
     if (!profile) return;
@@ -1114,8 +1156,8 @@ export default function App() {
   };
 
   return withLock(
-    <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()} onLock={lock} notifications={notifications} refreshNotifications={loadNotifications} onOpenNotification={openFromNotification}>
-      {subpage === "home" && <HomePage session={profile} setSubpage={setSubpage} />}
+    <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()} onLock={lock} notifications={notifications} refreshNotifications={loadNotifications} onOpenNotification={openFromNotification} tasks={tasks}>
+      {subpage === "home" && <HomePage session={profile} setSubpage={setSubpage} tasks={tasks} />}
       {subpage === "projects" && (
         PROJECTS_ENABLED
           ? <ProjectsPage projects={projects} collaborators={projectCollaborators} allUsers={allUsers} session={profile} refresh={refresh} flash={flash} tasks={projectTasks} projectModels={projectModels} models={config.models} />
@@ -1156,7 +1198,7 @@ export default function App() {
         <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {toast && (
-        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "#1A1A1A", color: "#fff", padding: "10px 20px", borderRadius: 4, fontSize: 13, fontFamily: "Inter, sans-serif", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", zIndex: 100 }}>
+        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "#1A1A1A", color: "#fff", padding: "10px 20px", borderRadius: 4, fontSize: 13, fontFamily: "Inter, sans-serif", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", zIndex: 1500 }}>
           {toast}
         </div>
       )}
@@ -1213,7 +1255,7 @@ function GlobalStyle() {
   );
 }
 
-function Shell({ session, subpage, setSubpage, onLogout, onLock, children, notifications, refreshNotifications, onOpenNotification }) {
+function Shell({ session, subpage, setSubpage, onLogout, onLock, children, notifications, refreshNotifications, onOpenNotification, tasks }) {
   const adminTabs = [
     ["records", "ALL RECORDS"], ["requirements", "ALL REQUIREMENTS"], ["branches", "ADD/REMOVE BRANCH"],
     ["models", "ADD MODEL"], ["viewmodels", "VIEW MODELS"], ["users", "ADD USERS"],
@@ -1228,7 +1270,7 @@ function Shell({ session, subpage, setSubpage, onLogout, onLock, children, notif
         </div>
         <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.03em", display: "flex", gap: 14, alignItems: "center" }}>
           <span><span style={{ color: "#8a8a8a" }}>{session.name} ·</span> {ROLE_LABEL[session.role].toUpperCase()}</span>
-          <DashboardMenu session={session} setSubpage={setSubpage} onLogout={onLogout} onLock={onLock} />
+          <DashboardMenu session={session} setSubpage={setSubpage} onLogout={onLogout} onLock={onLock} tasks={tasks} />
           <NotificationBell session={session} notifications={notifications} refreshNotifications={refreshNotifications} onOpen={onOpenNotification} />
         </div>
       </div>
@@ -2907,7 +2949,7 @@ function RequirementsPage({ items, profiles, orders, canDelete, canCreateOrder, 
 function RequirementDetail({ row, onClose, noPII }) {
   const p = row.profile;
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", justifyContent: "flex-end", zIndex: 50 }} className="no-print" onClick={onClose}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", justifyContent: "flex-end", zIndex: 400 }} className="no-print" onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", width: 520, maxWidth: "100%", height: "100%", overflowY: "auto", padding: "26px 28px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
@@ -4796,6 +4838,10 @@ function QualityCheckDialog({ order, session, stage = "production", onClose, onD
       if (stage === "production") {
         const { data: rw } = await supabase.from("job_order_rework").select("*").eq("job_order_id", order.id).eq("status", "completed").order("round", { ascending: false }).limit(1);
         reworkRow = rw && rw[0] ? rw[0] : null;
+      } else {
+        // store re-check of a piece that was sent back from this store and has since passed Production's check: only those points
+        const { data: rw } = await supabase.from("job_order_rework").select("*").eq("job_order_id", order.id).eq("source", "store").eq("status", "verified").is("store_verified_at", null).order("round", { ascending: false }).limit(1);
+        reworkRow = rw && rw[0] ? rw[0] : null;
       }
       const { data: std } = reworkRow ? { data: [] } : await supabase.from("qc_checklist_items").select("*").eq("stage", stage).eq("active", true).order("sort_order");
       const checks = reworkRow ? buildReworkChecks(reworkRow) : buildQcChecks(order, std || []);
@@ -4832,7 +4878,10 @@ function QualityCheckDialog({ order, session, stage = "production", onClose, onD
     }).eq("id", qc.id);
     if (e1) { setError(e1.message); setBusy(false); setMode(null); return; }
     // a re-check that follows a rework closes that rework
-    if (qc.rework_id) await supabase.from("job_order_rework").update({ status: "verified", verified_at: new Date().toISOString(), verified_by: session.name, qc_id: qc.id }).eq("id", qc.rework_id);
+    if (qc.rework_id) {
+      if (isStore) await supabase.rpc("store_rework_result", { p_rework_id: qc.rework_id, p_qc_id: qc.id, p_passed: true });   // Sales can't edit rework rows directly
+      else await supabase.from("job_order_rework").update({ status: "verified", verified_at: new Date().toISOString(), verified_by: session.name, qc_id: qc.id }).eq("id", qc.rework_id);
+    }
     const { error: e2 } = await advanceOrder(session, order, isStore ? "ready_in_stores" : "ready_in_production", null);
     setBusy(false);
     if (e2) { setError(e2.message); setMode(null); return; }
@@ -4850,7 +4899,10 @@ function QualityCheckDialog({ order, session, stage = "production", onClose, onD
       status: "failed", fail_reason: summary, fail_attachments: allFiles, notes: notes || null, completed_by: session.name, completed_at: new Date().toISOString(),
     }).eq("id", qc.id);
     if (e1) { setError(e1.message); setBusy(false); setMode(null); return; }
-    if (qc.rework_id) await supabase.from("job_order_rework").update({ status: "superseded" }).eq("id", qc.rework_id);   // the earlier rework didn't pass this check
+    if (qc.rework_id) {                                                  // the earlier rework didn't pass this check
+      if (isStore) await supabase.rpc("store_rework_result", { p_rework_id: qc.rework_id, p_qc_id: qc.id, p_passed: false });
+      else await supabase.from("job_order_rework").update({ status: "superseded" }).eq("id", qc.rework_id);
+    }
     const { error: e2 } = await advanceOrder(session, order, "job_rework", (isStore ? `Sent back from ${order.branch}: ` : "") + summary, null, allFiles);
     setBusy(false);
     if (e2) { setError(e2.message); setMode(null); return; }
@@ -5087,7 +5139,7 @@ async function createDeliveryNote(session, { branch, sendAt, carriedBy, notes, o
 }
 
 // items: [{ id, order }], received: { itemId: true/false }
-async function acceptDelivery(session, note, items, received) {
+async function acceptDelivery(session, note, items, received, signatureRef) {
   const now = new Date().toISOString();
   const missing = [];
   let got = 0;
@@ -5098,17 +5150,18 @@ async function acceptDelivery(session, note, items, received) {
     else { missing.push(it.order); await advanceOrder(session, it.order, "ready_in_production", `Not received at ${note.branch} (${note.note_no})`, null, null, { silent: true }); }
   }
   const status = missing.length === 0 ? "accepted" : "partial";
-  const { error } = await supabase.from("delivery_notes").update({ status, accepted_by: session.name, accepted_at: now }).eq("id", note.id);
+  const { error } = await supabase.from("delivery_notes").update({ status, accepted_by: session.name, accepted_at: now, accepted_signature_url: signatureRef || null }).eq("id", note.id);
   notify(session, `${note.note_no} ${missing.length ? "arrived with missing pieces" : "was accepted"} at ${note.branch}: ${got} of ${items.length} received${missing.length ? " — not received: " + missing.map((o) => o.jobOrderNo).join(", ") : ""}`,
     "delivery", note.branch, { type: "delivery", id: note.id }, { internal: true });   // Production and Admin only
   return { error };
 }
 
 // Opens a clean A4 delivery note in a new window and prints it
-function printDeliveryNote(note, rows) {
+async function printDeliveryNote(note, rows) {
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const w = window.open("", "_blank");
   if (!w) { window.alert("Please allow pop-ups to print the delivery note."); return; }
+  const sig = note.accepted_signature_url ? await resolveFileUrl(note.accepted_signature_url) : "";
   w.document.write(`<!doctype html><html><head><title>Delivery note ${esc(note.note_no)}</title><style>
     @page { size: A4 portrait; margin: 12mm; }
     body { font-family: Georgia, serif; color: #111; font-size: 13px; }
@@ -5131,7 +5184,7 @@ function printDeliveryNote(note, rows) {
   </tbody></table>
   <div style="margin-top:10px"><strong>Total pieces:</strong> ${rows.length}</div>
   ${note.attachments && note.attachments.length ? `<div>Photos / videos attached: ${note.attachments.length}</div>` : ""}
-  <div class="sign"><div>Sent by (Production)</div><div>Received by (${esc(note.branch)})</div></div>
+  <div class="sign"><div>Sent by (Production)</div><div>${note.accepted_by ? `Received by ${esc(note.accepted_by)}, ${esc(new Date(note.accepted_at).toLocaleString())}${sig ? `<br><img src="${esc(sig)}" style="height:60px">` : ""}` : `Received by (${esc(note.branch)})`}</div></div>
   <script>window.onload = function () { window.print(); };<\/script></body></html>`);
   w.document.close();
 }
@@ -5261,6 +5314,12 @@ function DeliveryNotesPage({ orders, session, refresh, flash, openRequest, clear
             <div style={{ fontSize: 13, margin: "8px 0", color: (DN_STATUS[viewNote.status] || [])[1], fontWeight: 700 }}>{(DN_STATUS[viewNote.status] || [viewNote.status])[0]}{viewNote.accepted_at ? ` — ${viewNote.accepted_by}, ${fmtDateTime(viewNote.accepted_at)}` : ""}</div>
             {viewNote.notes && <div style={{ fontSize: 13, marginBottom: 8 }}>Notes: {viewNote.notes}</div>}
             {viewNote.attachments && viewNote.attachments.length > 0 && <div style={{ margin: "10px 0" }}><div style={label13}>Photos / videos of the delivery</div><AttachmentGallery files={viewNote.attachments} /></div>}
+            {viewNote.accepted_by && (
+              <div style={{ margin: "10px 0" }}>
+                <div style={{ fontSize: 12.5 }}>Received by <strong>{viewNote.accepted_by}</strong> · {fmtDateTime(viewNote.accepted_at)}</div>
+                {viewNote.accepted_signature_url && <SecureImg src={viewNote.accepted_signature_url} style={{ width: 220, height: 70, objectFit: "contain", border: "1px solid #E5E5E5", borderRadius: 3, background: "#fff", marginTop: 4 }} />}
+              </div>
+            )}
             {rowsOf(viewNote.id).map((r) => (
               <div key={r.id} style={{ display: "flex", gap: 12, padding: "8px 0", borderBottom: "1px solid #F0F0F0", fontSize: 13.5, alignItems: "center" }}>
                 <span className="mono" style={{ fontWeight: 700, minWidth: 70 }}>{r.no}</span><span style={{ flex: 1 }}>{r.model}{r.cut ? ` · ${r.cut}` : ""}{r.color ? ` · ${r.color}` : ""}</span>
@@ -5294,6 +5353,9 @@ function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, 
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(null);
   const [qcOpen, setQcOpen] = useState({});
+  const sigRef = React.useRef(null);
+  const [signed, setSigned] = useState(false);
+  useEffect(() => { setSigned(false); }, [openId]);   // a fresh signature pad every time a delivery is opened
 
   const load = async () => {
     const { data: n } = await supabase.from("delivery_notes").select("*").order("created_at", { ascending: false }).limit(40);
@@ -5319,10 +5381,13 @@ function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, 
 
   const doAccept = async () => {
     setBusy(true);
-    const { error } = await acceptDelivery(session, note, rows.filter((r) => r.order && r.order.id), received);
+    const blob = sigRef.current ? await new Promise((r) => sigRef.current.toBlob(r, "image/png")) : null;
+    const up = blob ? await uploadCustomerFile(`delivery-signatures/${note.id}-${Date.now()}.png`, blob, "image/png") : { error: { message: "no signature drawn" } };
+    if (up.error) { flash("Couldn't save the signature: " + up.error.message); setBusy(false); setConfirm(false); return; }
+    const { error } = await acceptDelivery(session, note, rows.filter((r) => r.order && r.order.id), received, up.ref);
     setBusy(false); setConfirm(false);
     if (error) { flash("Error: " + error.message); return; }
-    flash(`${note.note_no} accepted`); setOpenId(null); refresh(); load();
+    flash(`${note.note_no} accepted`); setOpenId(null); setSigned(false); refresh(); load();
   };
 
   const th = { textAlign: "left", padding: "8px 10px", fontSize: 12.5, borderBottom: "2px solid #1A1A1A" };
@@ -5377,6 +5442,12 @@ function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, 
             </div>
             {note.notes && <div style={{ fontSize: 13, margin: "8px 0" }}>Notes: {note.notes}</div>}
             {note.attachments && note.attachments.length > 0 && <div style={{ margin: "10px 0" }}><div style={label13}>Photos / videos of the delivery</div><AttachmentGallery files={note.attachments} /></div>}
+            {note.accepted_by && (
+              <div style={{ margin: "10px 0" }}>
+                <div style={{ fontSize: 12.5 }}>Received by <strong>{note.accepted_by}</strong> · {fmtDateTime(note.accepted_at)}</div>
+                {note.accepted_signature_url && <SecureImg src={note.accepted_signature_url} style={{ width: 220, height: 70, objectFit: "contain", border: "1px solid #E5E5E5", borderRadius: 3, background: "#fff", marginTop: 4 }} />}
+              </div>
+            )}
             <div style={{ fontSize: 12.5, color: "#8a8a8a", margin: "10px 0 6px" }}>{note.status === "sent" ? "Tick each piece that has actually arrived." : (DN_STATUS[note.status] || [note.status])[0] + (note.accepted_at ? ` — ${note.accepted_by}, ${fmtDateTime(note.accepted_at)}` : "")}</div>
             {rows.map((r) => (
               <label key={r.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 6px", borderBottom: "1px solid #F0F0F0", cursor: note.status === "sent" ? "pointer" : "default" }}>
@@ -5389,10 +5460,17 @@ function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, 
               </label>
             ))}
             {note.status === "sent" && notReceived > 0 && <div style={{ color: "#C1302B", fontSize: 12.5, marginTop: 10 }}>{notReceived} piece{notReceived === 1 ? "" : "s"} not ticked — they go back to Production as "not received".</div>}
+            {note.status === "sent" && (
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Received by {session.name} — sign to accept</div>
+                <SignaturePad canvasRef={sigRef} onDrawn={setSigned} />
+              </div>
+            )}
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
               <button onClick={() => setOpenId(null)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Close</button>
-              {note.status === "sent" && <button onClick={() => setConfirm(true)} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Accept delivery</button>}
+              {note.status === "sent" && <button disabled={!signed} onClick={() => setConfirm(true)} style={{ background: signed ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Accept delivery</button>}
             </div>
+            {note.status === "sent" && !signed && <div style={{ fontSize: 11.5, color: "#8a8a8a", textAlign: "right", marginTop: 6 }}>Sign above to accept.</div>}
           </div>
         </div>
       )}
@@ -5500,7 +5578,7 @@ function ReworkRecord({ order }) {
     <div style={{ ...cardStyle, margin: "16px 0" }}>
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>REWORK RECORD</div>
       {rows.map((r) => {
-        const st = stat[r.status] || [r.status, "#1A1A1A"];
+        const st = r.status === "verified" && r.store_verified_at ? ["Verified — re-checked at the store", "#2F8F46"] : (stat[r.status] || [r.status, "#1A1A1A"]);
         return (
           <div key={r.id} style={{ marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid #EEE" }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: st[1] }}>Round {r.round} — {st[0]}</div>
@@ -5509,6 +5587,7 @@ function ReworkRecord({ order }) {
               {r.started_at && <> · started {fmtDateTime(r.started_at)} by {r.started_by}</>}
               {r.completed_at && <> · finished {fmtDateTime(r.completed_at)} by {r.completed_by}</>}
               {r.verified_at && <> · verified {fmtDateTime(r.verified_at)} by {r.verified_by}</>}
+              {r.store_verified_at && <> · re-checked at the store {fmtDateTime(r.store_verified_at)} by {r.store_verified_by}</>}
             </div>
             {r.comment && <div style={{ fontSize: 12.5, marginBottom: 6 }}><strong>Comment:</strong> {r.comment}</div>}
             {(r.points || []).map((p, i) => (
@@ -5565,7 +5644,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", justifyContent: "flex-end", zIndex: 50 }} className="no-print" onClick={onClose}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", justifyContent: "flex-end", zIndex: 400 }} className="no-print" onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", width: 520, maxWidth: "100%", height: "100%", overflowY: "auto", padding: "26px 28px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
           <div>
