@@ -47,6 +47,8 @@ const STATUS = {
   store_received: { label: "Delivery Accepted — Re-Quality Check", color: "#D98E2B" },
   ready_in_stores: { label: "Ready in Stores", color: "#1A1A1A" },
   delivery_assigned: { label: "Delivery Assigned", color: "#3B6FA0" },
+  shipment_packed: { label: "Packed — Awaiting Courier", color: "#D98E2B" },
+  shipped: { label: "Shipped", color: "#3B6FA0" },
 };
 
 // Internal production stages are hidden from everyone except Production and Admin; others see "Job In Process" instead.
@@ -57,7 +59,7 @@ const maskStatus = (status, role = VIEWER_ROLE) =>
   (role === "production" || role === "admin" || !PRODUCTION_ONLY.includes(status)) ? status : "public_in_process";
 const hidePII = (session) => !!session && session.role === "production";   // Production never sees a customer's name or mobile number
 // Statuses after production hands the order on: Production's own list drops them
-const AFTER_PRODUCTION = ["in_transit", "store_received", "ready_in_stores", "delivery_assigned", "ready_to_deliver", "delivered"];
+const AFTER_PRODUCTION = ["in_transit", "store_received", "ready_in_stores", "delivery_assigned", "shipment_packed", "shipped", "ready_to_deliver", "delivered"];
 // "Delivered to stores" = everything from Delivery to Stores onwards, so a piece is never lost from view
 const DELIVERED_STATUSES = AFTER_PRODUCTION;
 
@@ -121,6 +123,7 @@ const ROLE_HOME_CARDS = {
     ["📋", "All Records", "View and manage job orders", "records"],
     ["📦", "Incoming Deliveries", "Deliveries coming to your branch", "incoming"],
     ["🛵", "Customer Deliveries", "Assign drivers & track deliveries", "custdeliveries"],
+    ["✈️", "Courier Shipments", "DHL & courier parcels with photo proof", "shipments"],
     ["📐", "New Requirement", "Take fitting measurements", "requirement"],
     ["📄", "Requirement List", "Browse saved requirements", "requirements"],
     ["👤", "Customers", "Search profiles & history", "customers"],
@@ -154,6 +157,7 @@ const ROLE_HOME_CARDS = {
     ["🚚", "Delivery to Stores", "Send finished pieces to the branches", "deliveries"],
     ["📦", "Incoming Deliveries", "Deliveries coming to your branch", "incoming"],
     ["🛵", "Customer Deliveries", "Assign drivers & track deliveries", "custdeliveries"],
+    ["✈️", "Courier Shipments", "DHL & courier parcels with photo proof", "shipments"],
     ["🔐", "PIN & Devices", "Set PINs, approve showroom iPads", "pins"],
     ["🔔", "Notifications", "Everything that has happened", "notifications"],
     ["🗂️", "Projects", "Design team projects", "projects"],
@@ -195,6 +199,7 @@ function computeTasks(profile, orders, sentNotes) {
   if (sales) {
     put("incoming", [[sentNotes || 0, "delivery to accept"], [count("store_received", mine), "to re-check"]]);
     put("custdeliveries", [[count("ready_in_stores", mine), "ready to deliver"]]);
+    put("shipments", [[count("shipment_packed", mine), "awaiting courier"]]);
   }
   return t;
 }
@@ -487,6 +492,7 @@ function AttachmentGallery({ files }) {
               <SecureImg src={f.url} alt={f.name} onClick={() => setImg(f.url)} style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 4, cursor: "zoom-in", border: "1px solid #E5E5E5" }} />
             )}
             <div style={{ fontSize: 10.5, color: "#8a8a8a", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+            {f.taken_at && <div style={{ fontSize: 10, color: "#8a8a8a" }}>{fmtDateTime(f.taken_at)}</div>}
           </div>
         ))}
       </div>
@@ -497,7 +503,7 @@ function AttachmentGallery({ files }) {
 }
 
 // Editable: pick photos/videos, they upload straight away and appear as thumbnails with a remove ×.
-function AttachmentField({ files, onChange, disabled, folder }) {
+function AttachmentField({ files, onChange, disabled, folder, label, live }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const [img, setImg] = useState(null);
@@ -519,7 +525,7 @@ function AttachmentField({ files, onChange, disabled, folder }) {
       const path = `${folder || "order-files"}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${safe}`;
       const up = await uploadCustomerFile(path, file, file.type);
       if (up.error) { setError(`Couldn't upload "${file.name}": ${up.error.message}`); continue; }
-      added.push({ url: up.ref, name: file.name, type: isVideo ? "video" : "image" });
+      added.push({ url: up.ref, name: file.name, type: isVideo ? "video" : "image", taken_at: new Date(file.lastModified || Date.now()).toISOString(), uploaded_at: new Date().toISOString() });
     }
     setUploading(false);
     if (added.length) onChange([...list, ...added]);
@@ -528,7 +534,7 @@ function AttachmentField({ files, onChange, disabled, folder }) {
 
   return (
     <div>
-      <div style={label13}>Attachments (photos / videos)</div>
+      <div style={label13}>{label || "Attachments (photos / videos)"}</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-start" }}>
         {list.map((f, i) => (
           <div key={i} style={{ width: 96, position: "relative" }}>
@@ -546,8 +552,8 @@ function AttachmentField({ files, onChange, disabled, folder }) {
         {!disabled && (
           <label htmlFor={inputId} style={{ width: 96, height: 96, border: "1px dashed #C9CDD3", borderRadius: 4, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: uploading ? "wait" : "pointer", color: "#8a8a8a", fontSize: 12, textAlign: "center" }}>
             <span style={{ fontSize: 24, color: "#C9CDD3" }}>{uploading ? "…" : "+"}</span>
-            {uploading ? "Uploading" : "Add photo / video"}
-            <input id={inputId} type="file" accept="image/*,video/*" multiple onChange={pick} disabled={uploading} style={{ display: "none" }} />
+            {uploading ? "Uploading" : live ? "Take photo / video" : "Add photo / video"}
+            <input id={inputId} type="file" accept="image/*,video/*" capture={live ? "environment" : undefined} multiple onChange={pick} disabled={uploading} style={{ display: "none" }} />
           </label>
         )}
       </div>
@@ -601,7 +607,7 @@ async function advanceOrder(session, order, toStatus, comment, extra, files, opt
     const shown = toStatus === "job_accepted" ? STATUS.public_in_process.label : label;
     // no customer names in notifications — order number and model only
     // `silent` is used when one delivery moves several pieces: the delivery sends ONE notification instead of one per piece
-    const hideProd = ["store_received", "ready_in_stores", "delivery_assigned", "delivered"].includes(toStatus);   // the showroom side stays out of Production's feed
+    const hideProd = ["store_received", "ready_in_stores", "delivery_assigned", "shipment_packed", "shipped", "delivered"].includes(toStatus);   // the showroom side stays out of Production's feed
     if (!(opts && opts.silent)) notify(session, `${session.name}: ${shown} — order ${order.jobOrderNo} (${order.model})${comment ? " — " + comment : ""}`, "status", order.branch, { type: "order", id: order.id }, { internal, hideFromProduction: hideProd });
   }
   return { error };
@@ -1305,6 +1311,8 @@ export default function App() {
       setSubpage("incoming");
     } else if (type === "cdelivery" && (role === "sales" || role === "admin")) {
       setSubpage("custdeliveries");
+    } else if (type === "shipment" && (role === "sales" || role === "admin")) {
+      setSubpage("shipments");
     } else {
       return;                                                   // this role has no page for it — do nothing
     }
@@ -1385,25 +1393,28 @@ export default function App() {
       )}
       {subpage === "qcsetup" && profile.role === "admin" && <QcSetupPage flash={flash} />}
       {subpage === "notifications" && <NotificationsPage orders={orders} session={profile} onOpen={openFromNotification} />}
+      {subpage === "shipments" && (profile.role === "sales" || profile.role === "admin") && (
+        <ShipmentsPage orders={orders} session={profile} refresh={refresh} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
+      )}
       {subpage === "custdeliveries" && (profile.role === "sales" || profile.role === "admin") && (
         <CustomerDeliveriesPage orders={orders} models={config.models} session={profile} refresh={refresh} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {subpage === "pins" && profile.role === "admin" && (
         <PinsPage users={allUsers} branches={config.branches.map((b) => b.name)} session={profile} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && profile.role === "sales" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && subpage !== "shipments" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && profile.role === "production" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && subpage !== "shipments" && profile.role === "production" && (
         <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && profile.role === "admin" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && subpage !== "shipments" && profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && profile.role === "model_manager" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && subpage !== "shipments" && profile.role === "model_manager" && (
         <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {toast && (
@@ -5499,6 +5510,458 @@ function QcSetupPage({ flash }) {
   );
 }
 
+/* ---------------- Courier shipments (DHL, Aramex, FedEx…) ---------------- */
+
+const CARRIERS = ["DHL", "Aramex", "FedEx", "UPS", "Other"];
+const trackUrlOf = (carrier, no) => {
+  const n = encodeURIComponent(String(no || "").trim());
+  if (!n) return "";
+  return ({
+    DHL: `https://www.dhl.com/global-en/home/tracking.html?tracking-id=${n}`,
+    Aramex: `https://www.aramex.com/track/results?ShipmentNumber=${n}`,
+    FedEx: `https://www.fedex.com/fedextrack/?trknbr=${n}`,
+    UPS: `https://www.ups.com/track?tracknum=${n}`,
+  })[carrier] || "";
+};
+const SH_STATUS = { packed: ["Packed — awaiting courier", "#D98E2B"], shipped: ["Shipped", "#3B6FA0"], delivered: ["Delivered", "#2F8F46"], cancelled: ["Cancelled", "#8a8a8a"] };
+const shBase = (no) => String(no || "").replace(/-\d+$/, "");
+const shWhen = (iso) => (iso ? new Date(iso).toLocaleString([], { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
+const trackingMessage = (s) => `Hello ${s.customer_name}, your Moonlight Concept order has been shipped with ${s.carrier}.\nTracking number: ${s.tracking_no}${s.tracking_url ? "\nTrack it here: " + s.tracking_url : ""}`;
+const waLink = (mobile, text) => `https://wa.me/${String(mobile || "").replace(/\D/g, "")}?text=${encodeURIComponent(text)}`;
+
+// One printable / save-as-PDF page with every photo and the signature
+async function printShipmentEvidence(s, items) {
+  const w = window.open("", "_blank");
+  if (!w) { window.alert("Please allow pop-ups to print the evidence report."); return; }
+  w.document.write("<p style='font-family:sans-serif;padding:20px'>Preparing the evidence report…</p>");
+  const esc = (x) => String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const resolveAll = (arr) => Promise.all((arr || []).map(async (f) => ({ ...f, src: f.type === "video" ? "" : await resolveFileUrl(f.url) })));
+  const grid = (arr) => (arr.length === 0 ? "<p>—</p>" : `<div class="grid">${arr.map((f) => f.type === "video"
+    ? `<div class="vid">🎬 Video: ${esc(f.name)}${f.taken_at ? "<br>" + esc(shWhen(f.taken_at)) : ""}</div>`
+    : `<figure><img src="${f.src}"><figcaption>${esc(f.name)}${f.taken_at ? "<br>taken " + esc(shWhen(f.taken_at)) : ""}</figcaption></figure>`).join("")}</div>`);
+  const parcel = await resolveAll(s.parcel_files);
+  const pickup = await resolveAll(s.pickup_files);
+  const delivered = await resolveAll(s.delivered_files);
+  const sig = s.pickup_signature_url ? await resolveFileUrl(s.pickup_signature_url) : "";
+  const its = await Promise.all(items.map(async (i) => ({ ...i, files: await resolveAll(i.files) })));
+  const st = (SH_STATUS[s.status] || [s.status])[0];
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><title>Shipment evidence ${esc(s.shipment_no)}</title><style>
+    @page { size: A4 portrait; margin: 12mm; }
+    body { font-family: Georgia, serif; color: #111; font-size: 12.5px; }
+    h1 { font-size: 20px; letter-spacing: 2px; margin: 0 0 4px; } h2 { font-size: 14px; margin: 18px 0 6px; border-bottom: 2px solid #111; padding-bottom: 3px; }
+    .meta div { margin: 2px 0; } .grid { display: flex; flex-wrap: wrap; gap: 10px; }
+    figure { margin: 0; width: 160px; } img { width: 160px; height: 160px; object-fit: cover; border: 1px solid #bbb; } figcaption { font-size: 10px; color: #555; }
+    .vid { border: 1px solid #bbb; padding: 10px; font-size: 11px; } .piece { margin-bottom: 12px; page-break-inside: avoid; } .sig { height: 70px; border: 1px solid #bbb; }
+    .foot { margin-top: 20px; font-size: 10.5px; color: #555; border-top: 1px solid #bbb; padding-top: 6px; }
+  </style></head><body>
+  <h1>MOONLIGHT CONCEPT — SHIPMENT EVIDENCE</h1>
+  <div class="meta">
+    <div><strong>Shipment:</strong> ${esc(s.shipment_no)} · <strong>Status:</strong> ${esc(st)}</div>
+    <div><strong>Courier:</strong> ${esc(s.carrier)} · <strong>Tracking no:</strong> ${esc(s.tracking_no)}${s.tracking_url ? ` (${esc(s.tracking_url)})` : ""}</div>
+    ${s.reference ? `<div><strong>Order reference:</strong> ${esc(s.reference)}</div>` : ""}
+    <div><strong>Recipient:</strong> ${esc(s.customer_name)}${s.customer_mobile ? " · " + esc(s.customer_mobile) : ""}</div>
+    <div><strong>Destination:</strong> ${esc(s.destination)}</div>
+    ${s.weight ? `<div><strong>Weight:</strong> ${esc(s.weight)}</div>` : ""}
+    <div><strong>Packed by:</strong> ${esc(s.packed_by)} on ${esc(shWhen(s.packed_at))}</div>
+    ${s.picked_up_at ? `<div><strong>Collected by courier:</strong> ${esc(s.courier_agent)}${s.courier_agent_id ? " (ID " + esc(s.courier_agent_id) + ")" : ""} on ${esc(shWhen(s.picked_up_at))} — handed over by ${esc(s.picked_up_by)}</div>` : ""}
+    ${s.delivered_at ? `<div><strong>Delivered:</strong> ${esc(shWhen(s.delivered_at))}${s.delivered_note ? " — " + esc(s.delivered_note) : ""}</div>` : ""}
+  </div>
+  <h2>1. Pieces in the parcel (${its.length})</h2>
+  ${its.map((i) => `<div class="piece"><strong>${esc(i.order_no)}</strong> — ${esc(i.model)}${i.cut ? " · " + esc(i.cut) : ""}${i.color ? " · " + esc(i.color) : ""}${grid(i.files)}</div>`).join("")}
+  <h2>2. The sealed parcel and shipping label</h2>${grid(parcel)}
+  ${s.picked_up_at ? `<h2>3. Handed to the courier</h2>${grid(pickup)}<p><strong>Courier signature:</strong> ${esc(s.courier_agent)}</p>${sig ? `<img class="sig" src="${sig}" style="width:240px;object-fit:contain">` : ""}${s.pickup_note ? `<p>${esc(s.pickup_note)}</p>` : ""}` : ""}
+  ${s.delivered_at && delivered.length ? `<h2>4. Delivery confirmation</h2>${grid(delivered)}` : ""}
+  <div class="foot">Created in the Moonlight Concept system. The packing time and the handover time are recorded by the server, and the packing record, photos and courier signature cannot be changed after the parcel was handed to the courier. Report printed ${esc(new Date().toLocaleString())}.</div>
+  <script>window.onload = function () { setTimeout(function () { window.print(); }, 600); };<\/script></body></html>`);
+  w.document.close();
+}
+
+function ShipmentsPage({ orders, session, refresh, flash, openRequest, clearOpenRequest }) {
+  const [shipments, setShipments] = useState([]);
+  const [items, setItems] = useState([]);
+  const [selected, setSelected] = useState([]);
+  const [dlg, setDlg] = useState(null);          // { type: "pack" | "view" | "pickup" | "delivered" | "cancel", id? }
+  const [q, setQ] = useState("");
+  const mine = (o) => session.role === "admin" || o.branch === session.branch;
+
+  const load = async () => {
+    const { data: s } = await supabase.from("shipments").select("*").order("packed_at", { ascending: false }).limit(200);
+    setShipments(s || []);
+    const ids = (s || []).map((x) => x.id);
+    if (ids.length) { const { data: it } = await supabase.from("shipment_items").select("*").in("shipment_id", ids); setItems(it || []); } else setItems([]);
+  };
+  useEffect(() => { load(); }, [orders]); // eslint-disable-line
+  useEffect(() => { if (openRequest && openRequest.type === "shipment") { setDlg({ type: "view", id: openRequest.id }); clearOpenRequest(); } }, [openRequest]); // eslint-disable-line
+
+  const itemsOf = (id) => items.filter((i) => i.shipment_id === id);
+  const ready = orders.filter((o) => o.status === "ready_in_stores" && mine(o)).sort((a, b) => String(a.jobOrderNo).localeCompare(String(b.jobOrderNo), undefined, { numeric: true }));
+  const groups = [];
+  ready.forEach((o) => {
+    const b = shBase(o.jobOrderNo);
+    let g = groups.find((x) => x.base === b && x.mobile === o.mobile);
+    if (!g) { g = { base: b, name: o.name, mobile: o.mobile, pieces: [] }; groups.push(g); }
+    g.pieces.push(o);
+  });
+  const chosen = ready.filter((o) => selected.includes(o.id));
+  const toggle = (o) => setSelected((s) => (s.includes(o.id) ? s.filter((x) => x !== o.id) : [...s, o.id]));
+  const selectGroup = (g) => setSelected((s) => { const all = g.pieces.every((p) => s.includes(p.id)); return all ? s.filter((id) => !g.pieces.some((p) => p.id === id)) : [...new Set([...s, ...g.pieces.map((p) => p.id)])]; });
+
+  const needle = q.trim().toLowerCase();
+  const match = (s) => !needle || [s.shipment_no, s.tracking_no, s.reference, s.customer_name, s.carrier, s.courier_agent].some((v) => String(v || "").toLowerCase().includes(needle)) || itemsOf(s.id).some((i) => String(i.order_no).toLowerCase().includes(needle));
+  const shown = shipments.filter(match);
+  const awaiting = shown.filter((s) => s.status === "packed");
+  const shippedList = shown.filter((s) => s.status === "shipped");
+  const doneList = shown.filter((s) => s.status === "delivered" || s.status === "cancelled").slice(0, 40);
+  const finish = (msg) => { setDlg(null); setSelected([]); if (msg) flash(msg); refresh(); load(); };
+  const current = dlg && dlg.id ? shipments.find((s) => s.id === dlg.id) : null;
+
+  const Card = ({ s, tone }) => (
+    <div onClick={() => setDlg({ type: "view", id: s.id })} style={{ border: "1px solid " + tone[0], background: tone[1], borderRadius: 8, padding: "12px 16px", marginBottom: 10, cursor: "pointer" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div><span className="mono" style={{ fontWeight: 700 }}>{s.shipment_no}</span> · <strong>{s.carrier}</strong> <span className="mono">{s.tracking_no}</span></div>
+        <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{s.status === "shipped" ? `collected ${shWhen(s.picked_up_at)}` : `packed ${shWhen(s.packed_at)}`}</div>
+      </div>
+      <div style={{ fontSize: 13, marginTop: 4 }}>{s.customer_name} — {s.destination}</div>
+      <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{itemsOf(s.id).map((i) => i.order_no).join(", ")} · 📷 {(s.parcel_files || []).length + itemsOf(s.id).reduce((n, i) => n + (i.files || []).length, 0)} photos/videos saved</div>
+    </div>
+  );
+
+  return (
+    <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 6 }}>COURIER SHIPMENTS</h2>
+      <div style={{ textAlign: "center", fontSize: 12, color: "#8a8a8a", marginBottom: 16 }}>DHL and other couriers — every parcel is photographed and signed for, so you can prove what was sent.</div>
+      <div style={{ textAlign: "center", marginBottom: 18 }}><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tracking no, order no, customer, courier…" style={{ ...inputStyle, width: 340, maxWidth: "100%" }} /></div>
+
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>READY TO SHIP ({ready.length})</div>
+      {ready.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14, padding: "6px 0 22px" }}>No pieces are waiting to be shipped.</div> : groups.map((g) => (
+        <div key={g.base + g.mobile} style={{ border: "1px solid #DDE1E7", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+            <div><strong>Order {g.base}</strong> · {g.name} · {g.mobile}</div>
+            <a className="link" style={{ fontSize: 12.5 }} onClick={() => selectGroup(g)}>{g.pieces.every((p) => selected.includes(p.id)) ? "Unselect all" : "Select all pieces"}</a>
+          </div>
+          {g.pieces.map((o) => (
+            <label key={o.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "9px 6px", borderTop: "1px solid #F0F0F0", cursor: "pointer" }}>
+              <input type="checkbox" checked={selected.includes(o.id)} onChange={() => toggle(o)} style={{ width: 20, height: 20 }} />
+              <span className="mono" style={{ fontWeight: 700, minWidth: 70 }}>{o.jobOrderNo}</span>
+              <span style={{ flex: 1, fontSize: 13.5 }}>{o.model}{o.cut ? ` · ${o.cut}` : ""}{o.color ? ` · ${o.color}` : ""}</span>
+            </label>
+          ))}
+        </div>
+      ))}
+      {chosen.length > 0 && (
+        <div style={{ position: "sticky", bottom: 12, background: "#1A1A1A", color: "#fff", borderRadius: 10, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", marginBottom: 16 }}>
+          <div style={{ fontSize: 13.5 }}>{chosen.length} piece{chosen.length === 1 ? "" : "s"} selected</div>
+          <button onClick={() => setDlg({ type: "pack" })} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 6, padding: "10px 20px", fontWeight: 700 }}>✈️ Pack for courier</button>
+        </div>
+      )}
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "22px 0 8px" }}>PACKED — AWAITING THE COURIER ({awaiting.length})</div>
+      {awaiting.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14 }}>Nothing is waiting for a courier.</div> : awaiting.map((s) => <Card key={s.id} s={s} tone={["#EBCB8B", "#FFFBF2"]} />)}
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "22px 0 8px" }}>SHIPPED ({shippedList.length})</div>
+      {shippedList.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14 }}>No parcels are on their way.</div> : shippedList.map((s) => <Card key={s.id} s={s} tone={["#BBD0E6", "#F4F8FC"]} />)}
+
+      {doneList.length > 0 && (<>
+        <div style={{ fontWeight: 700, fontSize: 13, margin: "22px 0 8px" }}>DELIVERED / CANCELLED</div>
+        {doneList.map((s) => <Card key={s.id} s={s} tone={["#E1E5EA", "#fff"]} />)}
+      </>)}
+
+      {dlg && dlg.type === "pack" && <ShipmentPackDialog pieces={chosen} session={session} onClose={() => setDlg(null)} onDone={() => finish("Packed — evidence saved. Waiting for the courier.")} />}
+      {dlg && dlg.type === "view" && current && (
+        <ShipmentViewDialog s={current} items={itemsOf(current.id)} flash={flash} onClose={() => setDlg(null)}
+          onPickup={() => setDlg({ type: "pickup", id: current.id })} onDelivered={() => setDlg({ type: "delivered", id: current.id })} onCancel={() => setDlg({ type: "cancel", id: current.id })} />
+      )}
+      {dlg && dlg.type === "pickup" && current && <ShipmentPickupDialog s={current} session={session} onClose={() => setDlg({ type: "view", id: current.id })} onDone={() => finish("Handover recorded — shipped")} />}
+      {dlg && dlg.type === "delivered" && current && <ShipmentDeliveredDialog s={current} onClose={() => setDlg({ type: "view", id: current.id })} onDone={() => finish("Marked delivered")} />}
+      {dlg && dlg.type === "cancel" && current && <ShipmentCancelDialog s={current} onClose={() => setDlg({ type: "view", id: current.id })} onDone={() => finish("Shipment cancelled — pieces are back in the store")} />}
+    </div>
+  );
+}
+
+function ShipmentPackDialog({ pieces, session, onClose, onDone }) {
+  const first = pieces[0];
+  const [carrier, setCarrier] = useState("DHL");
+  const [otherCarrier, setOtherCarrier] = useState("");
+  const [tracking, setTracking] = useState("");
+  const [reference, setReference] = useState("");
+  const [name, setName] = useState(first.name || "");
+  const [mobile, setMobile] = useState(first.mobile || "");
+  const [destination, setDestination] = useState("");
+  const [weight, setWeight] = useState("");
+  const [notes, setNotes] = useState("");
+  const [itemFiles, setItemFiles] = useState({});
+  const [parcel, setParcel] = useState([]);
+  const [confirmed, setConfirmed] = useState(false);
+  const [error, setError] = useState("");
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const carrierName = carrier === "Other" ? otherCarrier.trim() : carrier;
+
+  useEffect(() => {   // pre-fill the address kept on the customer's profile
+    supabase.from("customer_profiles").select("address").eq("mobile", first.mobile).limit(1).then(({ data }) => { if (data && data[0] && data[0].address) setDestination(data[0].address); });
+  }, []); // eslint-disable-line
+
+  const check = () => {
+    if (!carrierName) return "Choose or type the courier.";
+    if (!tracking.trim()) return "Enter the tracking number.";
+    if (!name.trim() || !destination.trim()) return "The recipient's name and the destination address are needed.";
+    for (const p of pieces) if ((itemFiles[p.id] || []).length < 1) return `Add at least one photo of piece ${p.jobOrderNo}.`;
+    if (parcel.length < 1) return "Add a photo of the sealed parcel with the shipping label.";
+    if (!confirmed) return "Tick the confirmation that these exact pieces are in the parcel.";
+    return "";
+  };
+  const save = async () => {
+    setBusy(true); setError("");
+    const { error: e } = await supabase.rpc("create_shipment", {
+      p_order_ids: pieces.map((p) => p.id), p_carrier: carrierName, p_tracking_no: tracking.trim(), p_tracking_url: trackUrlOf(carrierName, tracking) || null,
+      p_reference: reference.trim() || null, p_customer_name: name.trim(), p_customer_mobile: mobile.trim() || null, p_destination: destination.trim(),
+      p_weight: weight.trim() || null, p_notes: notes.trim() || null, p_parcel_files: parcel,
+      p_item_files: Object.fromEntries(pieces.map((p) => [p.id, itemFiles[p.id] || []])),
+    });
+    setBusy(false); setConfirm(false);
+    if (e) { setError(e.message.includes("shipments_tracking_unique") ? "That tracking number is already used for another shipment." : e.message); return; }
+    onDone();
+  };
+
+  const row = { marginBottom: 12 };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 12 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 22, width: "100%", maxWidth: 720 }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 2 }}>Pack for courier</div>
+        <div style={{ fontSize: 12.5, color: "#8a8a8a", marginBottom: 14 }}>Take the photos as you pack — they become the proof of what was sent.</div>
+
+        <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.05em", marginBottom: 8 }}>1. THE COURIER</div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ ...row, minWidth: 150 }}><div style={label13}>Courier *</div><select value={carrier} onChange={(e) => setCarrier(e.target.value)} style={inputStyle}>{CARRIERS.map((c) => <option key={c}>{c}</option>)}</select></div>
+          {carrier === "Other" && <div style={{ ...row, minWidth: 160 }}><div style={label13}>Courier name *</div><input value={otherCarrier} onChange={(e) => setOtherCarrier(e.target.value)} style={inputStyle} /></div>}
+          <div style={{ ...row, flex: 1, minWidth: 220 }}><div style={label13}>Tracking number *</div><input value={tracking} onChange={(e) => setTracking(e.target.value)} style={inputStyle} placeholder="e.g. 1234567890" /></div>
+          <div style={{ ...row, minWidth: 160 }}><div style={label13}>E-commerce order ref</div><input value={reference} onChange={(e) => setReference(e.target.value)} style={inputStyle} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ ...row, flex: 1, minWidth: 200 }}><div style={label13}>Recipient *</div><input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} /></div>
+          <div style={{ ...row, flex: 1, minWidth: 180 }}><div style={label13}>Mobile</div><input value={mobile} onChange={(e) => setMobile(e.target.value)} style={inputStyle} /></div>
+          <div style={{ ...row, width: 110 }}><div style={label13}>Weight</div><input value={weight} onChange={(e) => setWeight(e.target.value)} style={inputStyle} placeholder="kg" /></div>
+        </div>
+        <div style={row}><div style={label13}>Destination address (with country) *</div><textarea value={destination} onChange={(e) => setDestination(e.target.value)} style={{ ...inputStyle, minHeight: 60 }} /></div>
+
+        <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.05em", margin: "16px 0 8px" }}>2. PHOTOS OF EACH PIECE (required)</div>
+        {pieces.map((p) => (
+          <div key={p.id} style={{ border: "1px solid #E1E5EA", borderRadius: 8, padding: 10, marginBottom: 10 }}>
+            <div style={{ fontSize: 13.5, marginBottom: 6 }}><strong className="mono">{p.jobOrderNo}</strong> · {p.model}{p.cut ? ` · ${p.cut}` : ""}{p.color ? ` · ${p.color}` : ""}</div>
+            <AttachmentField files={itemFiles[p.id] || []} onChange={(f) => setItemFiles((m) => ({ ...m, [p.id]: f }))} folder="shipment-files" live label="Photos of this piece going into the parcel (front, details, label)" />
+          </div>
+        ))}
+
+        <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.05em", margin: "16px 0 8px" }}>3. THE SEALED PARCEL (required)</div>
+        <AttachmentField files={parcel} onChange={setParcel} folder="shipment-files" live label="Sealed parcel with the shipping label and tracking number visible — a short packing video is welcome" />
+
+        <div style={{ ...row, marginTop: 14 }}><div style={label13}>Notes (optional)</div><input value={notes} onChange={(e) => setNotes(e.target.value)} style={inputStyle} /></div>
+        <label style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 14, margin: "10px 0", cursor: "pointer" }}>
+          <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} style={{ width: 20, height: 20, marginTop: 1 }} />
+          <span>I confirm the pieces shown in the photos are the ones inside this parcel. <span style={{ color: "#8a8a8a" }}>(Recorded as {session.name})</span></span>
+        </label>
+        {error && <div style={{ color: "#C1302B", fontSize: 13.5, marginBottom: 8 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
+          <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 20px", fontWeight: 700 }}>Cancel</button>
+          <button onClick={() => { const p = check(); if (p) setError(p); else { setError(""); setConfirm(true); } }} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontWeight: 700 }}>Save packing record</button>
+        </div>
+      </div>
+      {confirm && (
+        <ConfirmDialog title="Save the packing record?" confirmLabel="Yes, save" busy={busy} onCancel={() => setConfirm(false)} onConfirm={save}>
+          {pieces.length} piece{pieces.length === 1 ? "" : "s"} become <strong>Packed — Awaiting Courier</strong> with {carrierName} tracking <strong>{tracking.trim()}</strong>. The photos and the packing time are saved as evidence.
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
+function ShipmentPickupDialog({ s, session, onClose, onDone }) {
+  const [agent, setAgent] = useState("");
+  const [agentId, setAgentId] = useState("");
+  const [files, setFiles] = useState([]);
+  const [note, setNote] = useState("");
+  const [signed, setSigned] = useState(false);
+  const sigCanvas = React.useRef(null);
+  const [error, setError] = useState("");
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const check = () => {
+    if (!agent.trim()) return `Enter the ${s.carrier} agent's name.`;
+    if (files.length < 1) return "Add at least one photo of the handover (the agent with the parcel).";
+    if (!signed) return "The courier agent must sign on the screen.";
+    return "";
+  };
+  const save = async () => {
+    setBusy(true); setError("");
+    const blob = sigCanvas.current ? await new Promise((r) => sigCanvas.current.toBlob(r, "image/png")) : null;
+    const up = blob ? await uploadCustomerFile(`shipment-files/pickup-sig-${s.id}-${Date.now()}.png`, blob, "image/png") : { error: { message: "no signature" } };
+    if (up.error) { setError("Couldn't save the signature: " + up.error.message); setBusy(false); setConfirm(false); return; }
+    const { error: e } = await supabase.rpc("record_courier_pickup", { p_shipment_id: s.id, p_agent: agent.trim(), p_agent_id: agentId.trim() || null, p_files: files, p_signature: up.ref, p_note: note.trim() || null });
+    setBusy(false); setConfirm(false);
+    if (e) { setError(e.message); return; }
+    onDone();
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1050, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 12 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 22, width: "100%", maxWidth: 560 }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 2 }}>{s.carrier} collected the parcel</div>
+        <div style={{ fontSize: 13, color: "#5a5a5a", marginBottom: 14 }}><span className="mono">{s.shipment_no}</span> · tracking <span className="mono">{s.tracking_no}</span></div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+          <div style={{ flex: 1, minWidth: 200 }}><div style={label13}>Courier agent's name *</div><input value={agent} onChange={(e) => setAgent(e.target.value)} style={inputStyle} /></div>
+          <div style={{ flex: 1, minWidth: 160 }}><div style={label13}>Agent ID / badge no (optional)</div><input value={agentId} onChange={(e) => setAgentId(e.target.value)} style={inputStyle} /></div>
+        </div>
+        <AttachmentField files={files} onChange={setFiles} folder="shipment-files" live label="Photos of the handover — the agent taking the parcel (and the courier's pickup receipt, if any) *" />
+        <div style={{ ...label13, marginTop: 14 }}>Courier agent's signature *</div>
+        <SignaturePad canvasRef={sigCanvas} onDrawn={setSigned} />
+        <div style={{ marginTop: 12 }}><div style={label13}>Note (optional)</div><input value={note} onChange={(e) => setNote(e.target.value)} style={inputStyle} /></div>
+        {error && <div style={{ color: "#C1302B", fontSize: 13.5, marginTop: 10 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
+          <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 20px", fontWeight: 700 }}>Back</button>
+          <button onClick={() => { const p = check(); if (p) setError(p); else { setError(""); setConfirm(true); } }} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontWeight: 700 }}>Record handover</button>
+        </div>
+      </div>
+      {confirm && <ConfirmDialog title="Record the handover?" confirmLabel="Yes, record it" busy={busy} onCancel={() => setConfirm(false)} onConfirm={save}>The pieces become <strong>Shipped</strong>. After this the packing record, photos and signature are locked and can never be changed.</ConfirmDialog>}
+    </div>
+  );
+}
+
+function ShipmentDeliveredDialog({ s, onClose, onDone }) {
+  const [note, setNote] = useState("");
+  const [files, setFiles] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const save = async () => {
+    setBusy(true);
+    const { error: e } = await supabase.rpc("mark_shipment_delivered", { p_shipment_id: s.id, p_note: note.trim() || null, p_files: files });
+    setBusy(false);
+    if (e) { setError(e.message); return; }
+    onDone();
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1050, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 22, width: "100%", maxWidth: 480 }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 4 }}>Mark as delivered</div>
+        <div style={{ fontSize: 13, color: "#5a5a5a", marginBottom: 12 }}>Confirm from the {s.carrier} tracking page for <span className="mono">{s.tracking_no}</span>. A screenshot of "Delivered" is a good record.</div>
+        <AttachmentField files={files} onChange={setFiles} folder="shipment-files" label="Screenshot / proof of delivery (optional)" />
+        <div style={{ marginTop: 12 }}><div style={label13}>Note (optional)</div><input value={note} onChange={(e) => setNote(e.target.value)} style={inputStyle} placeholder="e.g. signed for by the customer" /></div>
+        {error && <div style={{ color: "#C1302B", fontSize: 13.5, marginTop: 10 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
+          <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 20px", fontWeight: 700 }}>Back</button>
+          <button disabled={busy} onClick={save} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontWeight: 700 }}>{busy ? "Saving…" : "Mark delivered"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShipmentCancelDialog({ s, onClose, onDone }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const save = async () => {
+    setBusy(true);
+    const { error: e } = await supabase.rpc("cancel_shipment", { p_shipment_id: s.id, p_reason: reason.trim() });
+    setBusy(false);
+    if (e) { setError(e.message); return; }
+    onDone();
+  };
+  return (
+    <ConfirmDialog title={`Cancel ${s.shipment_no}?`} confirmLabel="Yes, cancel it" busy={busy} confirmDisabled={!reason.trim()} onCancel={onClose} onConfirm={save}>
+      The pieces go back to <strong>Ready in Stores</strong>. (A parcel the courier has already taken can't be cancelled.)
+      <textarea value={reason} onChange={(e) => setReason(e.target.value)} style={{ ...inputStyle, minHeight: 60, marginTop: 10 }} placeholder="Reason (required)" />
+      {error && <div style={{ color: "#C1302B", fontSize: 13, marginTop: 6 }}>{error}</div>}
+    </ConfirmDialog>
+  );
+}
+
+function ShipmentViewDialog({ s, items, flash, onClose, onPickup, onDelivered, onCancel }) {
+  const st = SH_STATUS[s.status] || [s.status, "#1A1A1A"];
+  const Section = ({ title, children }) => (<div style={{ marginTop: 14 }}><div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.05em", color: "#5a5a5a", marginBottom: 6 }}>{title}</div>{children}</div>);
+  const copy = (text) => { try { navigator.clipboard.writeText(text); flash("Copied"); } catch (e) { window.prompt("Copy this message:", text); } };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 12 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 8, padding: 22, width: "100%", maxWidth: 700 }}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <div>
+            <div className="mono" style={{ fontSize: 20, fontWeight: 700 }}>{s.shipment_no}</div>
+            <div style={{ fontSize: 13, color: st[1], fontWeight: 700 }}>{st[0]}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 24, color: "#8a8a8a" }}>×</button>
+        </div>
+        <div style={{ fontSize: 13.5, lineHeight: 1.8, margin: "10px 0" }}>
+          <div><strong>{s.carrier}</strong> · tracking <span className="mono">{s.tracking_no}</span> {s.tracking_url && <a className="link" href={s.tracking_url} target="_blank" rel="noreferrer">Track ↗</a>}</div>
+          {s.reference && <div><strong>Order ref:</strong> {s.reference}</div>}
+          <div><strong>To:</strong> {s.customer_name}{s.customer_mobile ? ` · ${s.customer_mobile}` : ""}</div>
+          <div><strong>Destination:</strong> {s.destination}{s.weight ? ` · ${s.weight}` : ""}</div>
+          <div><strong>Packed by:</strong> {s.packed_by} · {shWhen(s.packed_at)}</div>
+          {s.picked_up_at && <div><strong>Collected by:</strong> {s.courier_agent}{s.courier_agent_id ? ` (ID ${s.courier_agent_id})` : ""} · {shWhen(s.picked_up_at)} · handed over by {s.picked_up_by}</div>}
+          {s.delivered_at && <div><strong>Delivered:</strong> {shWhen(s.delivered_at)}{s.delivered_note ? ` — ${s.delivered_note}` : ""}</div>}
+          {s.cancelled_at && <div style={{ color: "#C1302B" }}><strong>Cancelled:</strong> {s.cancelled_reason} · {shWhen(s.cancelled_at)} · {s.cancelled_by}</div>}
+          {s.notes && <div><strong>Notes:</strong> {s.notes}</div>}
+        </div>
+        <Section title={`PIECES IN THE PARCEL (${items.length})`}>
+          {items.map((i) => (
+            <div key={i.id} style={{ border: "1px solid #E1E5EA", borderRadius: 8, padding: 10, marginBottom: 8 }}>
+              <div style={{ fontSize: 13.5, marginBottom: 6 }}><strong className="mono">{i.order_no}</strong> · {i.model}{i.cut ? ` · ${i.cut}` : ""}{i.color ? ` · ${i.color}` : ""}</div>
+              <AttachmentGallery files={i.files} />
+            </div>
+          ))}
+        </Section>
+        <Section title="THE SEALED PARCEL"><AttachmentGallery files={s.parcel_files} /></Section>
+        {s.picked_up_at && (
+          <Section title="HANDED TO THE COURIER">
+            <AttachmentGallery files={s.pickup_files} />
+            {s.pickup_signature_url && <div style={{ marginTop: 8 }}><div style={{ fontSize: 11.5, color: "#8a8a8a" }}>Signed by {s.courier_agent}</div><SecureImg src={s.pickup_signature_url} style={{ width: 220, height: 70, objectFit: "contain", border: "1px solid #E5E5E5", borderRadius: 3, background: "#fff" }} /></div>}
+            {s.pickup_note && <div style={{ fontSize: 13, marginTop: 6 }}>{s.pickup_note}</div>}
+          </Section>
+        )}
+        {s.delivered_at && (s.delivered_files || []).length > 0 && <Section title="DELIVERY CONFIRMATION"><AttachmentGallery files={s.delivered_files} /></Section>}
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end", marginTop: 18, paddingTop: 14, borderTop: "1px solid #EEE" }}>
+          <button onClick={() => printShipmentEvidence(s, items)} style={{ background: "#fff", border: "1.5px solid #3B6FA0", color: "#2F5F8F", borderRadius: 6, padding: "10px 16px", fontWeight: 700 }}>🖨 Evidence report (print / PDF)</button>
+          {(s.status === "shipped" || s.status === "delivered") && (<>
+            <button onClick={() => copy(trackingMessage(s))} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 6, padding: "10px 16px", fontWeight: 700 }}>Copy tracking message</button>
+            {s.customer_mobile && <a href={waLink(s.customer_mobile, trackingMessage(s))} target="_blank" rel="noreferrer" style={{ textDecoration: "none", background: "#25D366", color: "#fff", borderRadius: 6, padding: "10px 16px", fontWeight: 700 }}>Send on WhatsApp</a>}
+          </>)}
+          {s.status === "packed" && (<>
+            <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #E8B9B6", color: "#C1302B", borderRadius: 6, padding: "10px 16px", fontWeight: 700 }}>Cancel shipment</button>
+            <button onClick={onPickup} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 6, padding: "10px 18px", fontWeight: 700 }}>Courier collected</button>
+          </>)}
+          {s.status === "shipped" && <button onClick={onDelivered} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 6, padding: "10px 18px", fontWeight: 700 }}>Mark delivered</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShipmentRecord({ order }) {
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    supabase.from("shipment_items").select("*, shipment:shipments(*)").eq("job_order_id", order.id)
+      .then(({ data }) => setRows((data || []).filter((r) => r.shipment).sort((a, b) => new Date(b.shipment.packed_at) - new Date(a.shipment.packed_at))));
+  }, [order.id, order.status]);
+  if (rows.length === 0) return null;
+  return (
+    <div style={{ ...cardStyle, margin: "16px 0" }}>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>COURIER SHIPMENT RECORD</div>
+      {rows.map((r) => {
+        const s = r.shipment; const st = SH_STATUS[s.status] || [s.status, "#1A1A1A"];
+        return (
+          <div key={r.id} style={{ marginBottom: 14, paddingBottom: 10, borderBottom: "1px solid #EEE", fontSize: 12.5, lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 700, color: st[1] }}><span className="mono">{s.shipment_no}</span> — {s.carrier} · {st[0]}</div>
+            <div>Tracking <span className="mono">{s.tracking_no}</span> {s.tracking_url && <a className="link" href={s.tracking_url} target="_blank" rel="noreferrer">Track ↗</a>}</div>
+            <div>Packed by {s.packed_by} · {shWhen(s.packed_at)}{s.picked_up_at ? ` · collected by ${s.courier_agent} · ${shWhen(s.picked_up_at)}` : ""}</div>
+            <div style={{ margin: "6px 0 2px", color: "#8a8a8a" }}>This piece in the parcel:</div><AttachmentGallery files={r.files} />
+            <div style={{ margin: "6px 0 2px", color: "#8a8a8a" }}>Sealed parcel:</div><AttachmentGallery files={s.parcel_files} />
+            {s.picked_up_at && (<><div style={{ margin: "6px 0 2px", color: "#8a8a8a" }}>Handover to the courier:</div><AttachmentGallery files={s.pickup_files} /></>)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ---------------- Delivery to the customer (driver) ---------------- */
 
 const baseNo = (no) => String(no || "").replace(/-\d+$/, "");          // "1042-2" → "1042"
@@ -6666,6 +7129,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
             {(seesInternal || role === "sales") && <QcRecord order={order} />}
             {(seesInternal || role === "sales") && <ReworkRecord order={order} />}
             {(role === "sales" || role === "admin") && <DeliveryRecord order={order} />}
+            {(role === "sales" || role === "admin") && <ShipmentRecord order={order} />}
 
             <div id="order-history" style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid #E5E5E5" }}>
               <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", marginBottom: 8 }}>ACTIVITY LOG</div>
