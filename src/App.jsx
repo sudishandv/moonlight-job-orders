@@ -123,7 +123,6 @@ const ROLE_HOME_CARDS = {
     ["📋", "All Records", "View and manage job orders", "records"],
     ["📦", "Incoming Deliveries", "Deliveries coming to your branch", "incoming"],
     ["🛵", "Customer Deliveries", "Assign drivers & track deliveries", "custdeliveries"],
-    ["✈️", "Courier Shipments", "DHL & courier parcels with photo proof", "shipments"],
     ["📐", "New Requirement", "Take fitting measurements", "requirement"],
     ["📄", "Requirement List", "Browse saved requirements", "requirements"],
     ["👤", "Customers", "Search profiles & history", "customers"],
@@ -157,7 +156,6 @@ const ROLE_HOME_CARDS = {
     ["🚚", "Delivery to Stores", "Send finished pieces to the branches", "deliveries"],
     ["📦", "Incoming Deliveries", "Deliveries coming to your branch", "incoming"],
     ["🛵", "Customer Deliveries", "Assign drivers & track deliveries", "custdeliveries"],
-    ["✈️", "Courier Shipments", "DHL & courier parcels with photo proof", "shipments"],
     ["🔐", "PIN & Devices", "Set PINs, approve showroom iPads", "pins"],
     ["🔔", "Notifications", "Everything that has happened", "notifications"],
     ["🗂️", "Projects", "Design team projects", "projects"],
@@ -198,8 +196,7 @@ function computeTasks(profile, orders, sentNotes) {
   }
   if (sales) {
     put("incoming", [[sentNotes || 0, "delivery to accept"], [count("store_received", mine), "to re-check"]]);
-    put("custdeliveries", [[count("ready_in_stores", mine), "ready to deliver"]]);
-    put("shipments", [[count("shipment_packed", mine), "awaiting courier"]]);
+    put("custdeliveries", [[count("ready_in_stores", mine), "ready to hand over"], [count("shipment_packed", mine), "awaiting courier"]]);
   }
   return t;
 }
@@ -1063,6 +1060,8 @@ function dbToOrder(r) {
     createdAt: r.created_at, updatedAt: r.updated_at, cut: r.cut,
     acceptedAt: r.accepted_at, acceptedBy: r.accepted_by,
     productionStartedAt: r.production_started_at, productionCompletedAt: r.production_completed_at,
+    collectionMethod: r.collection_method, collectionAddress: r.collection_address, collectionMapLink: r.collection_map_link,
+    collectionCourier: r.collection_courier, collectionRef: r.collection_ref, collectionNotes: r.collection_notes,
   };
 }
 function orderFieldsToDb(f) {
@@ -1070,6 +1069,8 @@ function orderFieldsToDb(f) {
     invoiceNo: "invoice_no", orderType: "order_type", preparedBy: "prepared_by", sheilaType: "sheila_type",
     abayaOption: "abaya_option", buttonFrom: "button_from", buttonTill: "button_till", deliveryDate: "delivery_date",
     attachmentUrl: "attachment_url",
+    collectionMethod: "collection_method", collectionAddress: "collection_address", collectionMapLink: "collection_map_link",
+    collectionCourier: "collection_courier", collectionRef: "collection_ref", collectionNotes: "collection_notes",
   };
   const out = {};
   Object.entries(f).forEach(([k, v]) => { out[map[k] || k] = v; });
@@ -1312,7 +1313,7 @@ export default function App() {
     } else if (type === "cdelivery" && (role === "sales" || role === "admin")) {
       setSubpage("custdeliveries");
     } else if (type === "shipment" && (role === "sales" || role === "admin")) {
-      setSubpage("shipments");
+      setSubpage("custdeliveries");
     } else {
       return;                                                   // this role has no page for it — do nothing
     }
@@ -1393,28 +1394,25 @@ export default function App() {
       )}
       {subpage === "qcsetup" && profile.role === "admin" && <QcSetupPage flash={flash} />}
       {subpage === "notifications" && <NotificationsPage orders={orders} session={profile} onOpen={openFromNotification} />}
-      {subpage === "shipments" && (profile.role === "sales" || profile.role === "admin") && (
-        <ShipmentsPage orders={orders} session={profile} refresh={refresh} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
-      )}
       {subpage === "custdeliveries" && (profile.role === "sales" || profile.role === "admin") && (
         <CustomerDeliveriesPage orders={orders} models={config.models} session={profile} refresh={refresh} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {subpage === "pins" && profile.role === "admin" && (
         <PinsPage users={allUsers} branches={config.branches.map((b) => b.name)} session={profile} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && subpage !== "shipments" && profile.role === "sales" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && subpage !== "shipments" && profile.role === "production" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && profile.role === "production" && (
         <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && subpage !== "shipments" && profile.role === "admin" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && subpage !== "shipments" && profile.role === "model_manager" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && profile.role === "model_manager" && (
         <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {toast && (
@@ -2099,11 +2097,13 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       additional_requirements: form.additionalRequirements || null, attachments: form.attachments || [],
       color: form.color || null, color_swatch: form.colorSwatch || null,
       delivery_date: form.deliveryDate || null,
+      ...collectionToDb(form.collection || EMPTY_COLLECTION),
       attachment_url: attachmentUrl || form.attachmentNote || null, comments: form.comments,
       status: "job_created", history: [{ note: "Job order created by Sales", by: session.name, at: now }],
     };
     const { data, error } = await supabase.from("job_orders").insert(row).select().single();
     if (error) { flash("Error: " + error.message); return; }
+    await saveDriverAddress(form.collection, { mobile: form.mobile });
     notify(session, `${session.name} created job order ${jobNo}`, "job_order", row.branch, { type: "order", id: data.id });
     await refresh();
     setSubpage("records");
@@ -2120,6 +2120,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       attachmentUrl = up.ref;
     }
     const changed = diffSummary(before, form, !!file);
+    if (form.collection && JSON.stringify(collectionFromOrder(before || {})) !== JSON.stringify(form.collection)) changed.push(`Collection (${(COLLECTION[form.collection.method] || {}).label || "not set"})`);
     const now = new Date().toISOString();
     const note = changed.length ? `Job order edited — changed: ${changed.join(", ")}` : "Job order edited (no field changes detected)";
     const history = [...(before?.history || []), { note, by: session.name, at: now }];
@@ -2130,6 +2131,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       additional_requirements: form.additionalRequirements || null, attachments: form.attachments || [],
       color: form.color || null, color_swatch: form.colorSwatch || null,
       delivery_date: form.deliveryDate || null, attachment_url: attachmentUrl, comments: form.comments,
+      ...(form.collection ? collectionToDb(form.collection) : {}),
       history, updated_at: now,
     }).eq("id", editingOrderId);
     if (error) { flash("Error: " + error.message); return; }
@@ -2145,7 +2147,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     await refresh(); flash("Changes saved");
   };
 
-  const handleSaveRequirement = async (customer, measurements, items, deliveryDate, signatureUrl, createOrders) => {
+  const handleSaveRequirement = async (customer, measurements, items, deliveryDate, signatureUrl, createOrders, collection) => {
     const branch = session.branch || (session.role === "admin" ? "Admin" : "");
     const { data: existing } = await supabase.from("customer_profiles").select("id").eq("mobile", customer.mobile).order("created_at", { ascending: false }).limit(1);
 
@@ -2163,6 +2165,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       profile = result.data; pErr = result.error;
     }
     if (pErr) { flash("Error: " + pErr.message); return false; }
+    if (createOrders) await saveDriverAddress(collection, { id: profile.id });
 
     const validItems = items.filter((it) => !it.error);
     const jobNumbers = createOrders && validItems.length > 0 ? await nextJobOrderNumbers(validItems.length) : [];
@@ -2180,6 +2183,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
           job_order_no: jobNumbers[vIdx], name: customer.name, mobile: customer.mobile, order_type: "New",
           model: it.model, item: ITEM_TYPES[0], prepared_by: session.name, branch,
           measurements: calcToStrings(it.calc), cut: it.cut || null, delivery_date: deliveryDate || null,
+          ...collectionToDb(collection || EMPTY_COLLECTION),
           abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
           additional_requirements: it.additionalRequirements || null, attachments: it.attachments || [],
           color: it.color || null, color_swatch: it.colorSwatch || null,
@@ -2215,6 +2219,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       item: ITEM_TYPES[0], prepared_by: session.name, branch,
       measurements: row.calculated && Object.keys(row.calculated).length ? calcToStrings(row.calculated) : suggestionMeasurements(row.profile.measurements, row.deltas),
       cut: row.cut || null, delivery_date: row.deliveryDate || null,
+      ...collectionToDb(row.collection || EMPTY_COLLECTION),
       abaya_option: row.abayaOption || "Normal", button_from: row.buttonFrom || null, button_till: row.buttonTill || null,
       additional_requirements: row.additionalRequirements || null, attachments: row.attachments || [],
       color: row.color || null, color_swatch: row.colorSwatch || null,
@@ -2224,6 +2229,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     if (error) { flash("Error: " + error.message); return; }
     notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order", branch, { type: "order", id: order.id });
     await supabase.from("requirement_items").update({ job_order_id: order.id }).eq("id", row.id);
+    await saveDriverAddress(row.collection, { id: row.profile.id });
     await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created");
   };
 
@@ -2282,6 +2288,117 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
   );
 }
 
+/* ---------------- How will the customer receive it? ---------------- */
+
+const COLLECTION = {
+  store_pickup: { icon: "🏬", label: "Store pickup", hint: "The customer collects it from the store." },
+  driver: { icon: "🛵", label: "Driver delivery", hint: "Our driver delivers to the customer's address." },
+  courier: { icon: "✈️", label: "Courier shipment", hint: "DHL / a courier collects and ships it, with photo proof." },
+};
+const EMPTY_COLLECTION = { method: "", address: "", mapLink: "", courier: "DHL", ref: "", notes: "" };
+const collectionFromOrder = (o) => ({
+  method: o.collectionMethod || "", address: o.collectionAddress || "", mapLink: o.collectionMapLink || "",
+  courier: o.collectionCourier || "DHL", ref: o.collectionRef || "", notes: o.collectionNotes || "",
+});
+const collectionProblem = (c) => {
+  if (!c || !c.method) return "Choose how the customer will receive the order.";
+  if (c.method === "driver" && !c.address.trim() && !c.mapLink.trim()) return "Enter the delivery address (or a map link) for the driver.";
+  if (c.method === "courier" && (!c.courier.trim() || !c.address.trim())) return "Choose the courier and enter the destination address with the country.";
+  return "";
+};
+const collectionToDb = (c) => ({
+  collection_method: c.method || null,
+  collection_address: !c.method || c.method === "store_pickup" ? null : c.address.trim() || null,
+  collection_map_link: c.method === "driver" ? c.mapLink.trim() || null : null,
+  collection_courier: c.method === "courier" ? c.courier.trim() || null : null,
+  collection_ref: c.method === "courier" ? c.ref.trim() || null : null,
+  collection_notes: !c.method || c.method === "store_pickup" ? null : c.notes.trim() || null,
+});
+const collectionToFields = (c) => ({   // the same thing with the app's field names, for the quick-edit save
+  collectionMethod: c.method || null,
+  collectionAddress: !c.method || c.method === "store_pickup" ? null : c.address.trim() || null,
+  collectionMapLink: c.method === "driver" ? c.mapLink.trim() || null : null,
+  collectionCourier: c.method === "courier" ? c.courier.trim() || null : null,
+  collectionRef: c.method === "courier" ? c.ref.trim() || null : null,
+  collectionNotes: !c.method || c.method === "store_pickup" ? null : c.notes.trim() || null,
+});
+const saveDriverAddress = (c, profileMatch) => (c && c.method === "driver" && c.address.trim()
+  ? supabase.from("customer_profiles").update({ address: c.address.trim(), map_link: c.mapLink.trim() || null }).match(profileMatch)
+  : Promise.resolve());
+
+function CollectionPicker({ value, onChange, disabled, error, mobile }) {
+  const c = value || EMPTY_COLLECTION;
+  const set = (patch) => onChange({ ...c, ...patch });
+  const known = CARRIERS.filter((x) => x !== "Other");
+  const [otherMode, setOtherMode] = useState(!!c.courier && !known.includes(c.courier));
+
+  useEffect(() => {   // a saved address makes the next delivery quicker
+    if (disabled || c.method !== "driver" || c.address || !mobile || String(mobile).replace(/\D/g, "").length < 6) return;
+    supabase.from("customer_profiles").select("address,map_link").eq("mobile", mobile).limit(1).then(({ data }) => {
+      if (data && data[0] && data[0].address) onChange({ ...c, address: data[0].address, mapLink: c.mapLink || data[0].map_link || "" });
+    });
+  }, [c.method, mobile]); // eslint-disable-line
+
+  return (
+    <div style={{ marginTop: 18, marginBottom: 6 }}>
+      <div style={label13}>{disabled ? "Collection" : "How will the customer receive it? *"}</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {Object.entries(COLLECTION).map(([k, m]) => {
+          const on = c.method === k;
+          return (
+            <div key={k} onClick={() => !disabled && set({ method: k })}
+              style={{ flex: "1 1 190px", cursor: disabled ? "default" : "pointer", border: "2px solid " + (on ? "#1A1A1A" : error && !c.method ? "#C1302B" : "#DDE1E7"), background: on ? "#F4F8FC" : "#fff", borderRadius: 10, padding: "12px 14px", opacity: disabled && !on ? 0.45 : 1 }}>
+              <div style={{ fontSize: 22 }}>{m.icon}</div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>{m.label}</div>
+              <div style={{ fontSize: 11.5, color: "#8a8a8a" }}>{m.hint}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {c.method === "driver" && (
+        <div style={{ marginTop: 12, padding: 12, background: "#FAFBFC", border: "1px solid #E5E8EC", borderRadius: 8 }}>
+          <Field label="Delivery address *"><textarea style={{ ...inputStyle, minHeight: 60 }} value={c.address} disabled={disabled} onChange={(e) => set({ address: e.target.value })} placeholder="Area, street, building, landmark…" /></Field>
+          <Field label="Map link (optional)"><input style={inputStyle} value={c.mapLink} disabled={disabled} onChange={(e) => set({ mapLink: e.target.value })} placeholder="Paste a Google Maps / WhatsApp location link" /></Field>
+          <Field label="Notes for the driver (optional)"><input style={inputStyle} value={c.notes} disabled={disabled} onChange={(e) => set({ notes: e.target.value })} placeholder="e.g. call before arriving" /></Field>
+        </div>
+      )}
+      {c.method === "courier" && (
+        <div style={{ marginTop: 12, padding: 12, background: "#FAFBFC", border: "1px solid #E5E8EC", borderRadius: 8 }}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ minWidth: 160 }}>
+              <Field label="Courier *">
+                <select style={inputStyle} disabled={disabled} value={otherMode ? "Other" : c.courier} onChange={(e) => { if (e.target.value === "Other") { setOtherMode(true); set({ courier: "" }); } else { setOtherMode(false); set({ courier: e.target.value }); } }}>
+                  {CARRIERS.map((x) => <option key={x}>{x}</option>)}
+                </select>
+              </Field>
+            </div>
+            {otherMode && <div style={{ minWidth: 160 }}><Field label="Courier name *"><input style={inputStyle} disabled={disabled} value={c.courier} onChange={(e) => set({ courier: e.target.value })} /></Field></div>}
+            <div style={{ flex: 1, minWidth: 180 }}><Field label="E-commerce order ref"><input style={inputStyle} disabled={disabled} value={c.ref} onChange={(e) => set({ ref: e.target.value })} /></Field></div>
+          </div>
+          <Field label="Destination address (with the country) *"><textarea style={{ ...inputStyle, minHeight: 60 }} value={c.address} disabled={disabled} onChange={(e) => set({ address: e.target.value })} /></Field>
+          <Field label="Notes (optional)"><input style={inputStyle} value={c.notes} disabled={disabled} onChange={(e) => set({ notes: e.target.value })} /></Field>
+        </div>
+      )}
+      {error && <div style={{ color: "#C1302B", fontSize: 12.5, marginTop: 6 }}>{error}</div>}
+    </div>
+  );
+}
+
+function CollectionSummary({ order }) {
+  const m = COLLECTION[order.collectionMethod];
+  if (!m) return <span style={{ color: "#8a8a8a" }}>Not set</span>;
+  return (
+    <span>
+      {m.icon} <strong>{m.label}</strong>
+      {order.collectionMethod === "courier" && order.collectionCourier ? ` — ${order.collectionCourier}` : ""}
+      {order.collectionAddress ? <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{order.collectionAddress}</div> : null}
+      {order.collectionRef ? <div style={{ fontSize: 12, color: "#8a8a8a" }}>Ref {order.collectionRef}</div> : null}
+      {order.collectionNotes ? <div style={{ fontSize: 12, color: "#8a8a8a" }}>{order.collectionNotes}</div> : null}
+    </span>
+  );
+}
+
 /* ---------------- Job Order form ---------------- */
 
 function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readOnly }) {
@@ -2295,6 +2412,7 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
     additionalRequirements: initialOrder.additionalRequirements || "", attachments: initialOrder.attachments || [],
     color: initialOrder.color || "", colorSwatch: initialOrder.colorSwatch || "",
     buttonFrom: initialOrder.buttonFrom || "", buttonTill: initialOrder.buttonTill || "", deliveryDate: initialOrder.deliveryDate || "", comments: initialOrder.comments || "",
+    collection: collectionFromOrder(initialOrder),
   } : {
     name: "", mobile: "", invoiceNo: "", orderType: "New", model: config.models[0]?.modelNo || "",
     item: ITEM_TYPES[0], branch: session.branch || config.branches[0]?.name || "",
@@ -2302,9 +2420,11 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
     sheilaType: SHEILA_TYPES[0], abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: "", attachments: [],
     color: "", colorSwatch: "",
     deliveryDate: "", comments: "",
+    collection: EMPTY_COLLECTION,
   });
   const [file, setFile] = useState(null);
   const [dateError, setDateError] = useState(false);
+  const [collError, setCollError] = useState("");
   const [modelSizes, setModelSizes] = useState([]);
   const [pickedCut, setPickedCut] = useState("");
   const [pickedSize, setPickedSize] = useState("");
@@ -2480,6 +2600,10 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
           {!readOnly && <input type="file" accept="image/*,video/*" onChange={(e) => setFile(e.target.files?.[0] || null)} style={inputStyle} />}
         </Field>
       </div>
+      {session.role !== "production" && (
+        <CollectionPicker value={form.collection} disabled={readOnly} mobile={form.mobile} error={collError}
+          onChange={(v) => { setForm((f) => ({ ...f, collection: v })); setCollError(""); }} />
+      )}
       {readOnly
         ? <Field label="Comments"><div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{form.comments || "—"}</div></Field>
         : <Field label="Comments"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.comments} onChange={set("comments")} /></Field>}
@@ -2487,7 +2611,14 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
       <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 20 }}>
         <button onClick={() => window.print()} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>PRINT / SAVE PDF</button>
         {!readOnly && (
-          <button disabled={!valid} onClick={() => { if (!form.deliveryDate) { setDateError(true); return; } onSubmit(form, file); }} style={{ background: valid ? (isEdit ? "#2F8F46" : "#3B6FA0") : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>{isEdit ? "Save Changes" : "SUBMIT"}</button>
+          <button disabled={!valid} onClick={() => {
+            if (!form.deliveryDate) { setDateError(true); return; }
+            if (session.role !== "production") {
+              const cp = (form.collection.method || !isEdit) ? collectionProblem(form.collection) : "";
+              if (cp) { setCollError(cp); return; }
+            }
+            onSubmit(form, file);
+          }} style={{ background: valid ? (isEdit ? "#2F8F46" : "#3B6FA0") : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>{isEdit ? "Save Changes" : "SUBMIT"}</button>
         )}
         <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>{readOnly ? "CLOSE" : "CANCEL"}</button>
       </div>
@@ -2867,6 +2998,8 @@ function RequirementForm({ config, session, onCancel, onSave }) {
 
   const [lightbox, setLightbox] = useState(null);
   const [formMsg, setFormMsg] = useState("");
+  const [collection, setCollection] = useState(EMPTY_COLLECTION);
+  const [collectionError, setCollectionError] = useState("");
   const [confirmItem, setConfirmItem] = useState(null);   // index being submitted
   const [reopenItem, setReopenItem] = useState(null);     // index being reopened for editing
   const [removeIdx, setRemoveIdx] = useState(null);       // index being removed
@@ -2953,6 +3086,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     const problems = [];
     if (createOrders && missingColor.length > 0) problems.push(`Please choose a colour for: ${missingColor.map((m) => m.model).join(", ")}`);
     if (createOrders && !deliveryDate) { setDateError(true); problems.push("Please choose a delivery date."); }
+    if (createOrders) { const cp = collectionProblem(collection); if (cp) { setCollectionError(cp); problems.push(cp); } }
     if (problems.length > 0) { setFormMsg(problems.join(" ")); return; }
     setFormMsg("");
     // Same lookup the save itself uses (handleSaveRequirement), so the pop-up can't say "new" while updating.
@@ -2970,7 +3104,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         const v = itemView(it);
         const nb = nearestSizes(v.calc, it.sizes, it.cut)[0];
         return { ...it, calc: v.calc, size: nb ? nb.label : null };
-      }), deliveryDate, signatureUrl, createOrders);
+      }), deliveryDate, signatureUrl, createOrders, collection);
       setConfirm(null);
       if (ok && !createOrders) {
         setItems([]);   // saved to the Requirement List — clear them so a second click can't duplicate them
@@ -3193,6 +3327,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         </Field>
         {dateError && <div style={{ color: "#C1302B", fontSize: 12, marginTop: 4 }}>Delivery date is required to create a job order.</div>}
       </div>
+      <CollectionPicker value={collection} onChange={(v) => { setCollection(v); setCollectionError(""); }} mobile={customer.mobile} error={collectionError} />
 
       <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #E5E5E5" }}>
         <div style={label13}>Customer Signature — confirms agreement to the measurements & sizes above</div>
@@ -3255,7 +3390,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
 function RequirementsPage({ items, profiles, orders, canDelete, canCreateOrder, onCreateOrder, onDelete, noPII }) {
   const [selected, setSelected] = useState(null);
   const [datePrompt, setDatePrompt] = useState(null);   // { row, date }
-  const askCreate = (row) => { if (row.deliveryDate) onCreateOrder(row); else setDatePrompt({ row, date: "" }); };
+  const askCreate = (row) => setDatePrompt({ row, date: row.deliveryDate || "", collection: EMPTY_COLLECTION, err: "" });
   const rows = items
     .map((it) => ({ ...it, profile: profiles.find((p) => p.id === it.profileId), order: orders.find((o) => o.id === it.jobOrderId) }))
     .filter((r) => r.profile);
@@ -3290,13 +3425,14 @@ function RequirementsPage({ items, profiles, orders, canDelete, canCreateOrder, 
       {selected && <RequirementDetail row={selected} noPII={noPII} onClose={() => setSelected(null)} />}
       {datePrompt && (
         <ConfirmDialog
-          title="Delivery date needed" confirmLabel="Create job order"
-          confirmDisabled={!datePrompt.date}
+          title="Delivery details" confirmLabel="Create job order"
+          confirmDisabled={!datePrompt.date || !!collectionProblem(datePrompt.collection)}
           onCancel={() => setDatePrompt(null)}
-          onConfirm={() => { onCreateOrder({ ...datePrompt.row, deliveryDate: datePrompt.date }); setDatePrompt(null); }}
+          onConfirm={() => { onCreateOrder({ ...datePrompt.row, deliveryDate: datePrompt.date, collection: datePrompt.collection }); setDatePrompt(null); }}
         >
-          <div style={{ marginBottom: 8 }}>This saved requirement has no delivery date. Choose one to create the job order.</div>
-          <input type="date" value={datePrompt.date} onChange={(e) => setDatePrompt((d) => ({ ...d, date: e.target.value }))} style={inputStyle} />
+          <Field label="Delivery date *"><input type="date" value={datePrompt.date} onChange={(e) => setDatePrompt((d) => ({ ...d, date: e.target.value }))} style={inputStyle} /></Field>
+          <CollectionPicker value={datePrompt.collection} mobile={datePrompt.row.profile && datePrompt.row.profile.mobile}
+            onChange={(v) => setDatePrompt((d) => ({ ...d, collection: v }))} />
         </ConfirmDialog>
       )}
     </div>
@@ -5577,119 +5713,18 @@ async function printShipmentEvidence(s, items) {
   w.document.close();
 }
 
-function ShipmentsPage({ orders, session, refresh, flash, openRequest, clearOpenRequest }) {
-  const [shipments, setShipments] = useState([]);
-  const [items, setItems] = useState([]);
-  const [selected, setSelected] = useState([]);
-  const [dlg, setDlg] = useState(null);          // { type: "pack" | "view" | "pickup" | "delivered" | "cancel", id? }
-  const [q, setQ] = useState("");
-  const mine = (o) => session.role === "admin" || o.branch === session.branch;
-
-  const load = async () => {
-    const { data: s } = await supabase.from("shipments").select("*").order("packed_at", { ascending: false }).limit(200);
-    setShipments(s || []);
-    const ids = (s || []).map((x) => x.id);
-    if (ids.length) { const { data: it } = await supabase.from("shipment_items").select("*").in("shipment_id", ids); setItems(it || []); } else setItems([]);
-  };
-  useEffect(() => { load(); }, [orders]); // eslint-disable-line
-  useEffect(() => { if (openRequest && openRequest.type === "shipment") { setDlg({ type: "view", id: openRequest.id }); clearOpenRequest(); } }, [openRequest]); // eslint-disable-line
-
-  const itemsOf = (id) => items.filter((i) => i.shipment_id === id);
-  const ready = orders.filter((o) => o.status === "ready_in_stores" && mine(o)).sort((a, b) => String(a.jobOrderNo).localeCompare(String(b.jobOrderNo), undefined, { numeric: true }));
-  const groups = [];
-  ready.forEach((o) => {
-    const b = shBase(o.jobOrderNo);
-    let g = groups.find((x) => x.base === b && x.mobile === o.mobile);
-    if (!g) { g = { base: b, name: o.name, mobile: o.mobile, pieces: [] }; groups.push(g); }
-    g.pieces.push(o);
-  });
-  const chosen = ready.filter((o) => selected.includes(o.id));
-  const toggle = (o) => setSelected((s) => (s.includes(o.id) ? s.filter((x) => x !== o.id) : [...s, o.id]));
-  const selectGroup = (g) => setSelected((s) => { const all = g.pieces.every((p) => s.includes(p.id)); return all ? s.filter((id) => !g.pieces.some((p) => p.id === id)) : [...new Set([...s, ...g.pieces.map((p) => p.id)])]; });
-
-  const needle = q.trim().toLowerCase();
-  const match = (s) => !needle || [s.shipment_no, s.tracking_no, s.reference, s.customer_name, s.carrier, s.courier_agent].some((v) => String(v || "").toLowerCase().includes(needle)) || itemsOf(s.id).some((i) => String(i.order_no).toLowerCase().includes(needle));
-  const shown = shipments.filter(match);
-  const awaiting = shown.filter((s) => s.status === "packed");
-  const shippedList = shown.filter((s) => s.status === "shipped");
-  const doneList = shown.filter((s) => s.status === "delivered" || s.status === "cancelled").slice(0, 40);
-  const finish = (msg) => { setDlg(null); setSelected([]); if (msg) flash(msg); refresh(); load(); };
-  const current = dlg && dlg.id ? shipments.find((s) => s.id === dlg.id) : null;
-
-  const Card = ({ s, tone }) => (
-    <div onClick={() => setDlg({ type: "view", id: s.id })} style={{ border: "1px solid " + tone[0], background: tone[1], borderRadius: 8, padding: "12px 16px", marginBottom: 10, cursor: "pointer" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-        <div><span className="mono" style={{ fontWeight: 700 }}>{s.shipment_no}</span> · <strong>{s.carrier}</strong> <span className="mono">{s.tracking_no}</span></div>
-        <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{s.status === "shipped" ? `collected ${shWhen(s.picked_up_at)}` : `packed ${shWhen(s.packed_at)}`}</div>
-      </div>
-      <div style={{ fontSize: 13, marginTop: 4 }}>{s.customer_name} — {s.destination}</div>
-      <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{itemsOf(s.id).map((i) => i.order_no).join(", ")} · 📷 {(s.parcel_files || []).length + itemsOf(s.id).reduce((n, i) => n + (i.files || []).length, 0)} photos/videos saved</div>
-    </div>
-  );
-
-  return (
-    <div style={{ maxWidth: 1000, margin: "0 auto" }}>
-      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 6 }}>COURIER SHIPMENTS</h2>
-      <div style={{ textAlign: "center", fontSize: 12, color: "#8a8a8a", marginBottom: 16 }}>DHL and other couriers — every parcel is photographed and signed for, so you can prove what was sent.</div>
-      <div style={{ textAlign: "center", marginBottom: 18 }}><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tracking no, order no, customer, courier…" style={{ ...inputStyle, width: 340, maxWidth: "100%" }} /></div>
-
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>READY TO SHIP ({ready.length})</div>
-      {ready.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14, padding: "6px 0 22px" }}>No pieces are waiting to be shipped.</div> : groups.map((g) => (
-        <div key={g.base + g.mobile} style={{ border: "1px solid #DDE1E7", borderRadius: 8, padding: 12, marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
-            <div><strong>Order {g.base}</strong> · {g.name} · {g.mobile}</div>
-            <a className="link" style={{ fontSize: 12.5 }} onClick={() => selectGroup(g)}>{g.pieces.every((p) => selected.includes(p.id)) ? "Unselect all" : "Select all pieces"}</a>
-          </div>
-          {g.pieces.map((o) => (
-            <label key={o.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "9px 6px", borderTop: "1px solid #F0F0F0", cursor: "pointer" }}>
-              <input type="checkbox" checked={selected.includes(o.id)} onChange={() => toggle(o)} style={{ width: 20, height: 20 }} />
-              <span className="mono" style={{ fontWeight: 700, minWidth: 70 }}>{o.jobOrderNo}</span>
-              <span style={{ flex: 1, fontSize: 13.5 }}>{o.model}{o.cut ? ` · ${o.cut}` : ""}{o.color ? ` · ${o.color}` : ""}</span>
-            </label>
-          ))}
-        </div>
-      ))}
-      {chosen.length > 0 && (
-        <div style={{ position: "sticky", bottom: 12, background: "#1A1A1A", color: "#fff", borderRadius: 10, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", marginBottom: 16 }}>
-          <div style={{ fontSize: 13.5 }}>{chosen.length} piece{chosen.length === 1 ? "" : "s"} selected</div>
-          <button onClick={() => setDlg({ type: "pack" })} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 6, padding: "10px 20px", fontWeight: 700 }}>✈️ Pack for courier</button>
-        </div>
-      )}
-
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "22px 0 8px" }}>PACKED — AWAITING THE COURIER ({awaiting.length})</div>
-      {awaiting.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14 }}>Nothing is waiting for a courier.</div> : awaiting.map((s) => <Card key={s.id} s={s} tone={["#EBCB8B", "#FFFBF2"]} />)}
-
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "22px 0 8px" }}>SHIPPED ({shippedList.length})</div>
-      {shippedList.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14 }}>No parcels are on their way.</div> : shippedList.map((s) => <Card key={s.id} s={s} tone={["#BBD0E6", "#F4F8FC"]} />)}
-
-      {doneList.length > 0 && (<>
-        <div style={{ fontWeight: 700, fontSize: 13, margin: "22px 0 8px" }}>DELIVERED / CANCELLED</div>
-        {doneList.map((s) => <Card key={s.id} s={s} tone={["#E1E5EA", "#fff"]} />)}
-      </>)}
-
-      {dlg && dlg.type === "pack" && <ShipmentPackDialog pieces={chosen} session={session} onClose={() => setDlg(null)} onDone={() => finish("Packed — evidence saved. Waiting for the courier.")} />}
-      {dlg && dlg.type === "view" && current && (
-        <ShipmentViewDialog s={current} items={itemsOf(current.id)} flash={flash} onClose={() => setDlg(null)}
-          onPickup={() => setDlg({ type: "pickup", id: current.id })} onDelivered={() => setDlg({ type: "delivered", id: current.id })} onCancel={() => setDlg({ type: "cancel", id: current.id })} />
-      )}
-      {dlg && dlg.type === "pickup" && current && <ShipmentPickupDialog s={current} session={session} onClose={() => setDlg({ type: "view", id: current.id })} onDone={() => finish("Handover recorded — shipped")} />}
-      {dlg && dlg.type === "delivered" && current && <ShipmentDeliveredDialog s={current} onClose={() => setDlg({ type: "view", id: current.id })} onDone={() => finish("Marked delivered")} />}
-      {dlg && dlg.type === "cancel" && current && <ShipmentCancelDialog s={current} onClose={() => setDlg({ type: "view", id: current.id })} onDone={() => finish("Shipment cancelled — pieces are back in the store")} />}
-    </div>
-  );
-}
-
 function ShipmentPackDialog({ pieces, session, onClose, onDone }) {
   const first = pieces[0];
-  const [carrier, setCarrier] = useState("DHL");
-  const [otherCarrier, setOtherCarrier] = useState("");
+  const pref = first.collectionCourier || "DHL";
+  const [carrier, setCarrier] = useState(CARRIERS.includes(pref) ? pref : "Other");
+  const [otherCarrier, setOtherCarrier] = useState(CARRIERS.includes(pref) ? "" : pref);
   const [tracking, setTracking] = useState("");
-  const [reference, setReference] = useState("");
+  const [reference, setReference] = useState(first.collectionRef || "");
   const [name, setName] = useState(first.name || "");
   const [mobile, setMobile] = useState(first.mobile || "");
-  const [destination, setDestination] = useState("");
+  const [destination, setDestination] = useState(first.collectionAddress || "");
   const [weight, setWeight] = useState("");
-  const [notes, setNotes] = useState("");
+  const [notes, setNotes] = useState(first.collectionNotes || "");
   const [itemFiles, setItemFiles] = useState({});
   const [parcel, setParcel] = useState([]);
   const [confirmed, setConfirmed] = useState(false);
@@ -5697,10 +5732,6 @@ function ShipmentPackDialog({ pieces, session, onClose, onDone }) {
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const carrierName = carrier === "Other" ? otherCarrier.trim() : carrier;
-
-  useEffect(() => {   // pre-fill the address kept on the customer's profile
-    supabase.from("customer_profiles").select("address").eq("mobile", first.mobile).limit(1).then(({ data }) => { if (data && data[0] && data[0].address) setDestination(data[0].address); });
-  }, []); // eslint-disable-line
 
   const check = () => {
     if (!carrierName) return "Choose or type the courier.";
@@ -5999,25 +6030,45 @@ async function cancelCustomerDelivery(session, d, items, orders) {
 
 function CustomerDeliveriesPage({ orders, models, session, refresh, flash, openRequest, clearOpenRequest }) {
   const [deliveries, setDeliveries] = useState([]);
-  const [items, setItems] = useState([]);
+  const [dItems, setDItems] = useState([]);
+  const [shipments, setShipments] = useState([]);
+  const [sItems, setSItems] = useState([]);
   const [drivers, setDrivers] = useState([]);
   const [selected, setSelected] = useState([]);
-  const [dlg, setDlg] = useState(null);       // { type: "assign" | "pickup" | "edit" | "view" | "cancel", delivery? }
+  const [filter, setFilter] = useState("all");        // all | store_pickup | driver | courier | none
+  const [q, setQ] = useState("");
+  const [dlg, setDlg] = useState(null);               // { type, id? }
   const mine = (o) => session.role === "admin" || o.branch === session.branch;
 
   const load = async () => {
-    const { data: d } = await supabase.from("customer_deliveries").select("*").order("scheduled_at", { ascending: false }).limit(80);
+    const { data: d } = await supabase.from("customer_deliveries").select("*").order("scheduled_at", { ascending: false }).limit(120);
     setDeliveries(d || []);
-    const ids = (d || []).map((x) => x.id);
-    if (ids.length) { const { data: it } = await supabase.from("customer_delivery_items").select("*").in("delivery_id", ids); setItems(it || []); } else setItems([]);
+    const dIds = (d || []).map((x) => x.id);
+    if (dIds.length) { const { data: it } = await supabase.from("customer_delivery_items").select("*").in("delivery_id", dIds); setDItems(it || []); } else setDItems([]);
+    const { data: s } = await supabase.from("shipments").select("*").order("packed_at", { ascending: false }).limit(200);
+    setShipments(s || []);
+    const sIds = (s || []).map((x) => x.id);
+    if (sIds.length) { const { data: it } = await supabase.from("shipment_items").select("*").in("shipment_id", sIds); setSItems(it || []); } else setSItems([]);
   };
-  useEffect(() => { load(); }, [orders]); // eslint-disable-line   (a driver finishing a delivery changes the orders, so this refreshes by itself)
+  useEffect(() => { load(); }, [orders]); // eslint-disable-line
   useEffect(() => { supabase.rpc("list_drivers").then(({ data }) => setDrivers(data || [])); }, []);
-  useEffect(() => { if (openRequest && openRequest.type === "cdelivery") { const d = deliveries.find((x) => x.id === openRequest.id); setDlg({ type: "view", delivery: d || { id: openRequest.id } }); clearOpenRequest(); } }, [openRequest, deliveries.length]); // eslint-disable-line
+  useEffect(() => {
+    if (!openRequest) return;
+    if (openRequest.type === "cdelivery") { setDlg({ type: "view", id: openRequest.id }); clearOpenRequest(); }
+    else if (openRequest.type === "shipment") { setDlg({ type: "sview", id: openRequest.id }); clearOpenRequest(); }
+  }, [openRequest]); // eslint-disable-line
 
+  const dItemsOf = (id) => dItems.filter((i) => i.delivery_id === id);
+  const sItemsOf = (id) => sItems.filter((i) => i.shipment_id === id);
+  const methodOf = (o) => o.collectionMethod || "none";
+
+  // ---- ready pieces ----
   const ready = orders.filter((o) => o.status === "ready_in_stores" && mine(o)).sort((a, b) => String(a.jobOrderNo).localeCompare(String(b.jobOrderNo), undefined, { numeric: true }));
+  const counts = { all: ready.length, store_pickup: 0, driver: 0, courier: 0, none: 0 };
+  ready.forEach((o) => { counts[methodOf(o)] += 1; });
+  const visibleReady = ready.filter((o) => filter === "all" || methodOf(o) === filter);
   const groups = [];
-  ready.forEach((o) => {
+  visibleReady.forEach((o) => {
     const b = baseNo(o.jobOrderNo);
     let g = groups.find((x) => x.base === b && x.mobile === o.mobile);
     if (!g) { g = { base: b, name: o.name, mobile: o.mobile, pieces: [], total: orders.filter((x) => baseNo(x.jobOrderNo) === b && x.mobile === o.mobile).length }; groups.push(g); }
@@ -6025,81 +6076,153 @@ function CustomerDeliveriesPage({ orders, models, session, refresh, flash, openR
   });
   const chosen = ready.filter((o) => selected.includes(o.id));
   const lockedMobile = chosen[0] ? chosen[0].mobile : null;
+  const chosenMethods = [...new Set(chosen.map(methodOf))];
+  const suggested = chosenMethods.length === 1 && chosenMethods[0] !== "none" ? chosenMethods[0] : null;
   const toggle = (o) => setSelected((s) => (s.includes(o.id) ? s.filter((x) => x !== o.id) : [...s, o.id]));
   const selectGroup = (g) => setSelected((s) => { const all = g.pieces.every((p) => s.includes(p.id)); return all ? s.filter((id) => !g.pieces.some((p) => p.id === id)) : [...new Set([...s, ...g.pieces.map((p) => p.id)])]; });
 
-  const itemsOf = (id) => items.filter((i) => i.delivery_id === id);
-  const scheduled = deliveries.filter((d) => d.status === "assigned").sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
-  const recent = deliveries.filter((d) => d.status !== "assigned").slice(0, 25);
-  const done = () => { setDlg(null); setSelected([]); refresh(); load(); };
+  // ---- search + sections ----
+  const needle = q.trim().toLowerCase();
+  const hit = (vals, nos) => !needle || vals.some((v) => String(v || "").toLowerCase().includes(needle)) || nos.some((n) => String(n || "").toLowerCase().includes(needle));
+  const dShown = deliveries.filter((d) => hit([d.delivery_no, d.customer_name, d.customer_mobile, d.driver_name], dItemsOf(d.id).map((i) => i.order_no)));
+  const sShown = shipments.filter((s) => hit([s.shipment_no, s.tracking_no, s.reference, s.customer_name, s.carrier], sItemsOf(s.id).map((i) => i.order_no)));
+  const scheduled = dShown.filter((d) => d.status === "assigned").sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+  const awaiting = sShown.filter((s) => s.status === "packed");
+  const shippedList = sShown.filter((s) => s.status === "shipped");
+  const recent = [
+    ...dShown.filter((d) => d.status !== "assigned").map((d) => ({ kind: "d", d, at: d.delivered_at || d.scheduled_at })),
+    ...sShown.filter((s) => s.status === "delivered" || s.status === "cancelled").map((s) => ({ kind: "s", s, at: s.delivered_at || s.cancelled_at || s.packed_at })),
+  ].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 40);
+
+  const finish = (msg) => { setDlg(null); setSelected([]); if (msg) flash(msg); refresh(); load(); };
+  const curD = dlg && dlg.id ? deliveries.find((x) => x.id === dlg.id) : null;
+  const curS = dlg && dlg.id ? shipments.find((x) => x.id === dlg.id) : null;
   const th = { textAlign: "left", padding: "8px 10px", fontSize: 12.5, borderBottom: "2px solid #1A1A1A" };
+  const td = { padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5" };
+  const chip = (on) => ({ padding: "6px 14px", fontSize: 12.5, borderRadius: 16, cursor: "pointer", border: "1px solid " + (on ? "#1A1A1A" : "#DDE1E7"), background: on ? "#1A1A1A" : "#fff", color: on ? "#fff" : "#1A1A1A" });
+  const actBtn = (m) => (suggested === m
+    ? { background: "#2F8F46", color: "#fff", border: "none", borderRadius: 6, padding: "10px 16px", fontWeight: 700 }
+    : { background: "#fff", color: "#1A1A1A", border: "none", borderRadius: 6, padding: "10px 16px", fontWeight: 700 });
+
+  const SchedCard = ({ d }) => {
+    const late = new Date(d.scheduled_at) < new Date();
+    return (
+      <div onClick={() => setDlg({ type: "view", id: d.id })} style={{ border: "1px solid " + (late ? "#E8B9B6" : "#BBD0E6"), background: late ? "#FFFAFA" : "#F4F8FC", borderRadius: 8, padding: "12px 16px", marginBottom: 10, cursor: "pointer" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+          <div><span className="mono" style={{ fontWeight: 700 }}>{d.delivery_no}</span> · <strong>{whenText(d.scheduled_at)}</strong>{late && <span style={{ color: "#C1302B", fontWeight: 700, marginLeft: 8, fontSize: 12 }}>time has passed</span>}</div>
+          <div style={{ fontSize: 13 }}>🛵 {d.driver_name || "—"}</div>
+        </div>
+        <div style={{ fontSize: 13, marginTop: 4 }}>{d.customer_name} · {d.customer_mobile}</div>
+        <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{dItemsOf(d.id).map((i) => i.order_no).join(", ")}{d.address ? ` — ${d.address}` : ""}</div>
+      </div>
+    );
+  };
+  const ShipCard = ({ s, tone }) => (
+    <div onClick={() => setDlg({ type: "sview", id: s.id })} style={{ border: "1px solid " + tone[0], background: tone[1], borderRadius: 8, padding: "12px 16px", marginBottom: 10, cursor: "pointer" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div>✈️ <span className="mono" style={{ fontWeight: 700 }}>{s.shipment_no}</span> · <strong>{s.carrier}</strong> <span className="mono">{s.tracking_no}</span></div>
+        <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{s.status === "shipped" ? `collected ${shWhen(s.picked_up_at)}` : `packed ${shWhen(s.packed_at)}`}</div>
+      </div>
+      <div style={{ fontSize: 13, marginTop: 4 }}>{s.customer_name} — {s.destination}</div>
+      <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{sItemsOf(s.id).map((i) => i.order_no).join(", ")} · 📷 {(s.parcel_files || []).length + sItemsOf(s.id).reduce((n, i) => n + (i.files || []).length, 0)} photos/videos saved</div>
+    </div>
+  );
 
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto" }}>
-      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 18 }}>CUSTOMER DELIVERIES</h2>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 6 }}>CUSTOMER DELIVERIES</h2>
+      <div style={{ textAlign: "center", fontSize: 12, color: "#8a8a8a", marginBottom: 14 }}>Store pickup, our driver, or a courier — all from here.</div>
+      <div style={{ textAlign: "center", marginBottom: 18 }}><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tracking no, order no, customer, driver…" style={{ ...inputStyle, width: 360, maxWidth: "100%" }} /></div>
 
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>READY FOR THE CUSTOMER ({ready.length})</div>
-      {ready.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14, padding: "6px 0 22px" }}>No pieces are waiting to be delivered.</div> : groups.map((g) => (
-        <div key={g.base + g.mobile} style={{ border: "1px solid #DDE1E7", borderRadius: 8, padding: 12, marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
-            <div><strong>Order {g.base}</strong> · {g.name} · {g.mobile}<span style={{ marginLeft: 10, fontSize: 12, color: g.pieces.length < g.total ? "#D98E2B" : "#2F8F46", fontWeight: 700 }}>{g.pieces.length} of {g.total} piece{g.total === 1 ? "" : "s"} ready</span></div>
-            <a className="link" style={{ fontSize: 12.5 }} onClick={() => selectGroup(g)}>{g.pieces.every((p) => selected.includes(p.id)) ? "Unselect all" : "Select all pieces"}</a>
+      <div className="no-print" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <button style={chip(filter === "all")} onClick={() => setFilter("all")}>All ({counts.all})</button>
+        <button style={chip(filter === "store_pickup")} onClick={() => setFilter("store_pickup")}>🏬 Store pickup ({counts.store_pickup})</button>
+        <button style={chip(filter === "driver")} onClick={() => setFilter("driver")}>🛵 Driver ({counts.driver})</button>
+        <button style={chip(filter === "courier")} onClick={() => setFilter("courier")}>✈️ Courier ({counts.courier})</button>
+        {counts.none > 0 && <button style={chip(filter === "none")} onClick={() => setFilter("none")}>Not set ({counts.none})</button>}
+      </div>
+      {visibleReady.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14, padding: "6px 0 22px" }}>No pieces are waiting here.</div> : groups.map((g) => {
+        const o0 = g.pieces[0]; const m0 = COLLECTION[o0.collectionMethod];
+        return (
+          <div key={g.base + g.mobile} style={{ border: "1px solid #DDE1E7", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+              <div><strong>Order {g.base}</strong> · {g.name} · {g.mobile}<span style={{ marginLeft: 10, fontSize: 12, color: g.pieces.length < g.total ? "#D98E2B" : "#2F8F46", fontWeight: 700 }}>{g.pieces.length} of {g.total} piece{g.total === 1 ? "" : "s"} ready</span></div>
+              <a className="link" style={{ fontSize: 12.5 }} onClick={() => selectGroup(g)}>{g.pieces.every((p) => selected.includes(p.id)) ? "Unselect all" : "Select all pieces"}</a>
+            </div>
+            <div style={{ fontSize: 12.5, marginBottom: 4, color: m0 ? "#2F5F8F" : "#C1302B" }}>
+              {m0 ? <>{m0.icon} <strong>{m0.label}</strong>{o0.collectionMethod === "courier" && o0.collectionCourier ? ` — ${o0.collectionCourier}` : ""}{o0.collectionMethod !== "store_pickup" && o0.collectionAddress ? ` — ${o0.collectionAddress}` : ""}</> : "Collection method not set — choose below"}
+            </div>
+            {g.pieces.map((o) => {
+              const off = lockedMobile && o.mobile !== lockedMobile;
+              const m = COLLECTION[o.collectionMethod];
+              return (
+                <label key={o.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "9px 6px", borderTop: "1px solid #F0F0F0", opacity: off ? 0.4 : 1, cursor: off ? "not-allowed" : "pointer" }}>
+                  <input type="checkbox" disabled={off} checked={selected.includes(o.id)} onChange={() => toggle(o)} style={{ width: 20, height: 20 }} />
+                  <span className="mono" style={{ fontWeight: 700, minWidth: 70 }}>{o.jobOrderNo}</span>
+                  <span style={{ flex: 1, fontSize: 13.5 }}>{o.model}{o.cut ? ` · ${o.cut}` : ""}{o.color ? ` · ${o.color}` : ""}</span>
+                  <span title={m ? m.label : "Not set"} style={{ fontSize: 16 }}>{m ? m.icon : "❔"}</span>
+                  <span style={{ fontSize: 12, color: "#8a8a8a" }}>Due {o.deliveryDate ? fmtDate(o.deliveryDate) : "—"}</span>
+                </label>
+              );
+            })}
           </div>
-          {g.pieces.map((o) => {
-            const off = lockedMobile && o.mobile !== lockedMobile;
-            return (
-              <label key={o.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "9px 6px", borderTop: "1px solid #F0F0F0", opacity: off ? 0.4 : 1, cursor: off ? "not-allowed" : "pointer" }}>
-                <input type="checkbox" disabled={off} checked={selected.includes(o.id)} onChange={() => toggle(o)} style={{ width: 20, height: 20 }} />
-                <span className="mono" style={{ fontWeight: 700, minWidth: 70 }}>{o.jobOrderNo}</span>
-                <span style={{ flex: 1, fontSize: 13.5 }}>{o.model}{o.cut ? ` · ${o.cut}` : ""}{o.color ? ` · ${o.color}` : ""}</span>
-                <span style={{ fontSize: 12, color: "#8a8a8a" }}>Due {o.deliveryDate ? fmtDate(o.deliveryDate) : "—"}</span>
-              </label>
-            );
-          })}
-        </div>
-      ))}
+        );
+      })}
       {chosen.length > 0 && (
-        <div style={{ position: "sticky", bottom: 12, background: "#1A1A1A", color: "#fff", borderRadius: 10, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", marginBottom: 16 }}>
-          <div style={{ fontSize: 13.5 }}>{chosen.length} piece{chosen.length === 1 ? "" : "s"} selected — {chosen[0].name}</div>
+        <div style={{ position: "sticky", bottom: 12, background: "#1A1A1A", color: "#fff", borderRadius: 10, padding: "12px 16px", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", marginBottom: 16 }}>
+          <div style={{ fontSize: 13.5, marginBottom: 8 }}>
+            {chosen.length} piece{chosen.length === 1 ? "" : "s"} selected — {chosen[0].name}
+            {suggested && <span style={{ marginLeft: 10, color: "#9fd3ab" }}>Customer chose: {COLLECTION[suggested].icon} {COLLECTION[suggested].label}</span>}
+            {!suggested && chosenMethods.length > 1 && <span style={{ marginLeft: 10, color: "#F2C879" }}>These pieces have different collection choices</span>}
+            {!suggested && chosenMethods.length === 1 && <span style={{ marginLeft: 10, color: "#F2C879" }}>Collection method not set — choose how it goes</span>}
+          </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button onClick={() => setDlg({ type: "assign" })} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 6, padding: "10px 18px", fontWeight: 700 }}>🛵 Assign a driver</button>
-            <button onClick={() => setDlg({ type: "pickup" })} style={{ background: "#fff", color: "#1A1A1A", border: "none", borderRadius: 6, padding: "10px 18px", fontWeight: 700 }}>🏬 Collected in store</button>
+            <button onClick={() => setDlg({ type: "assign" })} style={actBtn("driver")}>🛵 Assign a driver</button>
+            <button onClick={() => setDlg({ type: "pickup" })} style={actBtn("store_pickup")}>🏬 Collected in store</button>
+            <button onClick={() => setDlg({ type: "pack" })} style={actBtn("courier")}>✈️ Pack for courier</button>
           </div>
         </div>
       )}
 
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "24px 0 8px" }}>SCHEDULED ({scheduled.length})</div>
-      {scheduled.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14 }}>No deliveries are scheduled.</div> : scheduled.map((d) => {
-        const late = new Date(d.scheduled_at) < new Date();
-        return (
-          <div key={d.id} onClick={() => setDlg({ type: "view", delivery: d })} style={{ border: "1px solid " + (late ? "#E8B9B6" : "#BBD0E6"), background: late ? "#FFFAFA" : "#F4F8FC", borderRadius: 8, padding: "12px 16px", marginBottom: 10, cursor: "pointer" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-              <div><span className="mono" style={{ fontWeight: 700 }}>{d.delivery_no}</span> · <strong>{whenText(d.scheduled_at)}</strong>{late && <span style={{ color: "#C1302B", fontWeight: 700, marginLeft: 8, fontSize: 12 }}>time has passed</span>}</div>
-              <div style={{ fontSize: 13 }}>🛵 {d.driver_name || "—"}</div>
-            </div>
-            <div style={{ fontSize: 13, marginTop: 4 }}>{d.customer_name} · {d.customer_mobile}</div>
-            <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{itemsOf(d.id).map((i) => i.order_no).join(", ")}{d.address ? ` — ${d.address}` : ""}</div>
-          </div>
-        );
-      })}
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "24px 0 8px" }}>🛵 SCHEDULED DELIVERIES ({scheduled.length})</div>
+      {scheduled.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14 }}>No driver deliveries are scheduled.</div> : scheduled.map((d) => <SchedCard key={d.id} d={d} />)}
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "24px 0 8px" }}>✈️ COURIER — PACKED, AWAITING PICKUP ({awaiting.length})</div>
+      {awaiting.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14 }}>Nothing is waiting for a courier.</div> : awaiting.map((s) => <ShipCard key={s.id} s={s} tone={["#EBCB8B", "#FFFBF2"]} />)}
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "24px 0 8px" }}>✈️ COURIER — SHIPPED ({shippedList.length})</div>
+      {shippedList.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14 }}>No parcels are on their way.</div> : shippedList.map((s) => <ShipCard key={s.id} s={s} tone={["#BBD0E6", "#F4F8FC"]} />)}
 
       {recent.length > 0 && (
         <>
           <div style={{ fontWeight: 700, fontSize: 13, margin: "26px 0 8px" }}>RECENT</div>
           <table>
-            <thead><tr><th style={th}>Delivery</th><th style={th}>Customer</th><th style={th}>Pieces</th><th style={th}>Who</th><th style={th}>Status</th></tr></thead>
+            <thead><tr><th style={th}>Type</th><th style={th}>Reference</th><th style={th}>Customer</th><th style={th}>Pieces</th><th style={th}>Who / tracking</th><th style={th}>Status</th></tr></thead>
             <tbody>
-              {recent.map((d) => {
-                const its = itemsOf(d.id);
-                const part = d.status === "delivered" && its.some((i) => i.delivered === false);
-                const st = part ? ["Partly delivered", "#D98E2B"] : CD_STATUS[d.status] || [d.status, "#1A1A1A"];
+              {recent.map((r) => {
+                if (r.kind === "d") {
+                  const d = r.d; const its = dItemsOf(d.id);
+                  const part = d.status === "delivered" && its.some((i) => i.delivered === false);
+                  const st = part ? ["Partly delivered", "#D98E2B"] : CD_STATUS[d.status] || [d.status, "#1A1A1A"];
+                  return (
+                    <tr key={"d" + d.id} onClick={() => setDlg({ type: "view", id: d.id })} style={{ cursor: "pointer" }}>
+                      <td style={td}>{d.kind === "pickup" ? "🏬 Store" : "🛵 Driver"}</td>
+                      <td style={td}><span className="mono">{d.delivery_no}</span><div style={{ fontSize: 11.5, color: "#8a8a8a" }}>{fmtDateTime(r.at)}</div></td>
+                      <td style={td}>{d.customer_name}</td><td style={td}>{its.map((i) => i.order_no).join(", ")}</td>
+                      <td style={td}>{d.kind === "pickup" ? d.created_by : d.driver_name}</td>
+                      <td style={{ ...td, color: st[1], fontWeight: 700 }}>{st[0]}</td>
+                    </tr>
+                  );
+                }
+                const s = r.s; const st = SH_STATUS[s.status] || [s.status, "#1A1A1A"];
                 return (
-                  <tr key={d.id} onClick={() => setDlg({ type: "view", delivery: d })} style={{ cursor: "pointer" }}>
-                    <td style={{ padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5" }}><span className="mono">{d.delivery_no}</span><div style={{ fontSize: 11.5, color: "#8a8a8a" }}>{d.kind === "pickup" ? "Collected in store" : "Delivery"} · {fmtDateTime(d.delivered_at || d.scheduled_at)}</div></td>
-                    <td style={{ padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5" }}>{d.customer_name}</td>
-                    <td style={{ padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5" }}>{its.map((i) => i.order_no).join(", ")}</td>
-                    <td style={{ padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5" }}>{d.kind === "pickup" ? d.created_by : d.driver_name}</td>
-                    <td style={{ padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5", color: st[1], fontWeight: 700 }}>{st[0]}</td>
+                  <tr key={"s" + s.id} onClick={() => setDlg({ type: "sview", id: s.id })} style={{ cursor: "pointer" }}>
+                    <td style={td}>✈️ Courier</td>
+                    <td style={td}><span className="mono">{s.shipment_no}</span><div style={{ fontSize: 11.5, color: "#8a8a8a" }}>{fmtDateTime(r.at)}</div></td>
+                    <td style={td}>{s.customer_name}</td><td style={td}>{sItemsOf(s.id).map((i) => i.order_no).join(", ")}</td>
+                    <td style={td}>{s.carrier} <span className="mono">{s.tracking_no}</span></td>
+                    <td style={{ ...td, color: st[1], fontWeight: 700 }}>{st[0]}</td>
                   </tr>
                 );
               })}
@@ -6108,19 +6231,27 @@ function CustomerDeliveriesPage({ orders, models, session, refresh, flash, openR
         </>
       )}
 
-      {dlg && dlg.type === "assign" && <DeliveryFormDialog pieces={chosen} drivers={drivers} models={models} session={session} onClose={() => setDlg(null)} onDone={(msg) => { flash(msg); done(); }} />}
-      {dlg && dlg.type === "edit" && <DeliveryFormDialog delivery={dlg.delivery} pieces={[]} drivers={drivers} models={models} session={session} onClose={() => setDlg(null)} onDone={(msg) => { flash(msg); done(); }} />}
-      {dlg && dlg.type === "pickup" && <PickupDialog pieces={chosen} session={session} onClose={() => setDlg(null)} onDone={(msg) => { flash(msg); done(); }} />}
-      {dlg && dlg.type === "view" && dlg.delivery && (
-        <DeliveryViewDialog delivery={dlg.delivery} items={itemsOf(dlg.delivery.id)} canManage={dlg.delivery.status === "assigned"} onClose={() => setDlg(null)}
-          onEdit={() => setDlg({ type: "edit", delivery: dlg.delivery })} onCancel={() => setDlg({ type: "cancel", delivery: dlg.delivery })} />
+      {dlg && dlg.type === "assign" && <DeliveryFormDialog pieces={chosen} drivers={drivers} models={models} session={session} onClose={() => setDlg(null)} onDone={(m) => finish(m)} />}
+      {dlg && dlg.type === "edit" && curD && <DeliveryFormDialog delivery={curD} pieces={[]} drivers={drivers} models={models} session={session} onClose={() => setDlg(null)} onDone={(m) => finish(m)} />}
+      {dlg && dlg.type === "pickup" && <PickupDialog pieces={chosen} session={session} onClose={() => setDlg(null)} onDone={(m) => finish(m)} />}
+      {dlg && dlg.type === "pack" && <ShipmentPackDialog pieces={chosen} session={session} onClose={() => setDlg(null)} onDone={() => finish("Packed — evidence saved. Waiting for the courier.")} />}
+      {dlg && dlg.type === "view" && curD && (
+        <DeliveryViewDialog delivery={curD} items={dItemsOf(curD.id)} canManage={curD.status === "assigned"} onClose={() => setDlg(null)}
+          onEdit={() => setDlg({ type: "edit", id: curD.id })} onCancel={() => setDlg({ type: "cancel", id: curD.id })} />
       )}
-      {dlg && dlg.type === "cancel" && (
-        <ConfirmDialog title={`Cancel ${dlg.delivery.delivery_no}?`} confirmLabel="Yes, cancel it" onCancel={() => setDlg(null)}
-          onConfirm={async () => { const { error } = await cancelCustomerDelivery(session, dlg.delivery, itemsOf(dlg.delivery.id), orders); if (error) flash("Error: " + error.message); else { flash("Delivery cancelled"); done(); } }}>
+      {dlg && dlg.type === "cancel" && curD && (
+        <ConfirmDialog title={`Cancel ${curD.delivery_no}?`} confirmLabel="Yes, cancel it" onCancel={() => setDlg({ type: "view", id: curD.id })}
+          onConfirm={async () => { const { error } = await cancelCustomerDelivery(session, curD, dItemsOf(curD.id), orders); if (error) flash("Error: " + error.message); else finish("Delivery cancelled"); }}>
           The pieces go back to <strong>Ready in Stores</strong> so you can assign them again.
         </ConfirmDialog>
       )}
+      {dlg && dlg.type === "sview" && curS && (
+        <ShipmentViewDialog s={curS} items={sItemsOf(curS.id)} flash={flash} onClose={() => setDlg(null)}
+          onPickup={() => setDlg({ type: "spickup", id: curS.id })} onDelivered={() => setDlg({ type: "sdelivered", id: curS.id })} onCancel={() => setDlg({ type: "scancel", id: curS.id })} />
+      )}
+      {dlg && dlg.type === "spickup" && curS && <ShipmentPickupDialog s={curS} session={session} onClose={() => setDlg({ type: "sview", id: curS.id })} onDone={() => finish("Handover recorded — shipped")} />}
+      {dlg && dlg.type === "sdelivered" && curS && <ShipmentDeliveredDialog s={curS} onClose={() => setDlg({ type: "sview", id: curS.id })} onDone={() => finish("Marked delivered")} />}
+      {dlg && dlg.type === "scancel" && curS && <ShipmentCancelDialog s={curS} onClose={() => setDlg({ type: "sview", id: curS.id })} onDone={() => finish("Shipment cancelled — pieces are back in the store")} />}
     </div>
   );
 }
@@ -6133,9 +6264,9 @@ function DeliveryFormDialog({ delivery, pieces, drivers, models, session, onClos
   const [driverId, setDriverId] = useState(editing ? delivery.driver_id || "" : "");
   const [name, setName] = useState(editing ? delivery.customer_name || "" : (pieces[0] && pieces[0].name) || "");
   const [mobile, setMobile] = useState(editing ? delivery.customer_mobile || "" : (pieces[0] && pieces[0].mobile) || "");
-  const [address, setAddress] = useState(editing ? delivery.address || "" : "");
-  const [mapLink, setMapLink] = useState(editing ? delivery.map_link || "" : "");
-  const [notes, setNotes] = useState(editing ? delivery.notes || "" : "");
+  const [address, setAddress] = useState(editing ? delivery.address || "" : pieces[0].collectionAddress || "");
+  const [mapLink, setMapLink] = useState(editing ? delivery.map_link || "" : pieces[0].collectionMapLink || "");
+  const [notes, setNotes] = useState(editing ? delivery.notes || "" : pieces[0].collectionNotes || "");
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -6143,7 +6274,7 @@ function DeliveryFormDialog({ delivery, pieces, drivers, models, session, onClos
   useEffect(() => {   // pre-fill the address kept on the customer's profile
     if (editing || !pieces[0]) return;
     supabase.from("customer_profiles").select("address,map_link").eq("mobile", pieces[0].mobile).limit(1).then(({ data }) => {
-      if (data && data[0]) { if (data[0].address) setAddress(data[0].address); if (data[0].map_link) setMapLink(data[0].map_link); }
+      if (data && data[0]) { if (data[0].address) setAddress((a) => a || data[0].address); if (data[0].map_link) setMapLink((m) => m || data[0].map_link); }
     });
   }, []); // eslint-disable-line
 
@@ -7085,6 +7216,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
             <Row l="Cut" v={order.cut || "—"} /><Row l="Item" v={order.item} />
             <Row l="Prepared By" v={order.preparedBy} /><Row l="Branch" v={order.branch} />
             <Row l="Delivery Date" v={fmtDate(order.deliveryDate)} />
+            {role !== "production" && <Row l="Collection" v={<CollectionSummary order={order} />} />}
             <Row l="Sheila Type" v={order.sheilaType} /><Row l="Abaya Option" v={order.abayaOption ? abayaLabel(normAbaya(order.abayaOption)) + (normAbaya(order.abayaOption) === BUTTON_RANGE ? ` (${order.buttonFrom || "—"} to ${order.buttonTill || "—"})` : "") : "—"} />
             <Row l="Additional Requirements" v={order.additionalRequirements || "—"} />
             <div style={{ margin: "12px 0" }}>
@@ -7157,7 +7289,8 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
 function Row({ l, v }) { return <div style={{ display: "flex", fontSize: 13.5, marginBottom: 5 }}><div style={{ width: 130, color: "#8a8a8a" }}>{l}</div><div>{v}</div></div>; }
 
 function EditFieldsForm({ order, onCancel, onSave, noPII }) {
-  const [form, setForm] = useState({ ...order, measurements: { ...order.measurements } });
+  const [form, setForm] = useState({ ...order, measurements: { ...order.measurements }, collection: collectionFromOrder(order) });
+  const [collErr, setCollErr] = useState("");
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const setMeasure = (k) => (e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }));
   return (
@@ -7165,13 +7298,18 @@ function EditFieldsForm({ order, onCancel, onSave, noPII }) {
       {!noPII && <Field label="Name"><input style={inputStyle} value={form.name} onChange={set("name")} /></Field>}
       {!noPII && <Field label="Mobile"><input style={inputStyle} value={form.mobile} onChange={set("mobile")} /></Field>}
       <Field label="Delivery Date"><input type="date" style={inputStyle} value={form.deliveryDate || ""} onChange={set("deliveryDate")} /></Field>
+      {!noPII && <CollectionPicker value={form.collection} mobile={form.mobile} error={collErr} onChange={(v) => { setForm((f) => ({ ...f, collection: v })); setCollErr(""); }} />}
       <Field label="Comments"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.comments || ""} onChange={set("comments")} /></Field>
       <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", margin: "10px 0 6px" }}>MEASUREMENTS</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
         {ALL_MEASURE_FIELDS.map(([k, l]) => <Field key={k} label={l}><input style={inputStyle} value={form.measurements[k] || ""} onChange={setMeasure(k)} /></Field>)}
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button onClick={() => onSave({ ...(noPII ? {} : { name: form.name, mobile: form.mobile }), deliveryDate: form.deliveryDate, comments: form.comments, measurements: form.measurements })} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Save Changes</button>
+        <button onClick={() => {
+          const cp = form.collection && form.collection.method ? collectionProblem(form.collection) : "";
+          if (cp) { setCollErr(cp); return; }
+          onSave({ ...(noPII ? {} : { name: form.name, mobile: form.mobile }), deliveryDate: form.deliveryDate, comments: form.comments, measurements: form.measurements, ...(noPII ? {} : collectionToFields(form.collection)) });
+        }} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Save Changes</button>
         <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700 }}>Cancel</button>
       </div>
     </div>
@@ -7724,11 +7862,13 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       additional_requirements: form.additionalRequirements || null, attachments: form.attachments || [],
       color: form.color || null, color_swatch: form.colorSwatch || null,
       delivery_date: form.deliveryDate || null,
+      ...collectionToDb(form.collection || EMPTY_COLLECTION),
       attachment_url: attachmentUrl || form.attachmentNote || null, comments: form.comments,
       status: "job_created", history: [{ note: `Job order created by Admin (${session.name})`, by: session.name, at: now }],
     };
     const { data, error } = await supabase.from("job_orders").insert(row).select().single();
     if (error) { flash("Error: " + error.message); return; }
+    await saveDriverAddress(form.collection, { mobile: form.mobile });
     notify(session, `${session.name} created job order ${jobNo}`, "job_order", row.branch, { type: "order", id: data.id });
     await refresh();
     setSubpage("records");
@@ -7745,6 +7885,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       attachmentUrl = up.ref;
     }
     const changed = diffSummary(before, form, !!file);
+    if (form.collection && JSON.stringify(collectionFromOrder(before || {})) !== JSON.stringify(form.collection)) changed.push(`Collection (${(COLLECTION[form.collection.method] || {}).label || "not set"})`);
     const now = new Date().toISOString();
     const note = changed.length ? `Job order edited — changed: ${changed.join(", ")}` : "Job order edited (no field changes detected)";
     const history = [...(before?.history || []), { note, by: session.name, at: now }];
@@ -7755,6 +7896,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       additional_requirements: form.additionalRequirements || null, attachments: form.attachments || [],
       color: form.color || null, color_swatch: form.colorSwatch || null,
       delivery_date: form.deliveryDate || null, attachment_url: attachmentUrl, comments: form.comments,
+      ...(form.collection ? collectionToDb(form.collection) : {}),
       history, updated_at: now,
     }).eq("id", editingOrderId);
     if (error) { flash("Error: " + error.message); return; }
@@ -7762,7 +7904,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     await refresh(); setSubpage("records"); setSelectedId(editingOrderId); flash("Job order updated");
   };
 
-  const handleSaveRequirement = async (customer, measurements, items, deliveryDate, signatureUrl, createOrders) => {
+  const handleSaveRequirement = async (customer, measurements, items, deliveryDate, signatureUrl, createOrders, collection) => {
     const branch = session.branch || (session.role === "admin" ? "Admin" : "");
     const { data: existing } = await supabase.from("customer_profiles").select("id").eq("mobile", customer.mobile).order("created_at", { ascending: false }).limit(1);
 
@@ -7780,6 +7922,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       profile = result.data; pErr = result.error;
     }
     if (pErr) { flash("Error: " + pErr.message); return false; }
+    if (createOrders) await saveDriverAddress(collection, { id: profile.id });
 
     const validItems = items.filter((it) => !it.error);
     const jobNumbers = createOrders && validItems.length > 0 ? await nextJobOrderNumbers(validItems.length) : [];
@@ -7797,6 +7940,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
           job_order_no: jobNumbers[vIdx], name: customer.name, mobile: customer.mobile, order_type: "New",
           model: it.model, item: ITEM_TYPES[0], prepared_by: session.name, branch,
           measurements: calcToStrings(it.calc), cut: it.cut || null, delivery_date: deliveryDate || null,
+          ...collectionToDb(collection || EMPTY_COLLECTION),
           abaya_option: it.abayaOption || "Normal", button_from: it.buttonFrom || null, button_till: it.buttonTill || null,
           additional_requirements: it.additionalRequirements || null, attachments: it.attachments || [],
           color: it.color || null, color_swatch: it.colorSwatch || null,
@@ -7832,6 +7976,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       item: ITEM_TYPES[0], prepared_by: session.name, branch,
       measurements: row.calculated && Object.keys(row.calculated).length ? calcToStrings(row.calculated) : suggestionMeasurements(row.profile.measurements, row.deltas),
       cut: row.cut || null, delivery_date: row.deliveryDate || null,
+      ...collectionToDb(row.collection || EMPTY_COLLECTION),
       abaya_option: row.abayaOption || "Normal", button_from: row.buttonFrom || null, button_till: row.buttonTill || null,
       additional_requirements: row.additionalRequirements || null, attachments: row.attachments || [],
       color: row.color || null, color_swatch: row.colorSwatch || null,
@@ -7841,6 +7986,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     if (error) { flash("Error: " + error.message); return; }
     notify(session, `${session.name} created job order ${order.job_order_no || order.id} from a saved requirement`, "job_order", branch, { type: "order", id: order.id });
     await supabase.from("requirement_items").update({ job_order_id: order.id }).eq("id", row.id);
+    await saveDriverAddress(row.collection, { id: row.profile.id });
     await refresh(); setSubpage("records"); setSelectedId(order.id); flash("Job order created");
   };
 
