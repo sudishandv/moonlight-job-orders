@@ -49,19 +49,32 @@ const STATUS = {
   delivery_assigned: { label: "Delivery Assigned", color: "#3B6FA0" },
   shipment_packed: { label: "Packed — Awaiting Courier", color: "#D98E2B" },
   shipped: { label: "Shipped", color: "#3B6FA0" },
+  delivered_to_stores: { label: "Delivered to Stores", color: "#2F8F46" },
 };
 
 // Internal production stages are hidden from everyone except Production and Admin; others see "Job In Process" instead.
 const PRODUCTION_ONLY = ["job_accepted", "material_assigned", "manpower_planned", "job_in_process", "job_pending_qc", "job_rework"];
 let VIEWER_ROLE = null;
 const setViewerRole = (r) => { VIEWER_ROLE = r; };
-const maskStatus = (status, role = VIEWER_ROLE) =>
-  (role === "production" || role === "admin" || !PRODUCTION_ONLY.includes(status)) ? status : "public_in_process";
+// Production's view of the store side: once the store has accepted the delivery, the story ends with "Delivered to Stores"
+const STORE_SIDE = ["store_received", "ready_in_stores", "delivery_assigned", "shipment_packed", "shipped", "ready_to_deliver", "delivered"];
+const maskStatus = (status, role = VIEWER_ROLE) => {
+  if (role === "production" && STORE_SIDE.includes(status)) return "delivered_to_stores";
+  return (role === "production" || role === "admin" || !PRODUCTION_ONLY.includes(status)) ? status : "public_in_process";
+};
 const hidePII = (session) => !!session && session.role === "production";   // Production never sees a customer's name or mobile number
 // Statuses after production hands the order on: Production's own list drops them
 const AFTER_PRODUCTION = ["in_transit", "store_received", "ready_in_stores", "delivery_assigned", "shipment_packed", "shipped", "ready_to_deliver", "delivered"];
 // "Delivered to stores" = everything from Delivery to Stores onwards, so a piece is never lost from view
 const DELIVERED_STATUSES = AFTER_PRODUCTION;
+const STORE_NOTE = /^(Ready in Stores|Delivery Assigned|Packed — Awaiting Courier|Shipped\b|Delivered\b(?! to stores)|Packed for|Collected by|Delivered to customer|Delivered by|Not delivered by|Delivery attempt failed|Shipment SH-)/i;
+const prodHistory = (h) => {
+  if (/^Delivery Accepted/i.test(h.note || "")) return { ...h, note: String(h.note).replace(/^Delivery Accepted[^:]*/i, "Delivered to Stores") };
+  return STORE_NOTE.test(h.note || "") ? null : h;
+};
+const GROUP_READY = ["ready_in_stores", "delivery_assigned", "shipment_packed", "shipped", "ready_to_deliver"];
+const GROUP_DELIVERED = ["delivered"];
+const inGroup = (g, o) => (g === "ready" ? GROUP_READY.includes(o.status) : g === "delivered" ? GROUP_DELIVERED.includes(o.status) : g === "process" ? !GROUP_READY.includes(o.status) && !GROUP_DELIVERED.includes(o.status) : true);
 
 const MEASURE_FIELDS = [
   ["shoulder", "Shoulder"], ["chest", "Chest"], ["waist", "Waist"], ["hips", "Hips"],
@@ -1287,7 +1300,7 @@ export default function App() {
   const [sentNotes, setSentNotes] = useState(0);
   useEffect(() => {
     if (!profile || (profile.role !== "sales" && profile.role !== "admin")) return;
-    supabase.from("delivery_notes").select("id", { count: "exact", head: true }).eq("status", "sent").then(({ count }) => setSentNotes(count || 0));
+    supabase.from("delivery_notes").select("id", { count: "exact", head: true }).in("status", ["sent", "on_the_way", "arrived"]).then(({ count }) => setSentNotes(count || 0));
   }, [profile?.id, orders]); // eslint-disable-line   (the database only lets a showroom see its own branch's notes)
   const tasks = useMemo(() => computeTasks(profile, orders, sentNotes), [profile, orders, sentNotes]);
 
@@ -1384,7 +1397,7 @@ export default function App() {
         <ProductionCalendar orders={orders} models={config.models} session={profile} refresh={refresh} flash={flash} onOpenOrder={(id) => openTarget("order", id)} />
       )}
       {subpage === "deliveries" && (profile.role === "production" || profile.role === "admin") && (
-        <DeliveryNotesPage orders={orders} session={profile} refresh={refresh} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
+        <DeliveryNotesPage orders={orders} models={config.models} session={profile} refresh={refresh} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {subpage === "incoming" && (profile.role === "sales" || profile.role === "admin") && (
         <IncomingDeliveriesPage orders={orders} session={profile} refresh={refresh} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
@@ -1996,7 +2009,11 @@ function LockScreen({ profile, onUnlock }) {
 
 function RecordsToolbar({ query, setQuery, statusFilter, setStatusFilter, noPII }) {
   const seesAll = VIEWER_ROLE === "production" || VIEWER_ROLE === "admin";
-  const statusList = Object.entries(STATUS).filter(([k]) => (seesAll ? k !== "public_in_process" : !PRODUCTION_ONLY.includes(k)));
+  const statusList = Object.entries(STATUS).filter(([k]) => {
+    if (VIEWER_ROLE === "production") return k !== "public_in_process" && !STORE_SIDE.includes(k);   // keeps "Delivered to Stores"
+    if (k === "delivered_to_stores") return false;
+    return seesAll ? k !== "public_in_process" : !PRODUCTION_ONLY.includes(k);
+  });
   return (
     <div className="no-print" style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 18, flexWrap: "wrap", justifyContent: "center" }}>
       <span style={{ fontSize: 13, fontWeight: 600 }}>SEARCH BY:</span>
@@ -2077,7 +2094,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     if (openRequest && openRequest.type === "order") { setSelectedId(openRequest.id); openFocus.current = openRequest.focus || null; clearOpenRequest(); }
   }, [openRequest]); // eslint-disable-line
   const [view, setView] = useState("all");
-  const filtered = useFilteredOrders(view === "delivered" ? orders.filter((o) => DELIVERED_STATUSES.includes(o.status)) : orders, query, statusFilter);
+  const filtered = useFilteredOrders(view === "all" ? orders : orders.filter((o) => inGroup(view, o)), query, statusFilter);
   const selected = orders.find((o) => o.id === selectedId);
 
   const handleCreate = async (form, file) => {
@@ -2273,7 +2290,12 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL RECORDS</h2>
       <SalesTabs subpage={subpage} setSubpage={setSubpage} />
-      <RecordsViewTabs value={view} onChange={setView} tabs={[["all", "All records", orders.length], ["delivered", "Delivered to stores", orders.filter((o) => DELIVERED_STATUSES.includes(o.status)).length]]} />
+      <RecordsViewTabs value={view} onChange={setView} tabs={[
+        ["all", "All records", orders.length],
+        ["process", "Job in process", orders.filter((o) => inGroup("process", o)).length],
+        ["ready", "Ready in stores", orders.filter((o) => inGroup("ready", o)).length],
+        ["delivered", "Delivered to customer", orders.filter((o) => inGroup("delivered", o)).length],
+      ]} />
       <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />
       <div className="no-print" style={{ textAlign: "right", marginBottom: 10 }}>
         <button onClick={() => setSubpage("requirement")} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em", marginRight: 8 }}>+ NEW REQUIREMENT</button>
@@ -6408,8 +6430,10 @@ function DeliveryViewDialog({ delivery: d, items, canManage, onClose, onEdit, on
           <div style={{ marginTop: 12, padding: 12, background: "#F7F9FB", borderRadius: 6, fontSize: 13.5, lineHeight: 1.8 }}>
             {d.status === "delivered" && (<>
               <div><strong>Received by:</strong> {d.received_by || "—"}{d.received_mobile ? ` · ${d.received_mobile}` : ""}</div>
-              <div><strong>Proof:</strong> {d.proof_type === "both" ? "signature + mobile number" : d.proof_type === "signature" ? "signature" : "mobile number"} · {fmtDateTime(d.delivered_at)}{d.kind === "delivery" && d.delivered_by ? ` · by ${d.delivered_by}` : ""}</div>
+              <div><strong>Proof:</strong> {({ photo_signature: "address photo + signature", both: "signature + mobile number", signature: "signature" })[d.proof_type] || "mobile number"} · {fmtDateTime(d.delivered_at)}{d.kind === "delivery" && d.delivered_by ? ` · by ${d.delivered_by}` : ""}</div>
               {d.signature_url && <SecureImg src={d.signature_url} style={{ width: 240, height: 80, objectFit: "contain", border: "1px solid #E5E5E5", borderRadius: 3, background: "#fff", marginTop: 6 }} />}
+              {(d.proof_files || []).length > 0 && <div style={{ marginTop: 8 }}><div style={{ fontSize: 11.5, color: "#8a8a8a" }}>Photo of the address</div><AttachmentGallery files={d.proof_files} /></div>}
+              {d.proof_lat != null && <div style={{ marginTop: 6 }}><a className="link" href={mapsAt(d.proof_lat, d.proof_lng)} target="_blank" rel="noreferrer">Where the driver's phone was ↗</a>{d.proof_accuracy ? <span style={{ fontSize: 11.5, color: "#8a8a8a" }}> (±{Math.round(d.proof_accuracy)} m)</span> : null}</div>}
             </>)}
             {d.fail_reason && <div style={{ color: "#C1302B" }}><strong>Could not deliver:</strong> {d.fail_reason} · {fmtDateTime(d.delivered_at)}</div>}
           </div>
@@ -6433,17 +6457,25 @@ function DriverApp({ profile, onLogout }) {
   const [handover, setHandover] = useState(null);     // delivery being handed over
   const [failing, setFailing] = useState(null);       // delivery that couldn't be delivered
   const [toast, setToast] = useState("");
+  const [notes, setNotes] = useState([]);
+  const [noteItems, setNoteItems] = useState([]);
+  const [arriving, setArriving] = useState(null);
+  const [busyId, setBusyId] = useState(null);
 
   const load = async () => {
     const { data: d } = await supabase.from("customer_deliveries").select("*").order("scheduled_at");
     setRows(d || []);
     const ids = (d || []).map((x) => x.id);
     if (ids.length) { const { data: it } = await supabase.from("customer_delivery_items").select("*").in("delivery_id", ids); setItems(it || []); } else setItems([]);
+    const { data: n } = await supabase.from("delivery_notes").select("*").order("send_at");
+    setNotes(n || []);
+    const nIds = (n || []).map((x) => x.id);
+    if (nIds.length) { const { data: it } = await supabase.from("delivery_note_items").select("*").in("delivery_note_id", nIds); setNoteItems(it || []); } else setNoteItems([]);
     setLoading(false);
   };
   useEffect(() => {
     load();
-    const ch = supabase.channel("driver-live").on("postgres_changes", { event: "*", schema: "public", table: "customer_deliveries" }, () => load()).subscribe();
+    const ch = supabase.channel("driver-live").on("postgres_changes", { event: "*", schema: "public", table: "customer_deliveries" }, () => load()).on("postgres_changes", { event: "*", schema: "public", table: "delivery_notes" }, () => load()).subscribe();
     const onVisible = () => { if (document.visibilityState === "visible") load(); };
     document.addEventListener("visibilitychange", onVisible);
     const t = setInterval(load, 60000);
@@ -6454,10 +6486,15 @@ function DriverApp({ profile, onLogout }) {
   const dayStart = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
   const sameDay = (a, b) => dayStart(a).getTime() === dayStart(b).getTime();
   const isToday = sameDay(day, new Date());
-  const todays = rows.filter((r) => sameDay(r.scheduled_at, day) && r.status !== "cancelled");
-  const earlier = isToday ? rows.filter((r) => r.status === "assigned" && new Date(r.scheduled_at) < dayStart(new Date())) : [];
+  const NOTE_DONE = ["arrived", "accepted", "partial"];
+  const jobs = [
+    ...rows.filter((r) => r.status !== "cancelled").map((d) => ({ kind: "customer", id: d.id, at: d.scheduled_at, open: d.status === "assigned", d })),
+    ...notes.map((n) => ({ kind: "transfer", id: n.id, at: n.send_at, open: !NOTE_DONE.includes(n.status), n })),
+  ].sort((a, b) => new Date(a.at) - new Date(b.at));
+  const todays = jobs.filter((j) => sameDay(j.at, day));
+  const earlier = isToday ? jobs.filter((j) => j.open && new Date(j.at) < dayStart(new Date())) : [];
   const strip = [-1, 0, 1, 2, 3, 4, 5].map((n) => { const x = new Date(); x.setDate(x.getDate() + n); return dayStart(x); });
-  const openCount = (d) => rows.filter((r) => r.status === "assigned" && sameDay(r.scheduled_at, d)).length;
+  const openCount = (d) => jobs.filter((j) => j.open && sameDay(j.at, d)).length;
   const itemsOf = (id) => items.filter((i) => i.delivery_id === id);
   const shift = (n) => setDay((d) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; });
 
@@ -6499,6 +6536,42 @@ function DriverApp({ profile, onLogout }) {
     );
   };
 
+  const pickUp = async (n) => {
+    setBusyId(n.id);
+    const { error } = await supabase.rpc("transfer_pickup", { p_note_id: n.id });
+    setBusyId(null);
+    if (error) flash(error.message); else { flash("Marked as collected from Production"); load(); }
+  };
+  const TransferCard = ({ n }) => {
+    const its = noteItems.filter((i) => i.delivery_note_id === n.id);
+    const st = ({ sent: ["Waiting to be collected", "#3B6FA0"], on_the_way: ["On the way to the store", "#D98E2B"], arrived: ["Delivered to the store", "#2F8F46"], accepted: ["Accepted by the store", "#2F8F46"], partial: ["Accepted by the store", "#2F8F46"] })[n.status] || [n.status, "#1A1A1A"];
+    const late = (n.status === "sent" || n.status === "on_the_way") && new Date(n.send_at) < new Date();
+    return (
+      <div style={{ background: "#fff", border: "1px solid " + (late ? "#E8B9B6" : "#DDE1E7"), borderLeft: `5px solid ${st[1]}`, borderRadius: 10, padding: 14, marginBottom: 12, boxShadow: "0 2px 8px rgba(20,30,50,0.06)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>{new Date(n.send_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+          <div style={{ fontSize: 12, color: st[1], fontWeight: 700 }}>{st[0]}{late ? " · late" : ""} · <span className="mono">{n.note_no}</span></div>
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 700, marginTop: 6 }}>🏭 Production → 🏬 {n.branch}</div>
+        {n.notes && <div style={{ fontSize: 13, color: "#8a5a00", background: "#FFF8E6", borderRadius: 6, padding: "6px 10px", margin: "8px 0" }}>📝 {n.notes}</div>}
+        {its.map((i) => (
+          <div key={i.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "6px 0", borderTop: "1px solid #F0F0F0" }}>
+            {i.photo_url ? <img src={i.photo_url} alt="" style={{ width: 42, height: 56, objectFit: "cover", borderRadius: 4, background: "#eee" }} /> : <div style={{ width: 42, height: 56, borderRadius: 4, background: "#eee" }} />}
+            <div style={{ flex: 1, fontSize: 13.5 }}><strong className="mono">{i.order_no}</strong><div style={{ color: "#5a5a5a" }}>{i.model}{i.cut ? ` · ${i.cut}` : ""}{i.color ? ` · ${i.color}` : ""}</div></div>
+          </div>
+        ))}
+        {(n.status === "sent" || n.status === "on_the_way") && (
+          <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+            {n.status === "sent" && <button disabled={busyId === n.id} onClick={() => pickUp(n)} style={{ flex: 1, background: "#D98E2B", color: "#fff", border: "none", borderRadius: 8, padding: "13px 10px", fontSize: 15, fontWeight: 700 }}>▶ Picked up from Production</button>}
+            <button onClick={() => setArriving(n)} style={{ flex: 1, background: "#2F8F46", color: "#fff", border: "none", borderRadius: 8, padding: "13px 10px", fontSize: 15, fontWeight: 700 }}>✔ Delivered to the store</button>
+          </div>
+        )}
+        {n.status === "arrived" && <div style={{ fontSize: 12.5, color: "#5a5a5a", marginTop: 8 }}>Received by {n.arrival_receiver} · {fmtTime(n.arrived_at)} — waiting for the store to check it.</div>}
+      </div>
+    );
+  };
+  const renderJob = (j) => (j.kind === "customer" ? <Card key={"c" + j.id} d={j.d} /> : <TransferCard key={"t" + j.id} n={j.n} />);
+
   return (
     <div style={{ maxWidth: 560, margin: "0 auto", padding: "0 14px 40px", fontFamily: "Inter, sans-serif" }}>
       <GlobalStyle />
@@ -6527,48 +6600,62 @@ function DriverApp({ profile, onLogout }) {
 
       {loading ? <div style={{ textAlign: "center", color: "#8a8a8a", padding: 30 }}>Loading…</div> : (
         <>
-          {earlier.length > 0 && (<><div style={{ fontWeight: 700, fontSize: 12.5, color: "#C1302B", margin: "6px 0" }}>EARLIER — STILL OPEN ({earlier.length})</div>{earlier.map((d) => <Card key={d.id} d={d} />)}</>)}
+          {earlier.length > 0 && (<><div style={{ fontWeight: 700, fontSize: 12.5, color: "#C1302B", margin: "6px 0" }}>EARLIER — STILL OPEN ({earlier.length})</div>{earlier.map(renderJob)}</>)}
           {todays.length === 0 && earlier.length === 0 && <div style={{ textAlign: "center", color: "#8a8a8a", padding: 40, fontSize: 14 }}>No deliveries on this day.</div>}
-          {todays.map((d) => <Card key={d.id} d={d} />)}
+          {todays.map(renderJob)}
         </>
       )}
 
       {handover && <DriverHandoverDialog delivery={handover} items={itemsOf(handover.id)} onClose={() => setHandover(null)} onDone={(m) => { setHandover(null); flash(m); load(); }} />}
       {failing && <DriverFailDialog delivery={failing} onClose={() => setFailing(null)} onDone={(m) => { setFailing(null); flash(m); load(); }} />}
+      {arriving && <DriverArrivalDialog note={arriving} items={noteItems.filter((i) => i.delivery_note_id === arriving.id)} onClose={() => setArriving(null)} onDone={(m) => { setArriving(null); flash(m); load(); }} />}
       {toast && <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "#1A1A1A", color: "#fff", padding: "11px 20px", borderRadius: 6, fontSize: 14, zIndex: 1500 }}>{toast}</div>}
     </div>
   );
 }
 
+// Best effort: where the phone is at the moment of handover (asks the driver's permission; never blocks the delivery)
+const getPosition = () => new Promise((resolve) => {
+  if (!navigator.geolocation) return resolve(null);
+  navigator.geolocation.getCurrentPosition(
+    (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }),
+    () => resolve(null), { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 });
+});
+const mapsAt = (lat, lng) => `https://www.google.com/maps?q=${lat},${lng}`;
+
 function DriverHandoverDialog({ delivery: d, items, onClose, onDone }) {
   const [ticks, setTicks] = useState(Object.fromEntries(items.map((i) => [i.id, true])));
   const [by, setBy] = useState(d.customer_name || "");
   const [mobile, setMobile] = useState("");
+  const [files, setFiles] = useState([]);
   const [signed, setSigned] = useState(false);
   const sigCanvas = React.useRef(null);
+  const posRef = React.useRef(null);
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const picked = items.filter((i) => ticks[i.id]);
+  useEffect(() => { getPosition().then((p) => { posRef.current = p; }); }, []);   // asks for permission up front
 
   const check = () => {
     if (picked.length === 0) return "Tick the pieces you delivered, or use “Couldn't deliver”.";
-    if (!signed && mobile.replace(/\D/g, "").length < 7) return "Get a signature, or enter the receiver's mobile number.";
+    if (files.length < 1) return "Take a photo of the delivery address — the door, the building or the house number.";
+    if (!signed) return "The customer must sign on the screen.";
     return "";
   };
   const submit = async () => {
     setBusy(true); setError("");
-    let ref = null;
-    if (signed && sigCanvas.current) {
-      const blob = await new Promise((r) => sigCanvas.current.toBlob(r, "image/png"));
-      const up = blob ? await uploadCustomerFile(`delivery-proof/${d.id}-${Date.now()}.png`, blob, "image/png") : { error: { message: "no signature" } };
-      if (up.error) { setError("Couldn't save the signature: " + up.error.message); setBusy(false); setConfirm(false); return; }
-      ref = up.ref;
-    }
-    const { data: notifId, error: e } = await supabase.rpc("complete_delivery", { p_delivery_id: d.id, p_item_ids: picked.map((i) => i.id), p_received_by: by.trim(), p_received_mobile: mobile.trim(), p_signature: ref });
+    const blob = sigCanvas.current ? await new Promise((r) => sigCanvas.current.toBlob(r, "image/png")) : null;
+    const up = blob ? await uploadCustomerFile(`delivery-proof/${d.id}-${Date.now()}.png`, blob, "image/png") : { error: { message: "no signature" } };
+    if (up.error) { setError("Couldn't save the signature: " + up.error.message); setBusy(false); setConfirm(false); return; }
+    const pos = posRef.current || (await getPosition());
+    const { data: notifId, error: e } = await supabase.rpc("complete_delivery", {
+      p_delivery_id: d.id, p_item_ids: picked.map((i) => i.id), p_received_by: by.trim(), p_received_mobile: mobile.trim(), p_signature: up.ref,
+      p_files: files, p_lat: pos ? pos.lat : null, p_lng: pos ? pos.lng : null, p_accuracy: pos ? pos.acc : null,
+    });
     setBusy(false); setConfirm(false);
     if (e) { setError(e.message); return; }
-    if (notifId) supabase.functions.invoke("push-service", { body: { action: "notify", notification_id: notifId } });   // alerts the showroom
+    if (notifId) supabase.functions.invoke("push-service", { body: { action: "notify", notification_id: notifId } });
     onDone(`Delivered — ${picked.length} piece${picked.length === 1 ? "" : "s"} recorded`);
   };
 
@@ -6576,7 +6663,7 @@ function DriverHandoverDialog({ delivery: d, items, onClose, onDone }) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 12 }}>
       <div style={{ background: "#fff", borderRadius: 10, padding: 20, width: "100%", maxWidth: 520 }}>
         <div style={{ fontWeight: 700, fontSize: 19, marginBottom: 2 }}>Hand over · {d.delivery_no}</div>
-        <div style={{ fontSize: 13, color: "#5a5a5a", marginBottom: 12 }}>{d.customer_name}</div>
+        <div style={{ fontSize: 13, color: "#5a5a5a", marginBottom: 12 }}>{d.customer_name}{d.address ? ` — ${d.address}` : ""}</div>
         <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>PIECES DELIVERED</div>
         {items.map((i) => (
           <label key={i.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 4px", borderBottom: "1px solid #F0F0F0" }}>
@@ -6586,17 +6673,20 @@ function DriverHandoverDialog({ delivery: d, items, onClose, onDone }) {
         ))}
         {picked.length < items.length && <div style={{ fontSize: 12, color: "#C1302B", marginTop: 6 }}>Pieces left unticked go back to the store.</div>}
 
-        <div style={{ fontSize: 12.5, fontWeight: 700, margin: "16px 0 6px" }}>PROOF — a signature or the receiver's mobile number</div>
+        <div style={{ fontSize: 12.5, fontWeight: 700, margin: "16px 0 6px" }}>1. PROOF OF THE ADDRESS</div>
+        <AttachmentField files={files} onChange={setFiles} folder="delivery-proof" live label="Photo of the address — the door, the building or the house number *" />
+        <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 4 }}>Your phone's location is saved with the delivery as extra proof, if you allow it.</div>
+
+        <div style={{ fontSize: 12.5, fontWeight: 700, margin: "16px 0 6px" }}>2. THE CUSTOMER'S SIGNATURE</div>
         <div style={{ marginBottom: 10 }}><div style={label13}>Received by</div><input value={by} onChange={(e) => setBy(e.target.value)} style={inputStyle} /></div>
-        <div style={{ marginBottom: 10 }}>
-          <div style={label13}>Receiver's mobile number</div>
+        <SignaturePad canvasRef={sigCanvas} onDrawn={setSigned} />
+        <div style={{ marginTop: 10 }}>
+          <div style={label13}>Receiver's mobile number (optional)</div>
           <div style={{ display: "flex", gap: 8 }}>
             <input value={mobile} inputMode="tel" onChange={(e) => setMobile(e.target.value)} style={inputStyle} placeholder="e.g. 5551 2345" />
             {d.customer_mobile && <button onClick={() => setMobile(d.customer_mobile)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "0 12px", fontSize: 12, whiteSpace: "nowrap" }}>Customer's number</button>}
           </div>
         </div>
-        <div style={label13}>Signature</div>
-        <SignaturePad canvasRef={sigCanvas} onDrawn={setSigned} />
 
         {error && <div style={{ color: "#C1302B", fontSize: 13.5, marginTop: 10 }}>{error}</div>}
         <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
@@ -6604,7 +6694,56 @@ function DriverHandoverDialog({ delivery: d, items, onClose, onDone }) {
           <button onClick={() => { const p = check(); if (p) setError(p); else { setError(""); setConfirm(true); } }} style={{ flex: 1, background: "#2F8F46", color: "#fff", border: "none", borderRadius: 8, padding: "13px 10px", fontSize: 15, fontWeight: 700 }}>Submit delivery</button>
         </div>
       </div>
-      {confirm && <ConfirmDialog title="Submit this delivery?" confirmLabel="Yes, submit" busy={busy} onCancel={() => setConfirm(false)} onConfirm={submit}>{picked.length} piece{picked.length === 1 ? "" : "s"} handed over to {by || "the customer"}. This closes the delivery.</ConfirmDialog>}
+      {confirm && <ConfirmDialog title="Submit this delivery?" confirmLabel="Yes, submit" busy={busy} onCancel={() => setConfirm(false)} onConfirm={submit}>{picked.length} piece{picked.length === 1 ? "" : "s"} handed over to {by || "the customer"}, with the address photo and the signature. This closes the delivery.</ConfirmDialog>}
+    </div>
+  );
+}
+
+function DriverArrivalDialog({ note, items, onClose, onDone }) {
+  const [receiver, setReceiver] = useState("");
+  const [files, setFiles] = useState([]);
+  const [signed, setSigned] = useState(false);
+  const sigCanvas = React.useRef(null);
+  const posRef = React.useRef(null);
+  const [error, setError] = useState("");
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { getPosition().then((p) => { posRef.current = p; }); }, []);
+  const check = () => {
+    if (!receiver.trim()) return "Enter the name of the person who received it at the store.";
+    if (files.length < 1) return "Take a photo at the store — the pieces being handed over, or the store entrance.";
+    if (!signed) return "The person receiving at the store must sign on the screen.";
+    return "";
+  };
+  const submit = async () => {
+    setBusy(true); setError("");
+    const blob = sigCanvas.current ? await new Promise((r) => sigCanvas.current.toBlob(r, "image/png")) : null;
+    const up = blob ? await uploadCustomerFile(`delivery-proof/transfer-${note.id}-${Date.now()}.png`, blob, "image/png") : { error: { message: "no signature" } };
+    if (up.error) { setError("Couldn't save the signature: " + up.error.message); setBusy(false); setConfirm(false); return; }
+    const pos = posRef.current || (await getPosition());
+    const { data: notifId, error: e } = await supabase.rpc("transfer_arrive", { p_note_id: note.id, p_receiver: receiver.trim(), p_signature: up.ref, p_files: files, p_lat: pos ? pos.lat : null, p_lng: pos ? pos.lng : null, p_accuracy: pos ? pos.acc : null });
+    setBusy(false); setConfirm(false);
+    if (e) { setError(e.message); return; }
+    if (notifId) supabase.functions.invoke("push-service", { body: { action: "notify", notification_id: notifId } });   // alerts the store
+    onDone(`Delivered to ${note.branch} — recorded`);
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 12 }}>
+      <div style={{ background: "#fff", borderRadius: 10, padding: 20, width: "100%", maxWidth: 520 }}>
+        <div style={{ fontWeight: 700, fontSize: 19, marginBottom: 2 }}>Delivered to {note.branch} · {note.note_no}</div>
+        <div style={{ fontSize: 13, color: "#5a5a5a", marginBottom: 12 }}>{items.map((i) => i.order_no).join(", ")}</div>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>1. PHOTO AT THE STORE</div>
+        <AttachmentField files={files} onChange={setFiles} folder="delivery-proof" live label="Photo of the pieces being handed over / the store entrance *" />
+        <div style={{ fontSize: 12.5, fontWeight: 700, margin: "16px 0 6px" }}>2. WHO RECEIVED IT</div>
+        <div style={{ marginBottom: 10 }}><div style={label13}>Name of the person receiving *</div><input value={receiver} onChange={(e) => setReceiver(e.target.value)} style={inputStyle} /></div>
+        <SignaturePad canvasRef={sigCanvas} onDrawn={setSigned} />
+        {error && <div style={{ color: "#C1302B", fontSize: 13.5, marginTop: 10 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 8, padding: "13px 18px", fontWeight: 700 }}>Back</button>
+          <button onClick={() => { const p = check(); if (p) setError(p); else { setError(""); setConfirm(true); } }} style={{ flex: 1, background: "#2F8F46", color: "#fff", border: "none", borderRadius: 8, padding: "13px 10px", fontSize: 15, fontWeight: 700 }}>Submit</button>
+        </div>
+      </div>
+      {confirm && <ConfirmDialog title="Submit this delivery?" confirmLabel="Yes, submit" busy={busy} onCancel={() => setConfirm(false)} onConfirm={submit}>Delivered to {note.branch}, received by {receiver}. The store is notified to check and accept it.</ConfirmDialog>}
     </div>
   );
 }
@@ -6661,6 +6800,8 @@ function DeliveryRecord({ order }) {
             {d.status === "delivered" && r.delivered !== false && (<>
               <div>Received by <strong>{d.received_by || "—"}</strong>{d.received_mobile ? ` · ${d.received_mobile}` : ""} · {fmtDateTime(d.delivered_at)}</div>
               {d.signature_url && <SecureImg src={d.signature_url} style={{ width: 200, height: 64, objectFit: "contain", border: "1px solid #E5E5E5", borderRadius: 3, background: "#fff", marginTop: 4 }} />}
+              {(d.proof_files || []).length > 0 && <div style={{ marginTop: 6 }}><div style={{ fontSize: 11.5, color: "#8a8a8a" }}>Photo of the address</div><AttachmentGallery files={d.proof_files} /></div>}
+              {d.proof_lat != null && <div style={{ marginTop: 4 }}><a className="link" href={mapsAt(d.proof_lat, d.proof_lng)} target="_blank" rel="noreferrer">Where the driver's phone was ↗</a>{d.proof_accuracy ? <span style={{ fontSize: 11.5, color: "#8a8a8a" }}> (±{Math.round(d.proof_accuracy)} m)</span> : null}</div>}
             </>)}
             {d.fail_reason && <div style={{ color: "#C1302B" }}>Could not deliver: {d.fail_reason}</div>}
           </div>
@@ -6672,14 +6813,20 @@ function DeliveryRecord({ order }) {
 
 /* ---------------- Delivery to stores ---------------- */
 
-async function createDeliveryNote(session, { branch, sendAt, carriedBy, notes, orders, attachments }) {
+async function createDeliveryNote(session, { branch, sendAt, carriedBy, notes, orders, attachments, driver, models }) {
   const { data: note, error } = await supabase.from("delivery_notes")
-    .insert({ branch, send_at: sendAt, carried_by: carriedBy || null, notes: notes || null, attachments: attachments || [], created_by: session.name }).select().single();
+    .insert({ branch, send_at: sendAt, carried_by: driver ? null : carriedBy || null, driver_id: driver ? driver.id : null, driver_name: driver ? driver.name : null, notes: notes || null, attachments: attachments || [], created_by: session.name }).select().single();
   if (error) return { error };
-  const { error: e2 } = await supabase.from("delivery_note_items").insert(orders.map((o) => ({ delivery_note_id: note.id, job_order_id: o.id })));
+  const { error: e2 } = await supabase.from("delivery_note_items").insert(orders.map((o) => {
+    const m = (models || []).find((x) => x.modelNo === o.model);
+    return { delivery_note_id: note.id, job_order_id: o.id, order_no: o.jobOrderNo, model: o.model, color: o.color || null, cut: o.cut || null, photo_url: (m && m.photoUrl) || null };
+  }));
   if (e2) return { error: e2 };
   for (const o of orders) await advanceOrder(session, o, "in_transit", `${note.note_no} to ${branch}`, null, null, { silent: true });
-  notify(session, `Delivery ${note.note_no} is on its way to ${branch}: ${orders.length} piece${orders.length === 1 ? "" : "s"}`, "delivery", branch, { type: "delivery", id: note.id });
+  notify(session, driver
+    ? `Delivery ${note.note_no} to ${branch} is scheduled for ${whenText(sendAt)} with ${driver.name}: ${orders.length} piece${orders.length === 1 ? "" : "s"}`
+    : `Delivery ${note.note_no} is on its way to ${branch}: ${orders.length} piece${orders.length === 1 ? "" : "s"}`,
+    "delivery", branch, { type: "delivery", id: note.id });
   return { note };
 }
 
@@ -6722,7 +6869,7 @@ async function printDeliveryNote(note, rows) {
   <div class="meta">
     <div><strong>Note no:</strong> ${esc(note.note_no)}</div><div><strong>From:</strong> Production</div><div><strong>To:</strong> ${esc(note.branch)}</div>
     <div><strong>Sent:</strong> ${esc(new Date(note.send_at).toLocaleString())}</div>
-    ${note.carried_by ? `<div><strong>Carried by:</strong> ${esc(note.carried_by)}</div>` : ""}${note.notes ? `<div><strong>Notes:</strong> ${esc(note.notes)}</div>` : ""}
+    ${note.carried_by || note.driver_name ? `<div><strong>Carried by:</strong> ${esc(note.carried_by || note.driver_name)}</div>` : ""}${note.notes ? `<div><strong>Notes:</strong> ${esc(note.notes)}</div>` : ""}
   </div>
   <table><thead><tr><th>#</th><th>Job order</th><th>Model</th><th>Colour</th><th>Cut</th><th>Due</th><th style="width:70px">Received</th></tr></thead><tbody>
   ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.no)}</td><td>${esc(r.model)}</td><td>${esc(r.color)}</td><td>${esc(r.cut)}</td><td>${esc(r.due)}</td><td></td></tr>`).join("")}
@@ -6734,16 +6881,38 @@ async function printDeliveryNote(note, rows) {
   w.document.close();
 }
 
-const DN_STATUS = { sent: ["On the way", "#3B6FA0"], accepted: ["Accepted", "#2F8F46"], partial: ["Partly received", "#C1302B"] };
+const DN_STATUS = { sent: ["Scheduled", "#3B6FA0"], on_the_way: ["On the way", "#D98E2B"], arrived: ["Arrived — awaiting acceptance", "#7A4EA8"], accepted: ["Accepted", "#2F8F46"], partial: ["Partly received", "#C1302B"] };
+const NOTE_OPEN = ["sent", "on_the_way", "arrived"];
+const dnStatus = (n) => (n.status === "sent" && !n.driver_id ? ["On the way", "#3B6FA0"] : DN_STATUS[n.status] || [n.status, "#1A1A1A"]);   // no driver = hand-carried
+
+// The driver and arrival details (shown to Production and the store)
+function NoteTransferInfo({ note }) {
+  if (!note.driver_id && !note.arrived_at) return null;
+  return (
+    <div style={{ margin: "10px 0", padding: 10, background: "#F7F9FB", borderRadius: 6, fontSize: 13, lineHeight: 1.7 }}>
+      {note.driver_name && <div>🛵 <strong>{note.driver_name}</strong> · scheduled {whenText(note.send_at)}</div>}
+      {note.picked_up_at && <div>Collected from Production · {fmtDateTime(note.picked_up_at)}</div>}
+      {note.arrived_at && (<>
+        <div>Arrived at {note.branch} · {fmtDateTime(note.arrived_at)} — received by <strong>{note.arrival_receiver}</strong></div>
+        {note.arrival_signature_url && <SecureImg src={note.arrival_signature_url} style={{ width: 220, height: 70, objectFit: "contain", border: "1px solid #E5E5E5", borderRadius: 3, background: "#fff", marginTop: 4 }} />}
+        {(note.arrival_files || []).length > 0 && <div style={{ marginTop: 6 }}><AttachmentGallery files={note.arrival_files} /></div>}
+        {note.arrival_lat != null && <div><a className="link" href={mapsAt(note.arrival_lat, note.arrival_lng)} target="_blank" rel="noreferrer">Where the driver's phone was ↗</a></div>}
+      </>)}
+    </div>
+  );
+}
+
 
 // Production / Admin: the "Delivery to Stores" page
-function DeliveryNotesPage({ orders, session, refresh, flash, openRequest, clearOpenRequest }) {
+function DeliveryNotesPage({ orders, models, session, refresh, flash, openRequest, clearOpenRequest }) {
   const nowLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
   const [notes, setNotes] = useState([]);
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState([]);
   const [sendAt, setSendAt] = useState(nowLocal());
   const [carriedBy, setCarriedBy] = useState("");
+  const [drivers, setDrivers] = useState([]);
+  const [driverId, setDriverId] = useState("");
   const [noteText, setNoteText] = useState("");
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -6758,6 +6927,7 @@ function DeliveryNotesPage({ orders, session, refresh, flash, openRequest, clear
   };
   useEffect(() => { load(); }, [orders]); // eslint-disable-line
   useEffect(() => { if (openRequest && openRequest.type === "delivery") { setViewId(openRequest.id); clearOpenRequest(); } }, [openRequest]); // eslint-disable-line
+  useEffect(() => { supabase.rpc("list_drivers").then(({ data }) => setDrivers(data || [])); }, []);
 
   const ready = orders.filter((o) => o.status === "ready_in_production").sort((a, b) => (a.branch || "").localeCompare(b.branch || "") || String(a.jobOrderNo).localeCompare(String(b.jobOrderNo)));
   const chosen = ready.filter((o) => selected.includes(o.id));
@@ -6767,11 +6937,11 @@ function DeliveryNotesPage({ orders, session, refresh, flash, openRequest, clear
 
   const doSend = async () => {
     setBusy(true);
-    const res = await createDeliveryNote(session, { branch, sendAt: new Date(sendAt).toISOString(), carriedBy: carriedBy.trim(), notes: noteText.trim(), orders: chosen, attachments: attach });
+    const res = await createDeliveryNote(session, { branch, sendAt: new Date(sendAt).toISOString(), carriedBy: carriedBy.trim(), notes: noteText.trim(), orders: chosen, attachments: attach, driver: drivers.find((d) => d.id === driverId) || null, models });
     setBusy(false); setConfirm(false);
     if (res.error) { flash("Error: " + res.error.message); return; }
     flash(`Delivery ${res.note.note_no} sent to ${branch}`);
-    setSelected([]); setCarriedBy(""); setNoteText(""); setAttach([]); setSendAt(nowLocal()); refresh(); load();
+    setSelected([]); setCarriedBy(""); setDriverId(""); setNoteText(""); setAttach([]); setSendAt(nowLocal()); refresh(); load();
   };
 
   const rowsOf = (noteId) => items.filter((i) => i.delivery_note_id === noteId).map((i) => {
@@ -6813,8 +6983,14 @@ function DeliveryNotesPage({ orders, session, refresh, flash, openRequest, clear
             <div style={{ ...cardStyle, marginTop: 14 }}>
               <div style={{ fontWeight: 700, marginBottom: 10 }}>New delivery note — {chosen.length} piece{chosen.length === 1 ? "" : "s"} to {branch}</div>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                <div><div style={label13}>Date & time</div><input type="datetime-local" value={sendAt} onChange={(e) => setSendAt(e.target.value)} style={{ ...inputStyle, width: 220 }} /></div>
-                <div><div style={label13}>Carried by (optional)</div><input value={carriedBy} onChange={(e) => setCarriedBy(e.target.value)} placeholder="Driver / van" style={{ ...inputStyle, width: 200 }} /></div>
+                <div><div style={label13}>Date & time *</div><input type="datetime-local" value={sendAt} onChange={(e) => setSendAt(e.target.value)} style={{ ...inputStyle, width: 220 }} /></div>
+                <div>
+                  <div style={label13}>Driver</div>
+                  <select value={driverId} onChange={(e) => setDriverId(e.target.value)} style={{ ...inputStyle, width: 200 }}>
+                    <option value="">Hand-carried (no driver)</option>{drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                </div>
+                {!driverId && <div><div style={label13}>Carried by (optional)</div><input value={carriedBy} onChange={(e) => setCarriedBy(e.target.value)} placeholder="Name" style={{ ...inputStyle, width: 200 }} /></div>}
                 <div style={{ flex: 1, minWidth: 220 }}><div style={label13}>Notes (optional)</div><input value={noteText} onChange={(e) => setNoteText(e.target.value)} style={inputStyle} /></div>
               </div>
               <div style={{ marginTop: 12 }}>
@@ -6835,7 +7011,7 @@ function DeliveryNotesPage({ orders, session, refresh, flash, openRequest, clear
           <thead><tr><th style={th}>Note</th><th style={th}>To</th><th style={th}>Sent</th><th style={th}>Pieces</th><th style={th}>Status</th><th style={th}></th></tr></thead>
           <tbody>
             {notes.map((n) => {
-              const st = DN_STATUS[n.status] || [n.status, "#1A1A1A"];
+              const st = dnStatus(n);
               return (
                 <tr key={n.id}>
                   <td style={td} className="mono">{n.note_no}</td><td style={td}>{n.branch}</td><td style={td}>{fmtDateTime(n.send_at)}</td>
@@ -6856,7 +7032,8 @@ function DeliveryNotesPage({ orders, session, refresh, flash, openRequest, clear
               <div><div className="mono" style={{ fontSize: 20, fontWeight: 700 }}>{viewNote.note_no}</div><div style={{ fontSize: 13, color: "#5a5a5a" }}>To {viewNote.branch} · {fmtDateTime(viewNote.send_at)}{viewNote.carried_by ? ` · carried by ${viewNote.carried_by}` : ""}</div></div>
               <button onClick={() => setViewId(null)} style={{ background: "none", border: "none", fontSize: 24, color: "#8a8a8a" }}>×</button>
             </div>
-            <div style={{ fontSize: 13, margin: "8px 0", color: (DN_STATUS[viewNote.status] || [])[1], fontWeight: 700 }}>{(DN_STATUS[viewNote.status] || [viewNote.status])[0]}{viewNote.accepted_at ? ` — ${viewNote.accepted_by}, ${fmtDateTime(viewNote.accepted_at)}` : ""}</div>
+            <NoteTransferInfo note={viewNote} />
+            <div style={{ fontSize: 13, margin: "8px 0", color: dnStatus(viewNote)[1], fontWeight: 700 }}>{dnStatus(viewNote)[0]}{viewNote.accepted_at ? ` — ${viewNote.accepted_by}, ${fmtDateTime(viewNote.accepted_at)}` : ""}</div>
             {viewNote.notes && <div style={{ fontSize: 13, marginBottom: 8 }}>Notes: {viewNote.notes}</div>}
             {viewNote.attachments && viewNote.attachments.length > 0 && <div style={{ margin: "10px 0" }}><div style={label13}>Photos / videos of the delivery</div><AttachmentGallery files={viewNote.attachments} /></div>}
             {viewNote.accepted_by && (
@@ -6917,10 +7094,10 @@ function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, 
   const rowsOf = (noteId) => items.filter((i) => i.delivery_note_id === noteId).map((i) => ({ id: i.id, order: orders.find((x) => x.id === i.job_order_id) || {}, received: i.received }));
   const note = notes.find((n) => n.id === openId);
   const rows = note ? rowsOf(note.id) : [];
-  useEffect(() => { if (note && note.status === "sent") setReceived(Object.fromEntries(rowsOf(note.id).map((r) => [r.id, true]))); }, [openId, items.length]); // eslint-disable-line
+  useEffect(() => { if (note && NOTE_OPEN.includes(note.status)) setReceived(Object.fromEntries(rowsOf(note.id).map((r) => [r.id, true]))); }, [openId, items.length]); // eslint-disable-line
 
-  const incoming = notes.filter((n) => n.status === "sent");
-  const recent = notes.filter((n) => n.status !== "sent").slice(0, 12);
+  const incoming = notes.filter((n) => NOTE_OPEN.includes(n.status));
+  const recent = notes.filter((n) => !NOTE_OPEN.includes(n.status)).slice(0, 12);
   const toCheck = orders.filter((o) => o.status === "store_received" && mine(o));
   const notReceived = rows.filter((r) => !received[r.id]).length;
 
@@ -6943,12 +7120,16 @@ function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, 
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 18 }}>INCOMING DELIVERIES</h2>
 
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>ON THE WAY — TO ACCEPT ({incoming.length})</div>
-      {incoming.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14, padding: "6px 0 22px" }}>No deliveries are on the way.</div> : incoming.map((n) => (
-        <div key={n.id} onClick={() => setOpenId(n.id)} style={{ border: "1px solid #BBD0E6", background: "#F4F8FC", borderRadius: 8, padding: "12px 16px", marginBottom: 10, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <div><span className="mono" style={{ fontWeight: 700, fontSize: 15 }}>{n.note_no}</span> · from Production to {n.branch}<div style={{ fontSize: 12.5, color: "#5a5a5a" }}>Sent {fmtDateTime(n.send_at)} · {items.filter((i) => i.delivery_note_id === n.id).length} pieces{n.carried_by ? ` · carried by ${n.carried_by}` : ""}</div></div>
-          <button style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px", fontWeight: 700 }}>Open & accept</button>
-        </div>
-      ))}
+      {incoming.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14, padding: "6px 0 22px" }}>No deliveries are on the way.</div> : incoming.map((n) => {
+        const st = dnStatus(n);
+        return (
+          <div key={n.id} onClick={() => setOpenId(n.id)} style={{ border: "1px solid " + (n.status === "arrived" ? "#C9B3E3" : "#BBD0E6"), background: n.status === "arrived" ? "#FAF6FE" : "#F4F8FC", borderRadius: 8, padding: "12px 16px", marginBottom: 10, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div><span className="mono" style={{ fontWeight: 700, fontSize: 15 }}>{n.note_no}</span> · from Production to {n.branch} <span style={{ marginLeft: 8, color: st[1], fontWeight: 700, fontSize: 12.5 }}>{st[0]}</span>
+              <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{n.driver_name ? `🛵 ${n.driver_name} · ` : ""}{n.status === "sent" && n.driver_id ? "scheduled " : "sent "}{fmtDateTime(n.send_at)} · {items.filter((i) => i.delivery_note_id === n.id).length} pieces{n.carried_by ? ` · carried by ${n.carried_by}` : ""}</div></div>
+            <button style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px", fontWeight: 700 }}>{n.status === "arrived" ? "Check & accept" : "Open"}</button>
+          </div>
+        );
+      })}
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "22px 0 8px" }}>ACCEPTED — WAITING FOR RE-CHECK ({toCheck.length})</div>
       {toCheck.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14 }}>Nothing is waiting for a re-check.</div> : (
@@ -6970,7 +7151,7 @@ function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, 
       {recent.length > 0 && (
         <>
           <div style={{ fontWeight: 700, fontSize: 13, margin: "26px 0 8px" }}>RECENT DELIVERIES</div>
-          {recent.map((n) => { const st = DN_STATUS[n.status] || [n.status, "#1A1A1A"]; return (
+          {recent.map((n) => { const st = dnStatus(n); return (
             <div key={n.id} onClick={() => setOpenId(n.id)} style={{ display: "flex", justifyContent: "space-between", padding: "8px 4px", borderBottom: "1px solid #EEE", cursor: "pointer", fontSize: 13.5 }}>
               <span><span className="mono" style={{ fontWeight: 700 }}>{n.note_no}</span> · {n.branch} · {fmtDateTime(n.send_at)}</span><span style={{ color: st[1], fontWeight: 700 }}>{st[0]}</span>
             </div>
@@ -6985,6 +7166,7 @@ function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, 
               <div><div className="mono" style={{ fontSize: 20, fontWeight: 700 }}>{note.note_no}</div><div style={{ fontSize: 13, color: "#5a5a5a" }}>From Production to {note.branch} · sent {fmtDateTime(note.send_at)}{note.carried_by ? ` · carried by ${note.carried_by}` : ""}</div></div>
               <button onClick={() => setOpenId(null)} style={{ background: "none", border: "none", fontSize: 24, color: "#8a8a8a" }}>×</button>
             </div>
+            <NoteTransferInfo note={note} />
             {note.notes && <div style={{ fontSize: 13, margin: "8px 0" }}>Notes: {note.notes}</div>}
             {note.attachments && note.attachments.length > 0 && <div style={{ margin: "10px 0" }}><div style={label13}>Photos / videos of the delivery</div><AttachmentGallery files={note.attachments} /></div>}
             {note.accepted_by && (
@@ -6993,10 +7175,10 @@ function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, 
                 {note.accepted_signature_url && <SecureImg src={note.accepted_signature_url} style={{ width: 220, height: 70, objectFit: "contain", border: "1px solid #E5E5E5", borderRadius: 3, background: "#fff", marginTop: 4 }} />}
               </div>
             )}
-            <div style={{ fontSize: 12.5, color: "#8a8a8a", margin: "10px 0 6px" }}>{note.status === "sent" ? "Tick each piece that has actually arrived." : (DN_STATUS[note.status] || [note.status])[0] + (note.accepted_at ? ` — ${note.accepted_by}, ${fmtDateTime(note.accepted_at)}` : "")}</div>
+            <div style={{ fontSize: 12.5, color: "#8a8a8a", margin: "10px 0 6px" }}>{NOTE_OPEN.includes(note.status) ? "Tick each piece that has actually arrived." : dnStatus(note)[0] + (note.accepted_at ? ` — ${note.accepted_by}, ${fmtDateTime(note.accepted_at)}` : "")}</div>
             {rows.map((r) => (
-              <label key={r.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 6px", borderBottom: "1px solid #F0F0F0", cursor: note.status === "sent" ? "pointer" : "default" }}>
-                {note.status === "sent"
+              <label key={r.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 6px", borderBottom: "1px solid #F0F0F0", cursor: NOTE_OPEN.includes(note.status) ? "pointer" : "default" }}>
+                {NOTE_OPEN.includes(note.status)
                   ? <input type="checkbox" checked={!!received[r.id]} onChange={() => setReceived((m) => ({ ...m, [r.id]: !m[r.id] }))} style={{ width: 22, height: 22 }} />
                   : <span style={{ width: 22, textAlign: "center", fontWeight: 700, color: r.received ? "#2F8F46" : "#C1302B" }}>{r.received ? "✓" : "✗"}</span>}
                 <span className="mono" style={{ fontWeight: 700, minWidth: 70 }}>{r.order.jobOrderNo}</span>
@@ -7004,8 +7186,8 @@ function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, 
                 <span style={{ fontSize: 12, color: "#8a8a8a" }}>Due {r.order.deliveryDate ? fmtDate(r.order.deliveryDate) : "—"}</span>
               </label>
             ))}
-            {note.status === "sent" && notReceived > 0 && <div style={{ color: "#C1302B", fontSize: 12.5, marginTop: 10 }}>{notReceived} piece{notReceived === 1 ? "" : "s"} not ticked — they go back to Production as "not received".</div>}
-            {note.status === "sent" && (
+            {NOTE_OPEN.includes(note.status) && notReceived > 0 && <div style={{ color: "#C1302B", fontSize: 12.5, marginTop: 10 }}>{notReceived} piece{notReceived === 1 ? "" : "s"} not ticked — they go back to Production as "not received".</div>}
+            {NOTE_OPEN.includes(note.status) && (
               <div style={{ marginTop: 16 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Received by {session.name} — sign to accept</div>
                 <SignaturePad canvasRef={sigRef} onDrawn={setSigned} />
@@ -7013,9 +7195,9 @@ function IncomingDeliveriesPage({ orders, session, refresh, flash, openRequest, 
             )}
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
               <button onClick={() => setOpenId(null)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Close</button>
-              {note.status === "sent" && <button disabled={!signed} onClick={() => setConfirm(true)} style={{ background: signed ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Accept delivery</button>}
+              {NOTE_OPEN.includes(note.status) && <button disabled={!signed} onClick={() => setConfirm(true)} style={{ background: signed ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Accept delivery</button>}
             </div>
-            {note.status === "sent" && !signed && <div style={{ fontSize: 11.5, color: "#8a8a8a", textAlign: "right", marginTop: 6 }}>Sign above to accept.</div>}
+            {NOTE_OPEN.includes(note.status) && !signed && <div style={{ fontSize: 11.5, color: "#8a8a8a", textAlign: "right", marginTop: 6 }}>Sign above to accept.</div>}
           </div>
         </div>
       )}
@@ -7265,7 +7447,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
 
             <div id="order-history" style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid #E5E5E5" }}>
               <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", marginBottom: 8 }}>ACTIVITY LOG</div>
-              {order.history.filter((h) => seesInternal || !h.internal).slice().reverse().map((h, i) => {
+              {(role === "production" ? order.history.map(prodHistory).filter(Boolean) : order.history).filter((h) => seesInternal || !h.internal).slice().reverse().map((h, i) => {
                 let note = seesInternal ? h.note : (h.public_note || h.note);
                 if (pii) note = (note || "").replace(/(Name|Mobile) \([^)]*→[^)]*\)/g, "$1 (changed)");   // edit entries quote the old and new customer details
                 return (
@@ -7820,7 +8002,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     if (openRequest && openRequest.type === "order") { setSelectedId(openRequest.id); openFocus.current = openRequest.focus || null; clearOpenRequest(); }
   }, [openRequest]); // eslint-disable-line
   const [view, setView] = useState("all");
-  const filtered = useFilteredOrders(view === "delivered" ? orders.filter((o) => DELIVERED_STATUSES.includes(o.status)) : orders, query, statusFilter);
+  const filtered = useFilteredOrders(view === "all" ? orders : orders.filter((o) => inGroup(view, o)), query, statusFilter);
   const selected = orders.find((o) => o.id === selectedId);
 
   const handleDeleteOrder = async (id) => {
@@ -8027,7 +8209,12 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     <div>
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>ALL RECORDS</h2>
       <SalesTabs subpage={subpage} setSubpage={setSubpage} />
-      <RecordsViewTabs value={view} onChange={setView} tabs={[["all", "All records", orders.length], ["delivered", "Delivered to stores", orders.filter((o) => DELIVERED_STATUSES.includes(o.status)).length]]} />
+      <RecordsViewTabs value={view} onChange={setView} tabs={[
+        ["all", "All records", orders.length],
+        ["process", "Job in process", orders.filter((o) => inGroup("process", o)).length],
+        ["ready", "Ready in stores", orders.filter((o) => inGroup("ready", o)).length],
+        ["delivered", "Delivered to customer", orders.filter((o) => inGroup("delivered", o)).length],
+      ]} />
       <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />
       <div className="no-print" style={{ textAlign: "right", marginBottom: 10 }}>
         <button onClick={() => setSubpage("requirement")} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em", marginRight: 8 }}>+ NEW REQUIREMENT</button>
