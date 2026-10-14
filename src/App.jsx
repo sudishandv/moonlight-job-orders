@@ -120,6 +120,7 @@ const ROLE_HOME_CARDS = {
     ["🧵", "New Job Order", "Start one from scratch", "new"],
     ["📋", "All Records", "View and manage job orders", "records"],
     ["📦", "Incoming Deliveries", "Deliveries coming to your branch", "incoming"],
+    ["🛵", "Customer Deliveries", "Assign drivers & track deliveries", "custdeliveries"],
     ["📐", "New Requirement", "Take fitting measurements", "requirement"],
     ["📄", "Requirement List", "Browse saved requirements", "requirements"],
     ["👤", "Customers", "Search profiles & history", "customers"],
@@ -152,6 +153,7 @@ const ROLE_HOME_CARDS = {
     ["📝", "Quality Checklist", "Edit the standard checks", "qcsetup"],
     ["🚚", "Delivery to Stores", "Send finished pieces to the branches", "deliveries"],
     ["📦", "Incoming Deliveries", "Deliveries coming to your branch", "incoming"],
+    ["🛵", "Customer Deliveries", "Assign drivers & track deliveries", "custdeliveries"],
     ["🔐", "PIN & Devices", "Set PINs, approve showroom iPads", "pins"],
     ["🔔", "Notifications", "Everything that has happened", "notifications"],
     ["🗂️", "Projects", "Design team projects", "projects"],
@@ -190,7 +192,10 @@ function computeTasks(profile, orders, sentNotes) {
     put("qcqueue", [[count("job_pending_qc"), "to quality check"]]);
     put("deliveries", [[count("ready_in_production"), "ready to send"]]);
   }
-  if (sales) put("incoming", [[sentNotes || 0, "delivery to accept"], [count("store_received", mine), "to re-check"]]);
+  if (sales) {
+    put("incoming", [[sentNotes || 0, "delivery to accept"], [count("store_received", mine), "to re-check"]]);
+    put("custdeliveries", [[count("ready_in_stores", mine), "ready to deliver"]]);
+  }
   return t;
 }
 
@@ -380,7 +385,7 @@ function diffSummary(before, form, fileChanged) {
 const ITEM_TYPES = ["Abaya", "Sheila", "Jalabiya", "Set"];
 const SHEILA_TYPES = ["Chiffon", "Crepe", "Georgette", "Plain"];
 const ORDER_TYPES = ["New", "Alteration"];
-const ROLE_LABEL = { sales: "Sales Panel", production: "Production Panel", admin: "Admin Panel", model_manager: "Model Manager" };
+const ROLE_LABEL = { sales: "Sales Panel", production: "Production Panel", admin: "Admin Panel", model_manager: "Model Manager", driver: "Driver" };
 
 const fmtDate = (d) => { if (!d) return "—"; try { return new Date(d).toLocaleDateString(undefined, { day: "2-digit", month: "2-digit", year: "numeric" }); } catch { return d; } };
 const fmtDateTime = (d) => { try { return new Date(d).toLocaleString(undefined, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch { return d; } };
@@ -1205,7 +1210,7 @@ export default function App() {
     return st.running;
   }, [doLoad]);
 
-  useEffect(() => { if (profile) loadAll(); }, [profile, loadAll]);
+  useEffect(() => { if (profile && profile.role !== "driver") loadAll(); }, [profile, loadAll]);
 
   const loadNotifications = useCallback(async () => {
     const { data } = await supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(50);
@@ -1216,7 +1221,7 @@ export default function App() {
   }, [profile?.name]);
 
   useEffect(() => {
-    if (!profile) return;
+    if (!profile || profile.role === "driver") return;
     loadNotifications();
     const interval = setInterval(loadNotifications, 30000);
     return () => clearInterval(interval);
@@ -1224,7 +1229,7 @@ export default function App() {
 
   // Live updates: refresh a moment after anyone changes something.
   useEffect(() => {
-    if (!profile) return;
+    if (!profile || profile.role === "driver") return;
     let timer = null;
     let lastRun = 0;
     const run = () => { lastRun = Date.now(); loadAll(); loadNotifications(); };
@@ -1298,6 +1303,8 @@ export default function App() {
       setSubpage("deliveries");
     } else if (type === "delivery" && role === "sales") {
       setSubpage("incoming");
+    } else if (type === "cdelivery" && (role === "sales" || role === "admin")) {
+      setSubpage("custdeliveries");
     } else {
       return;                                                   // this role has no page for it — do nothing
     }
@@ -1336,6 +1343,7 @@ export default function App() {
   if (session === undefined) return <Loading text="Loading…" />;
   if (!session) return <LoginGate />;
   if (profile === null) return <NoProfileScreen onSignOut={() => supabase.auth.signOut()} />;
+  if (profile.role === "driver") return <DriverApp profile={profile} onLogout={() => supabase.auth.signOut()} />;
   if (!config || !orders || !profiles || !requirementItems || !projects || !projectCollaborators || !allUsers || !projectTasks || !projectModels) return withLock(<Loading text="Loading job orders…" />);
 
   const refresh = loadAll;
@@ -1377,22 +1385,25 @@ export default function App() {
       )}
       {subpage === "qcsetup" && profile.role === "admin" && <QcSetupPage flash={flash} />}
       {subpage === "notifications" && <NotificationsPage orders={orders} session={profile} onOpen={openFromNotification} />}
+      {subpage === "custdeliveries" && (profile.role === "sales" || profile.role === "admin") && (
+        <CustomerDeliveriesPage orders={orders} models={config.models} session={profile} refresh={refresh} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
+      )}
       {subpage === "pins" && profile.role === "admin" && (
         <PinsPage users={allUsers} branches={config.branches.map((b) => b.name)} session={profile} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && profile.role === "sales" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && profile.role === "sales" && (
         <SalesPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && profile.role === "production" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && profile.role === "production" && (
         <ProductionPanel config={config} orders={orders} profiles={profiles} requirementItems={requirementItems} refresh={refresh} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && profile.role === "admin" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && profile.role === "admin" && (
         <AdminPanel config={config} refresh={refresh} orders={orders} profiles={profiles} requirementItems={requirementItems} session={profile}
           subpage={subpage} setSubpage={setSubpage} selectedId={selectedId} setSelectedId={setSelectedId} flash={flash} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
-      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && profile.role === "model_manager" && (
+      {subpage !== "home" && subpage !== "projects" && subpage !== "analytics" && subpage !== "pins" && subpage !== "calendar" && subpage !== "qcqueue" && subpage !== "qcsetup" && subpage !== "deliveries" && subpage !== "incoming" && subpage !== "notifications" && subpage !== "custdeliveries" && profile.role === "model_manager" && (
         <ModelManagerPanel config={config} refresh={refresh} flash={flash} session={profile} subpage={subpage} setSubpage={setSubpage} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />
       )}
       {toast && (
@@ -4301,7 +4312,7 @@ function ProjectDetailPage({ project, collaborators, allUsers, session, refresh,
     setNewCollabId(""); await refresh(); flash("Collaborator added");
   };
   const removeCollaborator = async (id) => { await supabase.from("project_collaborators").delete().eq("id", id); await refresh(); };
-  const availableUsers = allUsers.filter((u) => !collaborators.some((c) => c.user_id === u.id));
+  const availableUsers = allUsers.filter((u) => u.role !== "driver" && !collaborators.some((c) => c.user_id === u.id));
 
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto" }}>
@@ -5488,6 +5499,583 @@ function QcSetupPage({ flash }) {
   );
 }
 
+/* ---------------- Delivery to the customer (driver) ---------------- */
+
+const baseNo = (no) => String(no || "").replace(/-\d+$/, "");          // "1042-2" → "1042"
+const CD_STATUS = { assigned: ["Scheduled", "#3B6FA0"], delivered: ["Delivered", "#2F8F46"], not_delivered: ["Not delivered", "#C1302B"], cancelled: ["Cancelled", "#8a8a8a"] };
+const mapUrlOf = (d) => d.map_link || (d.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(d.address)}` : "");
+const whenText = (iso) => new Date(iso).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+async function createCustomerDelivery(session, { orders, driver, whenISO, customerName, customerMobile, address, mapLink, notes, models }) {
+  const { data: d, error } = await supabase.from("customer_deliveries").insert({
+    kind: "delivery", branch: orders[0].branch, scheduled_at: whenISO, driver_id: driver.id, driver_name: driver.name,
+    customer_name: customerName, customer_mobile: customerMobile, address: address || null, map_link: mapLink || null, notes: notes || null, created_by: session.name,
+  }).select().single();
+  if (error) return { error };
+  const { error: e2 } = await supabase.from("customer_delivery_items").insert(orders.map((o) => {
+    const m = (models || []).find((x) => x.modelNo === o.model);
+    return { delivery_id: d.id, job_order_id: o.id, order_no: o.jobOrderNo, model: o.model, color: o.color || null, cut: o.cut || null, photo_url: (m && m.photoUrl) || null };
+  }));
+  if (e2) return { error: e2 };
+  for (const o of orders) await advanceOrder(session, o, "delivery_assigned", `${d.delivery_no} — ${driver.name}, ${whenText(whenISO)}`, null, null, { silent: true });
+  if (address || mapLink) await supabase.from("customer_profiles").update({ address: address || null, map_link: mapLink || null }).eq("mobile", customerMobile);   // pre-fills next time
+  notify(session, `Delivery ${d.delivery_no} assigned to ${driver.name} for ${whenText(whenISO)}: ${orders.map((o) => o.jobOrderNo).join(", ")}`, "delivery", orders[0].branch, { type: "cdelivery", id: d.id }, { hideFromProduction: true });
+  return { delivery: d };
+}
+
+async function cancelCustomerDelivery(session, d, items, orders) {
+  const { error } = await supabase.from("customer_deliveries").update({ status: "cancelled" }).eq("id", d.id);
+  if (error) return { error };
+  for (const it of items) {
+    const o = orders.find((x) => x.id === it.job_order_id);
+    if (o && o.status === "delivery_assigned") await advanceOrder(session, o, "ready_in_stores", `${d.delivery_no} cancelled`, null, null, { silent: true });
+  }
+  notify(session, `Delivery ${d.delivery_no} was cancelled (${items.map((i) => i.order_no).join(", ")})`, "delivery", d.branch, { type: "cdelivery", id: d.id }, { hideFromProduction: true });
+  return {};
+}
+
+function CustomerDeliveriesPage({ orders, models, session, refresh, flash, openRequest, clearOpenRequest }) {
+  const [deliveries, setDeliveries] = useState([]);
+  const [items, setItems] = useState([]);
+  const [drivers, setDrivers] = useState([]);
+  const [selected, setSelected] = useState([]);
+  const [dlg, setDlg] = useState(null);       // { type: "assign" | "pickup" | "edit" | "view" | "cancel", delivery? }
+  const mine = (o) => session.role === "admin" || o.branch === session.branch;
+
+  const load = async () => {
+    const { data: d } = await supabase.from("customer_deliveries").select("*").order("scheduled_at", { ascending: false }).limit(80);
+    setDeliveries(d || []);
+    const ids = (d || []).map((x) => x.id);
+    if (ids.length) { const { data: it } = await supabase.from("customer_delivery_items").select("*").in("delivery_id", ids); setItems(it || []); } else setItems([]);
+  };
+  useEffect(() => { load(); }, [orders]); // eslint-disable-line   (a driver finishing a delivery changes the orders, so this refreshes by itself)
+  useEffect(() => { supabase.rpc("list_drivers").then(({ data }) => setDrivers(data || [])); }, []);
+  useEffect(() => { if (openRequest && openRequest.type === "cdelivery") { const d = deliveries.find((x) => x.id === openRequest.id); setDlg({ type: "view", delivery: d || { id: openRequest.id } }); clearOpenRequest(); } }, [openRequest, deliveries.length]); // eslint-disable-line
+
+  const ready = orders.filter((o) => o.status === "ready_in_stores" && mine(o)).sort((a, b) => String(a.jobOrderNo).localeCompare(String(b.jobOrderNo), undefined, { numeric: true }));
+  const groups = [];
+  ready.forEach((o) => {
+    const b = baseNo(o.jobOrderNo);
+    let g = groups.find((x) => x.base === b && x.mobile === o.mobile);
+    if (!g) { g = { base: b, name: o.name, mobile: o.mobile, pieces: [], total: orders.filter((x) => baseNo(x.jobOrderNo) === b && x.mobile === o.mobile).length }; groups.push(g); }
+    g.pieces.push(o);
+  });
+  const chosen = ready.filter((o) => selected.includes(o.id));
+  const lockedMobile = chosen[0] ? chosen[0].mobile : null;
+  const toggle = (o) => setSelected((s) => (s.includes(o.id) ? s.filter((x) => x !== o.id) : [...s, o.id]));
+  const selectGroup = (g) => setSelected((s) => { const all = g.pieces.every((p) => s.includes(p.id)); return all ? s.filter((id) => !g.pieces.some((p) => p.id === id)) : [...new Set([...s, ...g.pieces.map((p) => p.id)])]; });
+
+  const itemsOf = (id) => items.filter((i) => i.delivery_id === id);
+  const scheduled = deliveries.filter((d) => d.status === "assigned").sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+  const recent = deliveries.filter((d) => d.status !== "assigned").slice(0, 25);
+  const done = () => { setDlg(null); setSelected([]); refresh(); load(); };
+  const th = { textAlign: "left", padding: "8px 10px", fontSize: 12.5, borderBottom: "2px solid #1A1A1A" };
+
+  return (
+    <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 18 }}>CUSTOMER DELIVERIES</h2>
+
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>READY FOR THE CUSTOMER ({ready.length})</div>
+      {ready.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14, padding: "6px 0 22px" }}>No pieces are waiting to be delivered.</div> : groups.map((g) => (
+        <div key={g.base + g.mobile} style={{ border: "1px solid #DDE1E7", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+            <div><strong>Order {g.base}</strong> · {g.name} · {g.mobile}<span style={{ marginLeft: 10, fontSize: 12, color: g.pieces.length < g.total ? "#D98E2B" : "#2F8F46", fontWeight: 700 }}>{g.pieces.length} of {g.total} piece{g.total === 1 ? "" : "s"} ready</span></div>
+            <a className="link" style={{ fontSize: 12.5 }} onClick={() => selectGroup(g)}>{g.pieces.every((p) => selected.includes(p.id)) ? "Unselect all" : "Select all pieces"}</a>
+          </div>
+          {g.pieces.map((o) => {
+            const off = lockedMobile && o.mobile !== lockedMobile;
+            return (
+              <label key={o.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "9px 6px", borderTop: "1px solid #F0F0F0", opacity: off ? 0.4 : 1, cursor: off ? "not-allowed" : "pointer" }}>
+                <input type="checkbox" disabled={off} checked={selected.includes(o.id)} onChange={() => toggle(o)} style={{ width: 20, height: 20 }} />
+                <span className="mono" style={{ fontWeight: 700, minWidth: 70 }}>{o.jobOrderNo}</span>
+                <span style={{ flex: 1, fontSize: 13.5 }}>{o.model}{o.cut ? ` · ${o.cut}` : ""}{o.color ? ` · ${o.color}` : ""}</span>
+                <span style={{ fontSize: 12, color: "#8a8a8a" }}>Due {o.deliveryDate ? fmtDate(o.deliveryDate) : "—"}</span>
+              </label>
+            );
+          })}
+        </div>
+      ))}
+      {chosen.length > 0 && (
+        <div style={{ position: "sticky", bottom: 12, background: "#1A1A1A", color: "#fff", borderRadius: 10, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", marginBottom: 16 }}>
+          <div style={{ fontSize: 13.5 }}>{chosen.length} piece{chosen.length === 1 ? "" : "s"} selected — {chosen[0].name}</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button onClick={() => setDlg({ type: "assign" })} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 6, padding: "10px 18px", fontWeight: 700 }}>🛵 Assign a driver</button>
+            <button onClick={() => setDlg({ type: "pickup" })} style={{ background: "#fff", color: "#1A1A1A", border: "none", borderRadius: 6, padding: "10px 18px", fontWeight: 700 }}>🏬 Collected in store</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "24px 0 8px" }}>SCHEDULED ({scheduled.length})</div>
+      {scheduled.length === 0 ? <div style={{ color: "#8a8a8a", fontSize: 14 }}>No deliveries are scheduled.</div> : scheduled.map((d) => {
+        const late = new Date(d.scheduled_at) < new Date();
+        return (
+          <div key={d.id} onClick={() => setDlg({ type: "view", delivery: d })} style={{ border: "1px solid " + (late ? "#E8B9B6" : "#BBD0E6"), background: late ? "#FFFAFA" : "#F4F8FC", borderRadius: 8, padding: "12px 16px", marginBottom: 10, cursor: "pointer" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+              <div><span className="mono" style={{ fontWeight: 700 }}>{d.delivery_no}</span> · <strong>{whenText(d.scheduled_at)}</strong>{late && <span style={{ color: "#C1302B", fontWeight: 700, marginLeft: 8, fontSize: 12 }}>time has passed</span>}</div>
+              <div style={{ fontSize: 13 }}>🛵 {d.driver_name || "—"}</div>
+            </div>
+            <div style={{ fontSize: 13, marginTop: 4 }}>{d.customer_name} · {d.customer_mobile}</div>
+            <div style={{ fontSize: 12.5, color: "#5a5a5a" }}>{itemsOf(d.id).map((i) => i.order_no).join(", ")}{d.address ? ` — ${d.address}` : ""}</div>
+          </div>
+        );
+      })}
+
+      {recent.length > 0 && (
+        <>
+          <div style={{ fontWeight: 700, fontSize: 13, margin: "26px 0 8px" }}>RECENT</div>
+          <table>
+            <thead><tr><th style={th}>Delivery</th><th style={th}>Customer</th><th style={th}>Pieces</th><th style={th}>Who</th><th style={th}>Status</th></tr></thead>
+            <tbody>
+              {recent.map((d) => {
+                const its = itemsOf(d.id);
+                const part = d.status === "delivered" && its.some((i) => i.delivered === false);
+                const st = part ? ["Partly delivered", "#D98E2B"] : CD_STATUS[d.status] || [d.status, "#1A1A1A"];
+                return (
+                  <tr key={d.id} onClick={() => setDlg({ type: "view", delivery: d })} style={{ cursor: "pointer" }}>
+                    <td style={{ padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5" }}><span className="mono">{d.delivery_no}</span><div style={{ fontSize: 11.5, color: "#8a8a8a" }}>{d.kind === "pickup" ? "Collected in store" : "Delivery"} · {fmtDateTime(d.delivered_at || d.scheduled_at)}</div></td>
+                    <td style={{ padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5" }}>{d.customer_name}</td>
+                    <td style={{ padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5" }}>{its.map((i) => i.order_no).join(", ")}</td>
+                    <td style={{ padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5" }}>{d.kind === "pickup" ? d.created_by : d.driver_name}</td>
+                    <td style={{ padding: "9px 10px", fontSize: 13.5, borderBottom: "1px solid #E5E5E5", color: st[1], fontWeight: 700 }}>{st[0]}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {dlg && dlg.type === "assign" && <DeliveryFormDialog pieces={chosen} drivers={drivers} models={models} session={session} onClose={() => setDlg(null)} onDone={(msg) => { flash(msg); done(); }} />}
+      {dlg && dlg.type === "edit" && <DeliveryFormDialog delivery={dlg.delivery} pieces={[]} drivers={drivers} models={models} session={session} onClose={() => setDlg(null)} onDone={(msg) => { flash(msg); done(); }} />}
+      {dlg && dlg.type === "pickup" && <PickupDialog pieces={chosen} session={session} onClose={() => setDlg(null)} onDone={(msg) => { flash(msg); done(); }} />}
+      {dlg && dlg.type === "view" && dlg.delivery && (
+        <DeliveryViewDialog delivery={dlg.delivery} items={itemsOf(dlg.delivery.id)} canManage={dlg.delivery.status === "assigned"} onClose={() => setDlg(null)}
+          onEdit={() => setDlg({ type: "edit", delivery: dlg.delivery })} onCancel={() => setDlg({ type: "cancel", delivery: dlg.delivery })} />
+      )}
+      {dlg && dlg.type === "cancel" && (
+        <ConfirmDialog title={`Cancel ${dlg.delivery.delivery_no}?`} confirmLabel="Yes, cancel it" onCancel={() => setDlg(null)}
+          onConfirm={async () => { const { error } = await cancelCustomerDelivery(session, dlg.delivery, itemsOf(dlg.delivery.id), orders); if (error) flash("Error: " + error.message); else { flash("Delivery cancelled"); done(); } }}>
+          The pieces go back to <strong>Ready in Stores</strong> so you can assign them again.
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
+function DeliveryFormDialog({ delivery, pieces, drivers, models, session, onClose, onDone }) {
+  const editing = !!delivery;
+  const toLocal = (iso) => { const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+  const nextHour = () => { const d = new Date(); d.setHours(d.getHours() + 1, 0, 0, 0); return toLocal(d.toISOString()); };
+  const [when, setWhen] = useState(editing ? toLocal(delivery.scheduled_at) : nextHour());
+  const [driverId, setDriverId] = useState(editing ? delivery.driver_id || "" : "");
+  const [name, setName] = useState(editing ? delivery.customer_name || "" : (pieces[0] && pieces[0].name) || "");
+  const [mobile, setMobile] = useState(editing ? delivery.customer_mobile || "" : (pieces[0] && pieces[0].mobile) || "");
+  const [address, setAddress] = useState(editing ? delivery.address || "" : "");
+  const [mapLink, setMapLink] = useState(editing ? delivery.map_link || "" : "");
+  const [notes, setNotes] = useState(editing ? delivery.notes || "" : "");
+  const [error, setError] = useState("");
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {   // pre-fill the address kept on the customer's profile
+    if (editing || !pieces[0]) return;
+    supabase.from("customer_profiles").select("address,map_link").eq("mobile", pieces[0].mobile).limit(1).then(({ data }) => {
+      if (data && data[0]) { if (data[0].address) setAddress(data[0].address); if (data[0].map_link) setMapLink(data[0].map_link); }
+    });
+  }, []); // eslint-disable-line
+
+  const driver = drivers.find((d) => d.id === driverId);
+  const check = () => {
+    if (!when) return "Choose the date and time.";
+    if (!driver) return "Choose the driver.";
+    if (!name.trim() || !mobile.trim()) return "The customer's name and mobile number are needed.";
+    if (!address.trim() && !mapLink.trim()) return "Enter the delivery address or a map link.";
+    return "";
+  };
+  const save = async () => {
+    setBusy(true);
+    const whenISO = new Date(when).toISOString();
+    let res;
+    if (editing) {
+      res = await supabase.from("customer_deliveries").update({ scheduled_at: whenISO, driver_id: driver.id, driver_name: driver.name, customer_name: name.trim(), customer_mobile: mobile.trim(), address: address.trim() || null, map_link: mapLink.trim() || null, notes: notes.trim() || null }).eq("id", delivery.id);
+      if (!res.error) notify(session, `Delivery ${delivery.delivery_no} updated: ${driver.name}, ${whenText(whenISO)}`, "delivery", delivery.branch, { type: "cdelivery", id: delivery.id }, { hideFromProduction: true });
+    } else {
+      res = await createCustomerDelivery(session, { orders: pieces, driver, whenISO, customerName: name.trim(), customerMobile: mobile.trim(), address: address.trim(), mapLink: mapLink.trim(), notes: notes.trim(), models });
+    }
+    setBusy(false); setConfirm(false);
+    if (res.error) { setError(res.error.message); return; }
+    onDone(editing ? "Delivery updated" : `Delivery assigned to ${driver.name}`);
+  };
+
+  const row = { marginBottom: 12 };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 16 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 560 }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 4 }}>{editing ? `Edit ${delivery.delivery_no}` : "Assign a driver"}</div>
+        {!editing && <div style={{ fontSize: 13, color: "#5a5a5a", marginBottom: 14 }}>{pieces.map((o) => `${o.jobOrderNo} (${o.model}${o.color ? " · " + o.color : ""})`).join(" · ")}</div>}
+        <div style={row}><div style={label13}>Date & time *</div><input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} style={{ ...inputStyle, width: 250 }} /></div>
+        <div style={row}>
+          <div style={label13}>Driver *</div>
+          <select value={driverId} onChange={(e) => setDriverId(e.target.value)} style={{ ...inputStyle, width: 250 }}>
+            <option value="">Choose a driver…</option>{drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+          {drivers.length === 0 && <div style={{ fontSize: 12, color: "#C1302B", marginTop: 4 }}>No driver accounts yet — Admin creates one under Add Users (role: Driver).</div>}
+        </div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ ...row, flex: 1, minWidth: 200 }}><div style={label13}>Customer name *</div><input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} /></div>
+          <div style={{ ...row, flex: 1, minWidth: 200 }}><div style={label13}>Customer mobile *</div><input value={mobile} onChange={(e) => setMobile(e.target.value)} style={inputStyle} /></div>
+        </div>
+        <div style={row}><div style={label13}>Address *</div><textarea value={address} onChange={(e) => setAddress(e.target.value)} style={{ ...inputStyle, minHeight: 60 }} placeholder="Area, street, building, landmark…" /></div>
+        <div style={row}><div style={label13}>Map link (optional)</div><input value={mapLink} onChange={(e) => setMapLink(e.target.value)} style={inputStyle} placeholder="Paste a Google Maps / WhatsApp location link" /></div>
+        <div style={row}><div style={label13}>Notes for the driver (optional)</div><input value={notes} onChange={(e) => setNotes(e.target.value)} style={inputStyle} placeholder="e.g. call before arriving, ring bell twice" /></div>
+        {error && <div style={{ color: "#C1302B", fontSize: 13, marginBottom: 8 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
+          <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 20px", fontWeight: 700 }}>Cancel</button>
+          <button onClick={() => { const p = check(); if (p) setError(p); else { setError(""); setConfirm(true); } }} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontWeight: 700 }}>{editing ? "Save changes" : "Assign delivery"}</button>
+        </div>
+      </div>
+      {confirm && driver && (
+        <ConfirmDialog title={editing ? "Save the changes?" : "Assign this delivery?"} confirmLabel={editing ? "Yes, save" : "Yes, assign"} busy={busy} onCancel={() => setConfirm(false)} onConfirm={save}>
+          {editing ? "The driver sees the new details straight away." : <>{pieces.length} piece{pieces.length === 1 ? "" : "s"} go to <strong>Delivery Assigned</strong> and appear on {driver.name}'s calendar for <strong>{whenText(new Date(when).toISOString())}</strong>.</>}
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
+function PickupDialog({ pieces, session, onClose, onDone }) {
+  const [by, setBy] = useState((pieces[0] && pieces[0].name) || "");
+  const [mobile, setMobile] = useState((pieces[0] && pieces[0].mobile) || "");
+  const [signed, setSigned] = useState(false);
+  const sigCanvas = React.useRef(null);
+  const [error, setError] = useState("");
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    let ref = null;
+    if (signed && sigCanvas.current) {
+      const blob = await new Promise((r) => sigCanvas.current.toBlob(r, "image/png"));
+      const up = blob ? await uploadCustomerFile(`delivery-proof/pickup-${pieces[0].id}-${Date.now()}.png`, blob, "image/png") : { error: { message: "no signature" } };
+      if (up.error) { setError("Couldn't save the signature: " + up.error.message); setBusy(false); setConfirm(false); return; }
+      ref = up.ref;
+    }
+    const { error: e } = await supabase.rpc("record_pickup", { p_order_ids: pieces.map((p) => p.id), p_received_by: by.trim(), p_received_mobile: mobile.trim(), p_signature: ref });
+    setBusy(false); setConfirm(false);
+    if (e) { setError(e.message); return; }
+    onDone("Handed over — marked Delivered");
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 16 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 520 }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 4 }}>Collected in the store</div>
+        <div style={{ fontSize: 13, color: "#5a5a5a", marginBottom: 14 }}>{pieces.map((o) => o.jobOrderNo).join(", ")}</div>
+        <div style={{ marginBottom: 12 }}><div style={label13}>Collected by *</div><input value={by} onChange={(e) => setBy(e.target.value)} style={inputStyle} /></div>
+        <div style={{ marginBottom: 12 }}><div style={label13}>Mobile number</div><input value={mobile} onChange={(e) => setMobile(e.target.value)} style={inputStyle} /></div>
+        <div style={label13}>Signature (optional)</div>
+        <SignaturePad canvasRef={sigCanvas} onDrawn={setSigned} />
+        {error && <div style={{ color: "#C1302B", fontSize: 13, marginTop: 8 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
+          <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 20px", fontWeight: 700 }}>Cancel</button>
+          <button disabled={!by.trim() && !mobile.trim()} onClick={() => setConfirm(true)} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontWeight: 700 }}>Hand over</button>
+        </div>
+      </div>
+      {confirm && <ConfirmDialog title="Hand these pieces over?" confirmLabel="Yes, handed over" busy={busy} onCancel={() => setConfirm(false)} onConfirm={go}>{pieces.length} piece{pieces.length === 1 ? "" : "s"} become <strong>Delivered</strong>, received by {by || "the customer"}.</ConfirmDialog>}
+    </div>
+  );
+}
+
+function DeliveryViewDialog({ delivery: d, items, canManage, onClose, onEdit, onCancel }) {
+  const st = CD_STATUS[d.status] || [d.status || "", "#1A1A1A"];
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 560, maxHeight: "92vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <div><div className="mono" style={{ fontSize: 20, fontWeight: 700 }}>{d.delivery_no || "Delivery"}</div><div style={{ fontSize: 13, color: st[1], fontWeight: 700 }}>{st[0]}{d.kind === "pickup" ? " — collected in store" : ""}</div></div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 24, color: "#8a8a8a" }}>×</button>
+        </div>
+        <div style={{ fontSize: 13.5, lineHeight: 1.8, margin: "10px 0" }}>
+          {d.scheduled_at && <div><strong>{d.kind === "pickup" ? "Handed over" : "Scheduled"}:</strong> {whenText(d.scheduled_at)}</div>}
+          {d.driver_name && <div><strong>Driver:</strong> {d.driver_name}</div>}
+          <div><strong>Customer:</strong> {d.customer_name} · {d.customer_mobile}</div>
+          {d.address && <div><strong>Address:</strong> {d.address}</div>}
+          {mapUrlOf(d) && d.kind !== "pickup" && <div><a className="link" href={mapUrlOf(d)} target="_blank" rel="noreferrer">Open in maps ↗</a></div>}
+          {d.notes && <div><strong>Notes:</strong> {d.notes}</div>}
+        </div>
+        {items.map((i) => (
+          <div key={i.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "8px 0", borderTop: "1px solid #F0F0F0" }}>
+            <span className="mono" style={{ fontWeight: 700, minWidth: 70 }}>{i.order_no}</span>
+            <span style={{ flex: 1, fontSize: 13.5 }}>{i.model}{i.cut ? ` · ${i.cut}` : ""}{i.color ? ` · ${i.color}` : ""}</span>
+            {i.delivered === true && <span style={{ color: "#2F8F46", fontWeight: 700, fontSize: 12 }}>Delivered</span>}
+            {i.delivered === false && <span style={{ color: "#C1302B", fontWeight: 700, fontSize: 12 }}>Not delivered</span>}
+          </div>
+        ))}
+        {(d.status === "delivered" || d.fail_reason) && (
+          <div style={{ marginTop: 12, padding: 12, background: "#F7F9FB", borderRadius: 6, fontSize: 13.5, lineHeight: 1.8 }}>
+            {d.status === "delivered" && (<>
+              <div><strong>Received by:</strong> {d.received_by || "—"}{d.received_mobile ? ` · ${d.received_mobile}` : ""}</div>
+              <div><strong>Proof:</strong> {d.proof_type === "both" ? "signature + mobile number" : d.proof_type === "signature" ? "signature" : "mobile number"} · {fmtDateTime(d.delivered_at)}{d.kind === "delivery" && d.delivered_by ? ` · by ${d.delivered_by}` : ""}</div>
+              {d.signature_url && <SecureImg src={d.signature_url} style={{ width: 240, height: 80, objectFit: "contain", border: "1px solid #E5E5E5", borderRadius: 3, background: "#fff", marginTop: 6 }} />}
+            </>)}
+            {d.fail_reason && <div style={{ color: "#C1302B" }}><strong>Could not deliver:</strong> {d.fail_reason} · {fmtDateTime(d.delivered_at)}</div>}
+          </div>
+        )}
+        {canManage && (
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
+            <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #E8B9B6", color: "#C1302B", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Cancel delivery</button>
+            <button onClick={onEdit} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Edit time / driver / address</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DriverApp({ profile, onLogout }) {
+  const [rows, setRows] = useState([]);
+  const [items, setItems] = useState([]);
+  const [day, setDay] = useState(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; });
+  const [loading, setLoading] = useState(true);
+  const [handover, setHandover] = useState(null);     // delivery being handed over
+  const [failing, setFailing] = useState(null);       // delivery that couldn't be delivered
+  const [toast, setToast] = useState("");
+
+  const load = async () => {
+    const { data: d } = await supabase.from("customer_deliveries").select("*").order("scheduled_at");
+    setRows(d || []);
+    const ids = (d || []).map((x) => x.id);
+    if (ids.length) { const { data: it } = await supabase.from("customer_delivery_items").select("*").in("delivery_id", ids); setItems(it || []); } else setItems([]);
+    setLoading(false);
+  };
+  useEffect(() => {
+    load();
+    const ch = supabase.channel("driver-live").on("postgres_changes", { event: "*", schema: "public", table: "customer_deliveries" }, () => load()).subscribe();
+    const onVisible = () => { if (document.visibilityState === "visible") load(); };
+    document.addEventListener("visibilitychange", onVisible);
+    const t = setInterval(load, 60000);
+    return () => { supabase.removeChannel(ch); document.removeEventListener("visibilitychange", onVisible); clearInterval(t); };
+  }, []); // eslint-disable-line
+
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2600); };
+  const dayStart = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+  const sameDay = (a, b) => dayStart(a).getTime() === dayStart(b).getTime();
+  const isToday = sameDay(day, new Date());
+  const todays = rows.filter((r) => sameDay(r.scheduled_at, day) && r.status !== "cancelled");
+  const earlier = isToday ? rows.filter((r) => r.status === "assigned" && new Date(r.scheduled_at) < dayStart(new Date())) : [];
+  const strip = [-1, 0, 1, 2, 3, 4, 5].map((n) => { const x = new Date(); x.setDate(x.getDate() + n); return dayStart(x); });
+  const openCount = (d) => rows.filter((r) => r.status === "assigned" && sameDay(r.scheduled_at, d)).length;
+  const itemsOf = (id) => items.filter((i) => i.delivery_id === id);
+  const shift = (n) => setDay((d) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; });
+
+  const Card = ({ d }) => {
+    const st = CD_STATUS[d.status] || [d.status, "#1A1A1A"];
+    const late = d.status === "assigned" && new Date(d.scheduled_at) < new Date();
+    const its = itemsOf(d.id);
+    return (
+      <div style={{ background: "#fff", border: "1px solid " + (late ? "#E8B9B6" : "#DDE1E7"), borderLeft: `5px solid ${st[1]}`, borderRadius: 10, padding: 14, marginBottom: 12, boxShadow: "0 2px 8px rgba(20,30,50,0.06)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>{new Date(d.scheduled_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+          <div style={{ fontSize: 12, color: st[1], fontWeight: 700 }}>{st[0]}{late ? " · late" : ""} · <span className="mono">{d.delivery_no}</span></div>
+        </div>
+        {!isToday || sameDay(d.scheduled_at, day) ? null : <div style={{ fontSize: 12, color: "#C1302B" }}>{whenText(d.scheduled_at)}</div>}
+        <div style={{ fontSize: 16, fontWeight: 700, marginTop: 6 }}>{d.customer_name}</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0" }}>
+          {d.customer_mobile && <a href={`tel:${d.customer_mobile}`} style={{ textDecoration: "none", background: "#EAF3EC", color: "#2F8F46", borderRadius: 20, padding: "7px 14px", fontSize: 13.5, fontWeight: 700 }}>📞 {d.customer_mobile}</a>}
+          {mapUrlOf(d) && <a href={mapUrlOf(d)} target="_blank" rel="noreferrer" style={{ textDecoration: "none", background: "#EAF1F8", color: "#2F5F8F", borderRadius: 20, padding: "7px 14px", fontSize: 13.5, fontWeight: 700 }}>📍 Open in maps</a>}
+        </div>
+        {d.address && <div style={{ fontSize: 13.5, color: "#333", marginBottom: 6 }}>{d.address}</div>}
+        {d.notes && <div style={{ fontSize: 13, color: "#8a5a00", background: "#FFF8E6", borderRadius: 6, padding: "6px 10px", marginBottom: 8 }}>📝 {d.notes}</div>}
+        {its.map((i) => (
+          <div key={i.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "6px 0", borderTop: "1px solid #F0F0F0" }}>
+            {i.photo_url ? <img src={i.photo_url} alt="" style={{ width: 42, height: 56, objectFit: "cover", borderRadius: 4, background: "#eee" }} /> : <div style={{ width: 42, height: 56, borderRadius: 4, background: "#eee" }} />}
+            <div style={{ flex: 1, fontSize: 13.5 }}><strong className="mono">{i.order_no}</strong><div style={{ color: "#5a5a5a" }}>{i.model}{i.cut ? ` · ${i.cut}` : ""}{i.color ? ` · ${i.color}` : ""}</div></div>
+            {i.delivered === true && <span style={{ color: "#2F8F46", fontWeight: 700, fontSize: 12 }}>✓ delivered</span>}
+            {i.delivered === false && d.status !== "assigned" && <span style={{ color: "#C1302B", fontWeight: 700, fontSize: 12 }}>not delivered</span>}
+          </div>
+        ))}
+        {d.status === "assigned" && (
+          <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+            <button onClick={() => setHandover(d)} style={{ flex: 1, background: "#2F8F46", color: "#fff", border: "none", borderRadius: 8, padding: "13px 10px", fontSize: 15, fontWeight: 700 }}>✔ Delivered</button>
+            <button onClick={() => setFailing(d)} style={{ background: "#fff", color: "#C1302B", border: "1.5px solid #C1302B", borderRadius: 8, padding: "13px 14px", fontSize: 14, fontWeight: 700 }}>Couldn't deliver</button>
+          </div>
+        )}
+        {d.status === "delivered" && <div style={{ fontSize: 12.5, color: "#5a5a5a", marginTop: 8 }}>Received by {d.received_by || "—"} · {fmtTime(d.delivered_at)}</div>}
+        {d.status === "not_delivered" && <div style={{ fontSize: 12.5, color: "#C1302B", marginTop: 8 }}>{d.fail_reason}</div>}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ maxWidth: 560, margin: "0 auto", padding: "0 14px 40px", fontFamily: "Inter, sans-serif" }}>
+      <GlobalStyle />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 0", borderBottom: "2px solid #1A1A1A", marginBottom: 14 }}>
+        <div><div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 17, letterSpacing: "0.08em" }}>MOONLIGHT CONCEPT</div><div style={{ fontSize: 12, color: "#8a8a8a" }}>🛵 {profile.name}</div></div>
+        <a className="link" style={{ fontSize: 13 }} onClick={onLogout}>Sign out</a>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 6, marginBottom: 10 }}>
+        {strip.map((d) => {
+          const sel = sameDay(d, day); const n = openCount(d);
+          return (
+            <div key={d.toISOString()} onClick={() => setDay(d)} style={{ minWidth: 64, textAlign: "center", padding: "8px 4px", borderRadius: 8, cursor: "pointer", border: "1px solid " + (sel ? "#1A1A1A" : "#DDE1E7"), background: sel ? "#1A1A1A" : "#fff", color: sel ? "#fff" : "#1A1A1A" }}>
+              <div style={{ fontSize: 11 }}>{sameDay(d, new Date()) ? "Today" : d.toLocaleDateString([], { weekday: "short" })}</div>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>{d.getDate()}</div>
+              <div style={{ fontSize: 11, color: sel ? "#9fd3ab" : n ? "#C1302B" : "#9aa0a8", fontWeight: 700 }}>{n ? `${n} to do` : "—"}</div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <button onClick={() => shift(-1)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 6, padding: "6px 14px" }}>◀</button>
+        <div style={{ fontWeight: 700 }}>{day.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" })}</div>
+        <button onClick={() => shift(1)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 6, padding: "6px 14px" }}>▶</button>
+      </div>
+
+      {loading ? <div style={{ textAlign: "center", color: "#8a8a8a", padding: 30 }}>Loading…</div> : (
+        <>
+          {earlier.length > 0 && (<><div style={{ fontWeight: 700, fontSize: 12.5, color: "#C1302B", margin: "6px 0" }}>EARLIER — STILL OPEN ({earlier.length})</div>{earlier.map((d) => <Card key={d.id} d={d} />)}</>)}
+          {todays.length === 0 && earlier.length === 0 && <div style={{ textAlign: "center", color: "#8a8a8a", padding: 40, fontSize: 14 }}>No deliveries on this day.</div>}
+          {todays.map((d) => <Card key={d.id} d={d} />)}
+        </>
+      )}
+
+      {handover && <DriverHandoverDialog delivery={handover} items={itemsOf(handover.id)} onClose={() => setHandover(null)} onDone={(m) => { setHandover(null); flash(m); load(); }} />}
+      {failing && <DriverFailDialog delivery={failing} onClose={() => setFailing(null)} onDone={(m) => { setFailing(null); flash(m); load(); }} />}
+      {toast && <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "#1A1A1A", color: "#fff", padding: "11px 20px", borderRadius: 6, fontSize: 14, zIndex: 1500 }}>{toast}</div>}
+    </div>
+  );
+}
+
+function DriverHandoverDialog({ delivery: d, items, onClose, onDone }) {
+  const [ticks, setTicks] = useState(Object.fromEntries(items.map((i) => [i.id, true])));
+  const [by, setBy] = useState(d.customer_name || "");
+  const [mobile, setMobile] = useState("");
+  const [signed, setSigned] = useState(false);
+  const sigCanvas = React.useRef(null);
+  const [error, setError] = useState("");
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const picked = items.filter((i) => ticks[i.id]);
+
+  const check = () => {
+    if (picked.length === 0) return "Tick the pieces you delivered, or use “Couldn't deliver”.";
+    if (!signed && mobile.replace(/\D/g, "").length < 7) return "Get a signature, or enter the receiver's mobile number.";
+    return "";
+  };
+  const submit = async () => {
+    setBusy(true); setError("");
+    let ref = null;
+    if (signed && sigCanvas.current) {
+      const blob = await new Promise((r) => sigCanvas.current.toBlob(r, "image/png"));
+      const up = blob ? await uploadCustomerFile(`delivery-proof/${d.id}-${Date.now()}.png`, blob, "image/png") : { error: { message: "no signature" } };
+      if (up.error) { setError("Couldn't save the signature: " + up.error.message); setBusy(false); setConfirm(false); return; }
+      ref = up.ref;
+    }
+    const { data: notifId, error: e } = await supabase.rpc("complete_delivery", { p_delivery_id: d.id, p_item_ids: picked.map((i) => i.id), p_received_by: by.trim(), p_received_mobile: mobile.trim(), p_signature: ref });
+    setBusy(false); setConfirm(false);
+    if (e) { setError(e.message); return; }
+    if (notifId) supabase.functions.invoke("push-service", { body: { action: "notify", notification_id: notifId } });   // alerts the showroom
+    onDone(`Delivered — ${picked.length} piece${picked.length === 1 ? "" : "s"} recorded`);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 12 }}>
+      <div style={{ background: "#fff", borderRadius: 10, padding: 20, width: "100%", maxWidth: 520 }}>
+        <div style={{ fontWeight: 700, fontSize: 19, marginBottom: 2 }}>Hand over · {d.delivery_no}</div>
+        <div style={{ fontSize: 13, color: "#5a5a5a", marginBottom: 12 }}>{d.customer_name}</div>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>PIECES DELIVERED</div>
+        {items.map((i) => (
+          <label key={i.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 4px", borderBottom: "1px solid #F0F0F0" }}>
+            <input type="checkbox" checked={!!ticks[i.id]} onChange={() => setTicks((t) => ({ ...t, [i.id]: !t[i.id] }))} style={{ width: 24, height: 24 }} />
+            <span style={{ fontSize: 14 }}><strong className="mono">{i.order_no}</strong> · {i.model}{i.color ? ` · ${i.color}` : ""}</span>
+          </label>
+        ))}
+        {picked.length < items.length && <div style={{ fontSize: 12, color: "#C1302B", marginTop: 6 }}>Pieces left unticked go back to the store.</div>}
+
+        <div style={{ fontSize: 12.5, fontWeight: 700, margin: "16px 0 6px" }}>PROOF — a signature or the receiver's mobile number</div>
+        <div style={{ marginBottom: 10 }}><div style={label13}>Received by</div><input value={by} onChange={(e) => setBy(e.target.value)} style={inputStyle} /></div>
+        <div style={{ marginBottom: 10 }}>
+          <div style={label13}>Receiver's mobile number</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={mobile} inputMode="tel" onChange={(e) => setMobile(e.target.value)} style={inputStyle} placeholder="e.g. 5551 2345" />
+            {d.customer_mobile && <button onClick={() => setMobile(d.customer_mobile)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "0 12px", fontSize: 12, whiteSpace: "nowrap" }}>Customer's number</button>}
+          </div>
+        </div>
+        <div style={label13}>Signature</div>
+        <SignaturePad canvasRef={sigCanvas} onDrawn={setSigned} />
+
+        {error && <div style={{ color: "#C1302B", fontSize: 13.5, marginTop: 10 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 8, padding: "13px 18px", fontWeight: 700 }}>Back</button>
+          <button onClick={() => { const p = check(); if (p) setError(p); else { setError(""); setConfirm(true); } }} style={{ flex: 1, background: "#2F8F46", color: "#fff", border: "none", borderRadius: 8, padding: "13px 10px", fontSize: 15, fontWeight: 700 }}>Submit delivery</button>
+        </div>
+      </div>
+      {confirm && <ConfirmDialog title="Submit this delivery?" confirmLabel="Yes, submit" busy={busy} onCancel={() => setConfirm(false)} onConfirm={submit}>{picked.length} piece{picked.length === 1 ? "" : "s"} handed over to {by || "the customer"}. This closes the delivery.</ConfirmDialog>}
+    </div>
+  );
+}
+
+function DriverFailDialog({ delivery: d, onClose, onDone }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const quick = ["Customer not available", "Wrong / unclear address", "Customer refused", "Customer asked to reschedule"];
+  const go = async () => {
+    setBusy(true);
+    const { data: notifId, error: e } = await supabase.rpc("fail_delivery", { p_delivery_id: d.id, p_reason: reason.trim() });
+    setBusy(false);
+    if (e) { setError(e.message); return; }
+    if (notifId) supabase.functions.invoke("push-service", { body: { action: "notify", notification_id: notifId } });
+    onDone("Recorded — the showroom has been told");
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
+      <div style={{ background: "#fff", borderRadius: 10, padding: 20, width: "100%", maxWidth: 480 }}>
+        <div style={{ fontWeight: 700, fontSize: 19, marginBottom: 8 }}>Couldn't deliver · {d.delivery_no}</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          {quick.map((q) => <button key={q} onClick={() => setReason(q)} style={{ background: reason === q ? "#1A1A1A" : "#fff", color: reason === q ? "#fff" : "#1A1A1A", border: "1px solid #C9CDD3", borderRadius: 18, padding: "7px 14px", fontSize: 13 }}>{q}</button>)}
+        </div>
+        <textarea value={reason} onChange={(e) => setReason(e.target.value)} style={{ ...inputStyle, minHeight: 70 }} placeholder="Reason (required)" />
+        {error && <div style={{ color: "#C1302B", fontSize: 13.5, marginTop: 8 }}>{error}</div>}
+        <div style={{ fontSize: 12, color: "#8a8a8a", marginTop: 8 }}>The pieces go back to the store and the showroom can arrange a new delivery.</div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onClose} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 8, padding: "11px 18px", fontWeight: 700 }}>Back</button>
+          <button disabled={!reason.trim() || busy} onClick={go} style={{ background: reason.trim() ? "#C1302B" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 8, padding: "11px 18px", fontWeight: 700 }}>{busy ? "Saving…" : "Confirm"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeliveryRecord({ order }) {
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    supabase.from("customer_delivery_items").select("*, delivery:customer_deliveries(*)").eq("job_order_id", order.id)
+      .then(({ data }) => setRows((data || []).filter((r) => r.delivery).sort((a, b) => new Date(b.delivery.created_at) - new Date(a.delivery.created_at))));
+  }, [order.id, order.status]);
+  if (rows.length === 0) return null;
+  return (
+    <div style={{ ...cardStyle, margin: "16px 0" }}>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>CUSTOMER DELIVERY RECORD</div>
+      {rows.map((r) => {
+        const d = r.delivery;
+        const st = CD_STATUS[d.status] || [d.status, "#1A1A1A"];
+        return (
+          <div key={r.id} style={{ marginBottom: 12, paddingBottom: 10, borderBottom: "1px solid #EEE", fontSize: 12.5, lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 700, color: st[1] }}><span className="mono">{d.delivery_no}</span> — {d.kind === "pickup" ? "Collected in store" : "Delivery to customer"} · {r.delivered === false ? "this piece not delivered" : st[0]}</div>
+            {d.kind === "delivery" && <div>{whenText(d.scheduled_at)} · driver {d.driver_name || "—"}{d.address ? ` · ${d.address}` : ""}</div>}
+            {d.status === "delivered" && r.delivered !== false && (<>
+              <div>Received by <strong>{d.received_by || "—"}</strong>{d.received_mobile ? ` · ${d.received_mobile}` : ""} · {fmtDateTime(d.delivered_at)}</div>
+              {d.signature_url && <SecureImg src={d.signature_url} style={{ width: 200, height: 64, objectFit: "contain", border: "1px solid #E5E5E5", borderRadius: 3, background: "#fff", marginTop: 4 }} />}
+            </>)}
+            {d.fail_reason && <div style={{ color: "#C1302B" }}>Could not deliver: {d.fail_reason}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ---------------- Delivery to stores ---------------- */
 
 async function createDeliveryNote(session, { branch, sendAt, carriedBy, notes, orders, attachments }) {
@@ -6077,6 +6665,7 @@ function OrderDetail({ order, role, session, onClose, onSaveFields, onAction, on
             {seesInternal && <ProductionInfo order={order} />}
             {(seesInternal || role === "sales") && <QcRecord order={order} />}
             {(seesInternal || role === "sales") && <ReworkRecord order={order} />}
+            {(role === "sales" || role === "admin") && <DeliveryRecord order={order} />}
 
             <div id="order-history" style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid #E5E5E5" }}>
               <div style={{ fontWeight: 700, fontSize: 12, color: "#5a5a5a", marginBottom: 8 }}>ACTIVITY LOG</div>
@@ -7371,7 +7960,7 @@ function ModelSizes({ model, refresh, flash }) {
 }
 
 const ROLE_OPTIONS = [
-  ["sales", "Sales"], ["production", "Production"], ["admin", "Admin"], ["model_manager", "Model Manager"],
+  ["sales", "Sales"], ["production", "Production"], ["admin", "Admin"], ["model_manager", "Model Manager"], ["driver", "Driver"],
 ];
 
 function AddUsers({ config }) {
