@@ -2740,30 +2740,57 @@ function MeasureStepper({ value, onChange, step = 0.5, min = 0 }) {
   );
 }
 
-function SubmittedItemCard({ it, idx, nearestLabel, canEdit, onEdit, onRemove }) {
+const showNum = (v) => (v == null || v === "" ? "—" : isNaN(+v) ? String(v) : String(Math.round(+v * 100) / 100));
+
+function SubmittedItemCard({ it, idx, nearestLabel, rows, showMeas, onToggleMeas, onPhoto, canEdit, onEdit, onRemove }) {
   const tags = splitTags(it.additionalRequirements);
   const opt = normAbaya(it.abayaOption);
   return (
-    <div style={{ border: "1px solid #BFE0C7", background: "#F7FCF8", borderRadius: 8, padding: "12px 16px", marginBottom: 12, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-      <ModelThumb model={{ id: it.modelId, photoUrl: it.photoUrl, modelNo: it.model }} size={64} style={{ borderRadius: 4 }} />
-      <div style={{ flex: 1, minWidth: 240 }}>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontWeight: 700, fontSize: 15 }}>Item {idx + 1} · {it.model}{it.cut ? ` — ${it.cut}` : ""}</span>
-          <span style={{ fontSize: 11.5, background: "#E7F4EA", color: "#2F8F46", borderRadius: 10, padding: "2px 10px", fontWeight: 700 }}>✓ Submitted</span>
+    <div style={{ border: "1px solid #BFE0C7", background: "#F7FCF8", borderRadius: 8, padding: "12px 16px", marginBottom: 12 }}>
+      <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <div onClick={() => it.photoUrl && onPhoto(it.photoUrl)} title={it.photoUrl ? "Tap to enlarge" : ""} style={{ cursor: it.photoUrl ? "zoom-in" : "default", textAlign: "center" }}>
+          <ModelThumb model={{ id: it.modelId, photoUrl: it.photoUrl, modelNo: it.model }} width={78} height={104} fit="contain" style={{ borderRadius: 4 }} />
+          {it.photoUrl && <div className="no-print" style={{ fontSize: 10, color: "#8a8a8a", marginTop: 2 }}>🔍 enlarge</div>}
         </div>
-        <div style={{ fontSize: 12.5, color: "#5a5a5a", marginTop: 4, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
-          {it.color && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>{it.colorSwatch && <img src={it.colorSwatch} alt="" style={{ width: 18, height: 18, borderRadius: 3, objectFit: "cover", border: "1px solid #E5E5E5" }} />}{it.color}</span>}
-          <span>{abayaLabel(opt)}{opt === BUTTON_RANGE ? ` (${it.buttonFrom || "—"} to ${it.buttonTill || "—"})` : ""}</span>
-          {nearestLabel && <span>Nearest size {nearestLabel}</span>}
-          {(it.attachments || []).length > 0 && <span>📎 {it.attachments.length}</span>}
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 700, fontSize: 15 }}>Item {idx + 1} · {it.model}{it.cut ? ` — ${it.cut}` : ""}</span>
+            <span style={{ fontSize: 11.5, background: "#E7F4EA", color: "#2F8F46", borderRadius: 10, padding: "2px 10px", fontWeight: 700 }}>✓ Submitted</span>
+          </div>
+          <div style={{ fontSize: 12.5, color: "#5a5a5a", marginTop: 4, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+            {it.color && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>{it.colorSwatch && <img src={it.colorSwatch} alt="" style={{ width: 18, height: 18, borderRadius: 3, objectFit: "cover", border: "1px solid #E5E5E5" }} />}{it.color}</span>}
+            <span>{abayaLabel(opt)}{opt === BUTTON_RANGE ? ` (${it.buttonFrom || "—"} to ${it.buttonTill || "—"})` : ""}</span>
+            {nearestLabel && <span>Nearest size {nearestLabel}</span>}
+            {(it.attachments || []).length > 0 && <span>📎 {it.attachments.length}</span>}
+          </div>
+          {tags.length > 0 && <div style={{ fontSize: 12.5, marginTop: 4 }}>{tags.join(" · ")}</div>}
+          {it.notes && <div style={{ fontSize: 12, color: "#8a8a8a", marginTop: 2 }}>Notes: {it.notes}</div>}
         </div>
-        {tags.length > 0 && <div style={{ fontSize: 12.5, marginTop: 4 }}>{tags.join(" · ")}</div>}
-        {it.notes && <div style={{ fontSize: 12, color: "#8a8a8a", marginTop: 2 }}>Notes: {it.notes}</div>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button disabled={!canEdit} title={canEdit ? "" : "Submit the open item first"} onClick={onEdit} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "8px 16px", fontWeight: 700, fontSize: 13, opacity: canEdit ? 1 : 0.45 }}>Edit</button>
+          <button onClick={onRemove} style={{ background: "#fff", border: "1px solid #E8B9B6", color: "#C1302B", borderRadius: 4, padding: "8px 16px", fontWeight: 700, fontSize: 13 }}>Remove</button>
+        </div>
       </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button disabled={!canEdit} title={canEdit ? "" : "Submit the open item first"} onClick={onEdit} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "8px 16px", fontWeight: 700, fontSize: 13, opacity: canEdit ? 1 : 0.45 }}>Edit</button>
-        <button onClick={onRemove} style={{ background: "#fff", border: "1px solid #E8B9B6", color: "#C1302B", borderRadius: 4, padding: "8px 16px", fontWeight: 700, fontSize: 13 }}>Remove</button>
-      </div>
+
+      {rows.length > 0 && (
+        <div style={{ marginTop: 12, borderTop: "1px dashed #BFE0C7", paddingTop: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: showMeas ? 8 : 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.05em", color: "#5a5a5a" }}>FINAL MEASUREMENTS</div>
+            <a className="link" style={{ fontSize: 12 }} onClick={onToggleMeas}>{showMeas ? "Hide ▴" : "Show ▾"}</a>
+          </div>
+          {showMeas && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(112px, 1fr))", gap: 8 }}>
+              {rows.map((r) => (
+                <div key={r.key} style={{ background: "#fff", border: "1px solid #DCEBDF", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ fontSize: 10.5, color: "#8a8a8a" }}>{r.label}</div>
+                  <div style={{ fontSize: 17, fontWeight: 700 }}>{showNum(r.final)}</div>
+                  {r.changed && <div style={{ fontSize: 10.5, color: "#8a8a8a" }}>fitted {showNum(r.fitted)}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -2867,6 +2894,8 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const removeItem = (idx) => setItems((it) => it.filter((_, i) => i !== idx));
   const openIdx = items.findIndex((it) => !it.confirmed);
   const submittedCount = items.filter((it) => it.confirmed).length;
+  const [hideMeas, setHideMeas] = useState({});          // item index -> measurements hidden
+  const allHidden = submittedCount > 0 && items.every((it, i) => !it.confirmed || hideMeas[i]);
 
   const itemProblem = (it) => {
     if (it.colors && it.colors.length > 0 && !it.color) return "Choose a colour for this item first.";
@@ -2882,7 +2911,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     setTimeout(() => addBarRef.current && addBarRef.current.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
   };
   const unlockItem = (idx) => { setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, confirmed: false } : it))); setReopenItem(null); };
-  const doRemove = () => { removeItem(removeIdx); setRemoveIdx(null); };
+  const doRemove = () => { removeItem(removeIdx); setRemoveIdx(null); setHideMeas({}); };
   const customerValid = customer.name.trim() && customer.mobile.trim();
 
   const uploadSignature = async () => {
@@ -2999,7 +3028,12 @@ function RequirementForm({ config, session, onCancel, onSave }) {
       </div>
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "20px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>ITEMS ({submittedCount} submitted{openIdx !== -1 ? ", 1 open" : ""})</div>
-      {submittedCount > 0 && <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 10 }}>Calculated measurements follow the customer's fitting measurements above — change those and every item updates.</div>}
+      {submittedCount > 0 && (
+        <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 10 }}>
+          Calculated measurements follow the customer's fitting measurements above — change those and every item updates.
+          <a className="link" style={{ marginLeft: 12 }} onClick={() => setHideMeas(allHidden ? {} : Object.fromEntries(items.map((_, i) => [i, true])))}>{allHidden ? "Show all measurements" : "Hide all measurements"}</a>
+        </div>
+      )}
 
       {items.length === 0 && <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 12 }}>No items yet — pick a model below and click "+ Add Item".</div>}
 
@@ -3011,7 +3045,12 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         const labelOf = (k) => (FITTING_FIELDS.find(([x]) => x === k) || (it.customFields || []).map((c) => [c.key, c.label]).find(([x]) => x === k) || [k, k])[1];
         const rowKeys = [...FITTING_FIELDS.map(([k]) => k), ...(it.customFields || []).map((c) => c.key)].filter((k) => view.calc[k] != null);
         if (it.confirmed) {
-          return <SubmittedItemCard key={idx} it={it} idx={idx} nearestLabel={best ? best.label : ""} canEdit={openIdx === -1} onEdit={() => setReopenItem(idx)} onRemove={() => setRemoveIdx(idx)} />;
+          const rows = rowKeys.map((k) => ({ key: k, label: labelOf(k), final: view.calc[k], fitted: measurements[k] || "", changed: !!measurements[k] && +measurements[k] !== +view.calc[k] }));
+          return (
+            <SubmittedItemCard key={idx} it={it} idx={idx} nearestLabel={best ? best.label : ""} rows={rows}
+              showMeas={!hideMeas[idx]} onToggleMeas={() => setHideMeas((h) => ({ ...h, [idx]: !h[idx] }))} onPhoto={setLightbox}
+              canEdit={openIdx === -1} onEdit={() => setReopenItem(idx)} onRemove={() => setRemoveIdx(idx)} />
+          );
         }
         return (
           <div key={idx} style={{ marginBottom: 14 }}>
