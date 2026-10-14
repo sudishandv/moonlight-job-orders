@@ -1127,6 +1127,7 @@ export default function App() {
   const [projectModels, setProjectModels] = useState(null);
   const [subpage, setSubpage] = useState("home");
   const [selectedId, setSelectedId] = useState(null);
+  useEffect(() => { if (subpage !== "records" && subpage !== "viewOrder") setSelectedId(null); }, [subpage]);
   const [toast, setToast] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const lastSeenNotifId = React.useRef(null);
@@ -1608,6 +1609,14 @@ const ADDITIONAL_REQ_OPTIONS = [
   "Add Cuff Slit", "Remove Cuff Slit",
 ];
 const splitTags = (s) => (s ? s.split(",").map((x) => x.trim()).filter(Boolean) : []);
+// "Side Pocket, Open Front, SINGLE HOOK"  or  "Side pocket, side slit etc."  →  tags for the Additional Requirements field
+const requirementTagsOf = (model) =>
+  String((model && model.requirements) || "")
+    .split(/[,;\n]+/)
+    .map((t) => t.replace(/\s*\b(etc|and so on)\b\.?\s*$/i, "").replace(/[.;]+$/g, "").trim())
+    .filter(Boolean)
+    .filter((t, i, a) => a.findIndex((x) => x.toLowerCase() === t.toLowerCase()) === i)
+    .join(", ");
 const oppositeOf = (t) => (t.startsWith("Add ") ? "Remove " + t.slice(4) : t.startsWith("Remove ") ? "Add " + t.slice(7) : null);
 // Picking "Add X" drops "Remove X" (and the other way round) so a form can't contradict itself.
 const resolveAdditional = (prev, next) => {
@@ -2246,7 +2255,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       {selected && <OrderDetail order={selected} role="sales" session={session} onClose={() => setSelectedId(null)} models={config.models} flash={flash} onProductionDone={refresh}
         onSaveFields={handleSaveFields} onAction={handleAction} onResubmit={handleResubmit}
         onEditFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("editOrder"); }}
-        onViewFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("viewOrder"); }} />}
+        onViewFull={(id) => { setEditingOrderId(id); setSubpage("viewOrder"); }} />}
     </div>
   );
 }
@@ -2328,7 +2337,14 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
         <Field label="Date"><input style={inputStyle} value={isEdit ? fmtDate(initialOrder.createdAt) : fmtDate(new Date())} disabled /></Field>
         <Field label="Job Order No"><input style={inputStyle} value={isEdit ? (initialOrder.jobOrderNo || "—") : "Auto-generated on save"} disabled /></Field>
         <Field label="Order Type"><select style={inputStyle} value={form.orderType} onChange={set("orderType")} disabled={readOnly}>{ORDER_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
-        <Field label="Model"><select style={inputStyle} value={form.model} onChange={(e) => setForm((f) => ({ ...f, model: e.target.value, color: "", colorSwatch: "" }))} disabled={readOnly}>{config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}</option>)}</select></Field>
+        <Field label="Model"><select style={inputStyle} value={form.model} onChange={(e) => { const v = e.target.value; setForm((f) => {
+          const next = { ...f, model: v, color: "", colorSwatch: "" };
+          if (!initialOrder) {          // new order only: fill from the model, unless the person already typed their own
+            const prevAuto = requirementTagsOf(config.models.find((m) => m.modelNo === f.model));
+            if (!f.additionalRequirements || f.additionalRequirements === prevAuto) next.additionalRequirements = requirementTagsOf(config.models.find((m) => m.modelNo === v));
+          }
+          return next;
+        }); }} disabled={readOnly}>{config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}</option>)}</select></Field>
         <Field label="Select Item"><select style={inputStyle} value={form.item} onChange={set("item")} disabled={readOnly}>{ITEM_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
         <Field label="Prepared By"><input style={inputStyle} value={isEdit ? initialOrder.preparedBy : session.name} disabled /></Field>
         <Field label="Branch"><select style={inputStyle} value={form.branch} onChange={set("branch")} disabled={readOnly}>{config.branches.map((b) => <option key={b.id} value={b.name}>{b.name}</option>)}</select></Field>
@@ -2724,6 +2740,34 @@ function MeasureStepper({ value, onChange, step = 0.5, min = 0 }) {
   );
 }
 
+function SubmittedItemCard({ it, idx, nearestLabel, canEdit, onEdit, onRemove }) {
+  const tags = splitTags(it.additionalRequirements);
+  const opt = normAbaya(it.abayaOption);
+  return (
+    <div style={{ border: "1px solid #BFE0C7", background: "#F7FCF8", borderRadius: 8, padding: "12px 16px", marginBottom: 12, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+      <ModelThumb model={{ id: it.modelId, photoUrl: it.photoUrl, modelNo: it.model }} size={64} style={{ borderRadius: 4 }} />
+      <div style={{ flex: 1, minWidth: 240 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 700, fontSize: 15 }}>Item {idx + 1} · {it.model}{it.cut ? ` — ${it.cut}` : ""}</span>
+          <span style={{ fontSize: 11.5, background: "#E7F4EA", color: "#2F8F46", borderRadius: 10, padding: "2px 10px", fontWeight: 700 }}>✓ Submitted</span>
+        </div>
+        <div style={{ fontSize: 12.5, color: "#5a5a5a", marginTop: 4, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+          {it.color && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>{it.colorSwatch && <img src={it.colorSwatch} alt="" style={{ width: 18, height: 18, borderRadius: 3, objectFit: "cover", border: "1px solid #E5E5E5" }} />}{it.color}</span>}
+          <span>{abayaLabel(opt)}{opt === BUTTON_RANGE ? ` (${it.buttonFrom || "—"} to ${it.buttonTill || "—"})` : ""}</span>
+          {nearestLabel && <span>Nearest size {nearestLabel}</span>}
+          {(it.attachments || []).length > 0 && <span>📎 {it.attachments.length}</span>}
+        </div>
+        {tags.length > 0 && <div style={{ fontSize: 12.5, marginTop: 4 }}>{tags.join(" · ")}</div>}
+        {it.notes && <div style={{ fontSize: 12, color: "#8a8a8a", marginTop: 2 }}>Notes: {it.notes}</div>}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button disabled={!canEdit} title={canEdit ? "" : "Submit the open item first"} onClick={onEdit} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "8px 16px", fontWeight: 700, fontSize: 13, opacity: canEdit ? 1 : 0.45 }}>Edit</button>
+        <button onClick={onRemove} style={{ background: "#fff", border: "1px solid #E8B9B6", color: "#C1302B", borderRadius: 4, padding: "8px 16px", fontWeight: 700, fontSize: 13 }}>Remove</button>
+      </div>
+    </div>
+  );
+}
+
 function RequirementForm({ config, session, onCancel, onSave }) {
   const [customer, setCustomer] = useState({ name: "", mobile: "" });
   const [measurements, setMeasurements] = useState(Object.fromEntries(FITTING_FIELDS.map(([k]) => [k, ""])));
@@ -2774,6 +2818,10 @@ function RequirementForm({ config, session, onCancel, onSave }) {
 
   const [lightbox, setLightbox] = useState(null);
   const [formMsg, setFormMsg] = useState("");
+  const [confirmItem, setConfirmItem] = useState(null);   // index being submitted
+  const [reopenItem, setReopenItem] = useState(null);     // index being reopened for editing
+  const [removeIdx, setRemoveIdx] = useState(null);       // index being removed
+  const addBarRef = React.useRef(null);
 
   const addItem = async () => {
     const model = config.models.find((m) => m.modelNo === pickModel);
@@ -2789,7 +2837,8 @@ function RequirementForm({ config, session, onCancel, onSave }) {
     setItems((it) => [...it, {
       model: pickModel, modelId: model.id, modelObj: model, photoUrl,
       customFields: model.customFields || [], cuts, cut: cuts[0] || null, notes: "", sizes: sizes || [], overrides: {},
-      abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: "", attachments: [],
+      abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: requirementTagsOf(model), modelReq: requirementTagsOf(model), attachments: [],
+      confirmed: false,
       colors: colors || [],
       color: (colors && colors[0] && colors[0].color_name) || "",
       colorSwatch: (colors && colors[0] && colors[0].swatch_url) || "",
@@ -2816,6 +2865,24 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const setItemAdditional = (idx, v) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, additionalRequirements: resolveAdditional(it.additionalRequirements, v) })));
   const setItemAbaya = (idx, v) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, abayaOption: v.option, buttonFrom: v.from, buttonTill: v.till })));
   const removeItem = (idx) => setItems((it) => it.filter((_, i) => i !== idx));
+  const openIdx = items.findIndex((it) => !it.confirmed);
+  const submittedCount = items.filter((it) => it.confirmed).length;
+
+  const itemProblem = (it) => {
+    if (it.colors && it.colors.length > 0 && !it.color) return "Choose a colour for this item first.";
+    const v = itemView(it);
+    const hasRows = [...FITTING_FIELDS.map(([k]) => k), ...(it.customFields || []).map((c) => c.key)].some((k) => v.calc[k] != null);
+    if (!hasRows) return "Fill in the customer's fitting measurements above first.";
+    return "";
+  };
+  const submitItem = (idx) => { const p = itemProblem(items[idx]); if (p) { setFormMsg(p); return; } setFormMsg(""); setConfirmItem(idx); };
+  const lockItem = (idx) => {
+    setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, confirmed: true } : it)));
+    setConfirmItem(null);
+    setTimeout(() => addBarRef.current && addBarRef.current.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
+  };
+  const unlockItem = (idx) => { setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, confirmed: false } : it))); setReopenItem(null); };
+  const doRemove = () => { removeItem(removeIdx); setRemoveIdx(null); };
   const customerValid = customer.name.trim() && customer.mobile.trim();
 
   const uploadSignature = async () => {
@@ -2829,6 +2896,8 @@ function RequirementForm({ config, session, onCancel, onSave }) {
 
   // Validate, then ask. Nothing is saved until the pop-up is confirmed.
   const requestSave = async (createOrders) => {
+    const open = items.findIndex((it) => !it.error && !it.confirmed);
+    if (open !== -1) { setFormMsg(`Please submit item ${open + 1} (${items[open].model}) first — or remove it.`); return; }
     const missingColor = items.filter((it) => !it.error && it.colors && it.colors.length > 0 && !it.color);
     const problems = [];
     if (createOrders && missingColor.length > 0) problems.push(`Please choose a colour for: ${missingColor.map((m) => m.model).join(", ")}`);
@@ -2929,7 +2998,8 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         ))}
       </div>
 
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "20px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>ITEMS</div>
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "20px 0 10px", borderTop: "1px solid #E5E5E5", paddingTop: 16 }}>ITEMS ({submittedCount} submitted{openIdx !== -1 ? ", 1 open" : ""})</div>
+      {submittedCount > 0 && <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 10 }}>Calculated measurements follow the customer's fitting measurements above — change those and every item updates.</div>}
 
       {items.length === 0 && <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 12 }}>No items yet — pick a model below and click "+ Add Item".</div>}
 
@@ -2940,8 +3010,13 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         const next = near[1] || null;
         const labelOf = (k) => (FITTING_FIELDS.find(([x]) => x === k) || (it.customFields || []).map((c) => [c.key, c.label]).find(([x]) => x === k) || [k, k])[1];
         const rowKeys = [...FITTING_FIELDS.map(([k]) => k), ...(it.customFields || []).map((c) => c.key)].filter((k) => view.calc[k] != null);
+        if (it.confirmed) {
+          return <SubmittedItemCard key={idx} it={it} idx={idx} nearestLabel={best ? best.label : ""} canEdit={openIdx === -1} onEdit={() => setReopenItem(idx)} onRemove={() => setRemoveIdx(idx)} />;
+        }
         return (
-          <div key={idx} style={{ border: "1px solid #C9CDD3", borderRadius: 6, padding: 16, marginBottom: 14, display: "flex", gap: 22, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <div key={idx} style={{ marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.06em", color: "#D98E2B", marginBottom: 6 }}>ITEM {idx + 1} OF {items.length} — IN PROGRESS</div>
+          <div style={{ border: "2px solid #D98E2B", borderRadius: 6, padding: 16, display: "flex", gap: 22, alignItems: "flex-start", flexWrap: "wrap" }}>
             <div style={{ flex: "0 0 300px", maxWidth: "100%" }}>
               <div onClick={() => it.photoUrl && setLightbox(it.photoUrl)} style={{ cursor: it.photoUrl ? "zoom-in" : "default" }}>
                 <ModelThumb model={{ id: it.modelId, photoUrl: it.photoUrl, modelNo: it.model }} width={300} height={400} fit="contain" style={{ maxWidth: "100%" }} />
@@ -2966,7 +3041,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                 ) : it.cuts && it.cuts.length === 1 ? (
                   <div style={{ fontSize: 12.5 }}><span style={{ color: "#8a8a8a" }}>Cut:</span> <strong>{it.cuts[0]}</strong></div>
                 ) : null}
-                <a className="link" style={{ color: "#C1302B", marginLeft: "auto" }} onClick={() => removeItem(idx)}>Remove</a>
+                <a className="link" style={{ color: "#C1302B", marginLeft: "auto" }} onClick={() => setRemoveIdx(idx)}>Remove</a>
               </div>
 
               {rowKeys.length === 0 ? (
@@ -3010,6 +3085,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                 <Field label="Additional Requirements">
                   <TagField options={ADDITIONAL_REQ_OPTIONS} value={it.additionalRequirements || ""} onChange={(v) => setItemAdditional(idx, v)} />
                 </Field>
+                {it.modelReq && <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 4 }}>Filled in from this model's requirements — remove anything this customer doesn't want, or add more.</div>}
               </div>
 
               <div style={{ marginTop: 12 }}>
@@ -3021,23 +3097,30 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                   <textarea style={{ ...inputStyle, minHeight: 50 }} value={it.notes} onChange={(e) => setItemNotes(idx, e.target.value)} placeholder="Anything specific to this item…" />
                 </Field>
               </div>
+
+              <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px dashed #C9CDD3", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 13.5 }}>Did you get all the requirements for <strong>item {idx + 1}</strong> ({it.model})?</div>
+                <button onClick={() => submitItem(idx)} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 6, padding: "11px 22px", fontSize: 14, fontWeight: 700, boxShadow: "0 2px 6px rgba(0,0,0,0.15)" }}>✔ Submit item {idx + 1}</button>
+              </div>
             </div>
+          </div>
           </div>
         );
       })}
 
       {/* Add-item bar — sits BELOW the items, so the next item is always one click away */}
-      <div style={{ border: "1px dashed #C9CDD3", borderRadius: 6, padding: 14, marginBottom: 16, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+      <div ref={addBarRef} style={{ border: "1px dashed #C9CDD3", borderRadius: 6, padding: 14, marginBottom: 16, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", opacity: openIdx !== -1 ? 0.55 : 1 }}>
         {pickModel && (() => { const m = config.models.find((mm) => mm.modelNo === pickModel); return m ? <ModelThumb model={m} size={56} style={{ borderRadius: 3 }} /> : null; })()}
         <div>
           <div style={label13}>Model</div>
-          <select style={{ ...inputStyle, width: 220 }} value={pickModel} onChange={(e) => setPickModel(e.target.value)}>
+          <select style={{ ...inputStyle, width: 220 }} value={pickModel} disabled={openIdx !== -1} onChange={(e) => setPickModel(e.target.value)}>
             <option value="">Select a model…</option>
             {config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}{m.styleName ? ` — ${m.styleName}` : ""}</option>)}
           </select>
         </div>
         {pickModel && (() => { const m = config.models.find((mm) => mm.modelNo === pickModel); return m && m.possibleCuts ? <div style={{ fontSize: 12, color: "#8a8a8a", alignSelf: "flex-end", paddingBottom: 8 }}>Cuts: {m.possibleCuts}</div> : null; })()}
-        <button onClick={addItem} disabled={!pickModel} style={{ background: pickModel ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, alignSelf: "flex-end" }}>+ Add Item</button>
+        <button onClick={addItem} disabled={!pickModel || openIdx !== -1} style={{ background: pickModel && openIdx === -1 ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, alignSelf: "flex-end" }}>+ Add Item</button>
+        {openIdx !== -1 && <div style={{ fontSize: 12.5, color: "#C1302B", width: "100%" }}>Submit item {openIdx + 1} ({items[openIdx].model}) before adding another item.</div>}
       </div>
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
 
@@ -3064,6 +3147,22 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>Cancel</button>
       </div>
 
+      {confirmItem !== null && items[confirmItem] && (
+        <ConfirmDialog title={`Submit item ${confirmItem + 1}?`} confirmLabel="Yes, I got everything" onCancel={() => setConfirmItem(null)} onConfirm={() => lockItem(confirmItem)}>
+          Did you get all the requirements for <strong>{items[confirmItem].model}</strong>{items[confirmItem].cut ? ` — ${items[confirmItem].cut}` : ""}{items[confirmItem].color ? ` — ${items[confirmItem].color}` : ""}?
+          <div style={{ marginTop: 8, color: "#5a5a5a" }}>Once submitted, this item is locked so it can't be changed by accident. You can then add the next item, and reopen this one with Edit if you need to.</div>
+        </ConfirmDialog>
+      )}
+      {reopenItem !== null && items[reopenItem] && (
+        <ConfirmDialog title={`Edit item ${reopenItem + 1}?`} confirmLabel="Yes, reopen it" onCancel={() => setReopenItem(null)} onConfirm={() => unlockItem(reopenItem)}>
+          {items[reopenItem].model} will open for changes. You'll need to submit it again before adding another item or saving.
+        </ConfirmDialog>
+      )}
+      {removeIdx !== null && items[removeIdx] && (
+        <ConfirmDialog title={`Remove item ${removeIdx + 1}?`} confirmLabel="Yes, remove" onCancel={() => setRemoveIdx(null)} onConfirm={doRemove}>
+          {items[removeIdx].model}{items[removeIdx].color ? ` — ${items[removeIdx].color}` : ""} will be taken off this requirement.
+        </ConfirmDialog>
+      )}
       {confirm && !confirm.createOrders && (
         <ConfirmDialog
           title={confirm.exists ? "Update profile?" : "Create new profile?"}
@@ -6038,7 +6137,7 @@ function ProductionPanel({ config, orders, profiles, requirementItems, refresh, 
       <RecordsToolbar query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} noPII />
       <OrderTable orders={filtered} onOpen={setSelectedId} editableStatuses={["job_rejected"]} noPII />
       {selected && <OrderDetail order={selected} role="production" session={session} onClose={() => setSelectedId(null)} onSaveFields={handleSaveFields} onAction={handleAction} models={config.models} flash={flash} onProductionDone={refresh}
-        onViewFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("viewOrder"); }} />}
+        onViewFull={(id) => { setEditingOrderId(id); setSubpage("viewOrder"); }} />}
     </div>
   );
 }
@@ -6700,7 +6799,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       {selected && <OrderDetail order={selected} role="admin" session={session} onClose={() => setSelectedId(null)} models={config.models} flash={flash} onProductionDone={refresh}
         onSaveFields={handleSaveFields} onAction={() => {}} onDelete={handleDeleteOrder}
         onEditFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("editOrder"); }}
-        onViewFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("viewOrder"); }} />}
+        onViewFull={(id) => { setEditingOrderId(id); setSubpage("viewOrder"); }} />}
     </div>
   );
 }
