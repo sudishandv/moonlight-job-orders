@@ -2017,7 +2017,7 @@ function RecordsToolbar({ query, setQuery, statusFilter, setStatusFilter, noPII 
   return (
     <div className="no-print" style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 18, flexWrap: "wrap", justifyContent: "center" }}>
       <span style={{ fontSize: 13, fontWeight: 600 }}>SEARCH BY:</span>
-      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={noPII ? "Job Order No / Model / Colour" : "Name / Mobile No / Job Order"} style={{ ...inputStyle, width: 260 }} />
+      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={noPII ? "Job Order No / Model / Colour" : "Job Order No / Name / Mobile / Model"} style={{ ...inputStyle, width: 260 }} />
       <span style={{ fontSize: 13, fontWeight: 600 }}>STATUS TYPE:</span>
       <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ ...inputStyle, width: 200 }}>
         <option value="all">All statuses</option>
@@ -2073,12 +2073,15 @@ function useFilteredOrders(orders, query, statusFilter, noPII) {
   return useMemo(() => {
     let list = orders;
     if (statusFilter !== "all") list = list.filter((o) => maskStatus(o.status) === statusFilter);
-    if (query.trim()) {
-      const q = query.toLowerCase();
+    const q = query.trim().toLowerCase();
+    if (q) {
+      const has = (v) => String(v == null ? "" : v).toLowerCase().includes(q);
+      const digits = q.replace(/\D/g, "");
       // Production can only search by order number, model and colour — never by who the customer is
       list = noPII
-        ? list.filter((o) => String(o.jobOrderNo || "").toLowerCase().includes(q) || (o.model || "").toLowerCase().includes(q) || (o.color || "").toLowerCase().includes(q))
-        : list.filter((o) => o.name.toLowerCase().includes(q) || (o.mobile || "").includes(q) || (o.invoiceNo || "").toLowerCase().includes(q));
+        ? list.filter((o) => has(o.jobOrderNo) || has(o.model) || has(o.color))
+        : list.filter((o) => has(o.jobOrderNo) || has(o.name) || has(o.mobile) || has(o.invoiceNo) || has(o.model) || has(o.color)
+            || (digits.length >= 4 && String(o.mobile || "").replace(/\D/g, "").includes(digits)));   // a mobile number typed with spaces or a +
     }
     return list;
   }, [orders, query, statusFilter, noPII]);
