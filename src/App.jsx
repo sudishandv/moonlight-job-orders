@@ -1096,7 +1096,7 @@ function dbToModel(r) {
     requirements: r.requirements, sideFinishing: r.side_finishing, sleeveOpenFinishing: r.sleeve_open_finishing,
     armHoleFinishing: r.arm_hole_finishing, bottomFinishing: r.bottom_finishing, photoUrl: r.photo_url,
     collectionName: r.collection_name, styleName: r.style_name, category: r.category,
-    productType: r.product_type, season: r.season, description: r.description,
+    productType: r.product_type, season: r.season, description: r.description, instructions: r.instructions,
     createdBy: r.created_by, createdAt: r.created_at, updatedBy: r.updated_by, updatedAt: r.updated_at,
     customFields: r.custom_fields || [],
     cuttingFormula: r.cutting_formula || {},
@@ -2308,6 +2308,25 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
         onViewFull={(id) => { setEditingOrderId(id); setSubpage("viewOrder"); }} />}
     </div>
   );
+}
+
+// A text box that grows to fit what is typed or pasted
+function AutoTextarea({ value, onChange, minRows = 3, style, ...rest }) {
+  const ref = React.useRef(null);
+  const fit = () => { const el = ref.current; if (!el) return; el.style.height = "auto"; el.style.height = el.scrollHeight + 2 + "px"; };
+  useEffect(fit, [value]);
+  useEffect(() => {
+    const t = setTimeout(fit, 60);
+    window.addEventListener("resize", fit);
+    return () => { clearTimeout(t); window.removeEventListener("resize", fit); };
+  }, []); // eslint-disable-line
+  return <textarea ref={ref} rows={minRows} value={value || ""} onChange={onChange} style={{ ...inputStyle, overflow: "hidden", resize: "vertical", lineHeight: 1.55, ...style }} {...rest} />;
+}
+
+// Shows text exactly as it was typed or pasted: line breaks and bullets kept, long lines wrap
+function TextBlock({ text, style }) {
+  if (!text || !String(text).trim()) return null;
+  return <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.55, ...style }}>{text}</div>;
 }
 
 /* ---------------- How will the customer receive it? ---------------- */
@@ -7524,7 +7543,7 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
   const startEditCore = () => {
     setCoreForm({
       collectionName: model.collectionName || "", styleName: model.styleName || "", category: model.category || "",
-      productType: model.productType || "", season: model.season || "", description: model.description || "",
+      productType: model.productType || "", season: model.season || "", description: model.description || "", instructions: model.instructions || "",
       possibleCuts: model.possibleCuts || "", mainFabricCode: model.mainFabricCode || "", innerFabricCode: model.innerFabricCode || "",
       otherFabric: model.otherFabric || "", sizeRange: model.sizeRange || "", requirements: model.requirements || "",
       sideFinishing: model.sideFinishing || "", sleeveOpenFinishing: model.sleeveOpenFinishing || "", armHoleFinishing: model.armHoleFinishing || "",
@@ -7540,7 +7559,7 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
     const productType = coreForm.productType === "__other__" ? (coreForm.customProductType || "") : coreForm.productType;
     const { error } = await supabase.from("models").update({
       collection_name: coreForm.collectionName, style_name: coreForm.styleName, category, product_type: productType,
-      season: coreForm.season, description: coreForm.description, possible_cuts: coreForm.possibleCuts, main_fabric_code: coreForm.mainFabricCode,
+      season: coreForm.season, description: coreForm.description, instructions: coreForm.instructions, possible_cuts: coreForm.possibleCuts, main_fabric_code: coreForm.mainFabricCode,
       inner_fabric_code: coreForm.innerFabricCode, other_fabric: coreForm.otherFabric, size_range: coreForm.sizeRange, requirements: coreForm.requirements,
       side_finishing: coreForm.sideFinishing, sleeve_open_finishing: coreForm.sleeveOpenFinishing, arm_hole_finishing: coreForm.armHoleFinishing,
       bottom_finishing: coreForm.bottomFinishing, cutting_formula: formula, updated_at: new Date().toISOString(), updated_by: session.name,
@@ -7620,7 +7639,8 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
             </Field>
             <Field label="Season"><input style={inputStyle} value={coreForm.season} onChange={(e) => setCoreForm((f) => ({ ...f, season: e.target.value }))} /></Field>
           </div>
-          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={coreForm.description} onChange={(e) => setCoreForm((f) => ({ ...f, description: e.target.value }))} /></Field>
+          <Field label="Description"><AutoTextarea minRows={3} value={coreForm.description} onChange={(e) => setCoreForm((f) => ({ ...f, description: e.target.value }))} /></Field>
+          <Field label="Instructions"><AutoTextarea minRows={4} value={coreForm.instructions} placeholder="Paste or type the instructions for this model — bullets and line breaks are kept" onChange={(e) => setCoreForm((f) => ({ ...f, instructions: e.target.value }))} /></Field>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginTop: 14 }}>
             <Field label="Possible Cuts"><TagField value={coreForm.possibleCuts} onChange={(v) => setCoreForm((f) => ({ ...f, possibleCuts: v }))} options={POSSIBLE_CUTS_OPTIONS} /></Field>
@@ -7637,7 +7657,13 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
         </div>
       )}
 
-      {model.description && <div style={{ fontSize: 13.5, color: "#4A5468", margin: "10px 0 20px" }}>{model.description}</div>}
+      {model.description && <TextBlock text={model.description} style={{ fontSize: 13.5, color: "#4A5468", margin: "10px 0 16px" }} />}
+      {model.instructions && model.instructions.trim() && (
+        <div style={{ background: "#FFF9EC", border: "1px solid #EBCB8B", borderLeft: "5px solid #D98E2B", borderRadius: 6, padding: "12px 16px", margin: "0 0 20px" }}>
+          <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.06em", color: "#8a5a00", marginBottom: 6 }}>INSTRUCTIONS</div>
+          <TextBlock text={model.instructions} style={{ fontSize: 13.5, color: "#3a3a3a" }} />
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 16 }}>
         <div style={cardStyle}>
@@ -7832,7 +7858,7 @@ function ModelBrowser({ models, canEdit, refresh, flash, session, openRequest, c
 
   const matchesKeyword = (m, k) => {
     const q = k.toLowerCase();
-    return [m.modelNo, m.styleName, m.collectionName, m.category, m.productType, m.season, m.description]
+    return [m.modelNo, m.styleName, m.collectionName, m.category, m.productType, m.season, m.description, m.instructions]
       .filter(Boolean).some((f) => f.toLowerCase().includes(q));
   };
 
@@ -7904,7 +7930,13 @@ function ModelBrowserCard({ model }) {
     <div style={{ border: "1px solid #C9CDD3", padding: 16 }}>
       <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>{model.modelNo}{model.styleName ? ` — ${model.styleName}` : ""}</div>
       <div style={{ fontSize: 12, color: "#8a8a8a", marginBottom: 10 }}>{[model.collectionName, model.category, model.season].filter(Boolean).join(" · ")}</div>
-      {model.description && <div style={{ fontSize: 13, marginBottom: 12 }}>{model.description}</div>}
+      {model.description && <TextBlock text={model.description} style={{ fontSize: 13, marginBottom: 12 }} />}
+      {model.instructions && model.instructions.trim() && (
+        <div style={{ background: "#FFF9EC", border: "1px solid #EBCB8B", borderRadius: 6, padding: "8px 12px", marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, fontSize: 11.5, letterSpacing: "0.06em", color: "#8a5a00", marginBottom: 4 }}>INSTRUCTIONS</div>
+          <TextBlock text={model.instructions} style={{ fontSize: 12.5 }} />
+        </div>
+      )}
 
       {images.length > 0 && (
         <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
@@ -8763,7 +8795,7 @@ function AddUsers({ config }) {
 }
 
 function ManageModels({ config, refresh, flash, session }) {
-  const blank = { ...Object.fromEntries(MODEL_FIELDS.map(([k]) => [k, ""])), ...Object.fromEntries(STYLE_FIELDS.map(([k]) => [k, ""])), description: "" };
+  const blank = { ...Object.fromEntries(MODEL_FIELDS.map(([k]) => [k, ""])), ...Object.fromEntries(STYLE_FIELDS.map(([k]) => [k, ""])), description: "", instructions: "" };
   const [form, setForm] = useState(blank);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -8913,6 +8945,7 @@ function ManageModels({ config, refresh, flash, session }) {
     const payload = { ...modelToDb(form) };
     STYLE_FIELDS.forEach(([k]) => { payload[k.replace(/[A-Z]/g, (m) => "_" + m.toLowerCase())] = form[k]; });
     payload.description = form.description;
+    payload.instructions = form.instructions;
     payload.created_by = session.name;
     payload.category = form.category === "__other__" ? (form.customCategory || "") : form.category;
     payload.product_type = form.productType === "__other__" ? (form.customProductType || "") : form.productType;
@@ -9046,7 +9079,8 @@ function ManageModels({ config, refresh, flash, session }) {
             </Field>
             <Field label="Season"><input style={inputStyle} value={form.season} onChange={set("season")} /></Field>
           </div>
-          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.description} onChange={set("description")} /></Field>
+          <Field label="Description"><AutoTextarea minRows={3} value={form.description} onChange={set("description")} /></Field>
+          <Field label="Instructions"><AutoTextarea minRows={4} value={form.instructions} placeholder="Paste or type the instructions for this model — bullets and line breaks are kept" onChange={set("instructions")} /></Field>
         </div>
 
         <div style={cardStyle}>
