@@ -7640,7 +7640,6 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
             <Field label="Season"><input style={inputStyle} value={coreForm.season} onChange={(e) => setCoreForm((f) => ({ ...f, season: e.target.value }))} /></Field>
           </div>
           <Field label="Description"><AutoTextarea minRows={3} value={coreForm.description} onChange={(e) => setCoreForm((f) => ({ ...f, description: e.target.value }))} /></Field>
-          <Field label="Instructions"><AutoTextarea minRows={4} value={coreForm.instructions} placeholder="Paste or type the instructions for this model — bullets and line breaks are kept" onChange={(e) => setCoreForm((f) => ({ ...f, instructions: e.target.value }))} /></Field>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginTop: 14 }}>
             <Field label="Possible Cuts"><TagField value={coreForm.possibleCuts} onChange={(v) => setCoreForm((f) => ({ ...f, possibleCuts: v }))} options={POSSIBLE_CUTS_OPTIONS} /></Field>
@@ -7654,16 +7653,13 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
             <Field label="Arm Hole Finishing"><TagField value={coreForm.armHoleFinishing} onChange={(v) => setCoreForm((f) => ({ ...f, armHoleFinishing: v }))} options={ARM_HOLE_FINISH_OPTIONS} /></Field>
             <Field label="Bottom / Length Finishing"><TagField value={coreForm.bottomFinishing} onChange={(v) => setCoreForm((f) => ({ ...f, bottomFinishing: v }))} options={BOTTOM_FINISH_OPTIONS} /></Field>
           </div>
+          <div style={{ marginTop: 14 }}>
+            <Field label="Instructions"><AutoTextarea minRows={4} value={coreForm.instructions} placeholder="Paste or type the instructions for this model — bullets and line breaks are kept" onChange={(e) => setCoreForm((f) => ({ ...f, instructions: e.target.value }))} /></Field>
+          </div>
         </div>
       )}
 
       {model.description && <TextBlock text={model.description} style={{ fontSize: 13.5, color: "#4A5468", margin: "10px 0 16px" }} />}
-      {model.instructions && model.instructions.trim() && (
-        <div style={{ background: "#FFF9EC", border: "1px solid #EBCB8B", borderLeft: "5px solid #D98E2B", borderRadius: 6, padding: "12px 16px", margin: "0 0 20px" }}>
-          <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.06em", color: "#8a5a00", marginBottom: 6 }}>INSTRUCTIONS</div>
-          <TextBlock text={model.instructions} style={{ fontSize: 13.5, color: "#3a3a3a" }} />
-        </div>
-      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 16 }}>
         <div style={cardStyle}>
@@ -7809,6 +7805,12 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
               </div>
             ))}
           </div>
+          {model.instructions && model.instructions.trim() && (
+            <div style={{ marginTop: 14, background: "#FFF9EC", border: "1px solid #EBCB8B", borderLeft: "5px solid #D98E2B", borderRadius: 6, padding: "12px 16px" }}>
+              <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.06em", color: "#8a5a00", marginBottom: 6 }}>INSTRUCTIONS</div>
+              <TextBlock text={model.instructions} style={{ fontSize: 13.5, color: "#3a3a3a" }} />
+            </div>
+          )}
         </div>
       )}
 
@@ -7931,12 +7933,6 @@ function ModelBrowserCard({ model }) {
       <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>{model.modelNo}{model.styleName ? ` — ${model.styleName}` : ""}</div>
       <div style={{ fontSize: 12, color: "#8a8a8a", marginBottom: 10 }}>{[model.collectionName, model.category, model.season].filter(Boolean).join(" · ")}</div>
       {model.description && <TextBlock text={model.description} style={{ fontSize: 13, marginBottom: 12 }} />}
-      {model.instructions && model.instructions.trim() && (
-        <div style={{ background: "#FFF9EC", border: "1px solid #EBCB8B", borderRadius: 6, padding: "8px 12px", marginBottom: 12 }}>
-          <div style={{ fontWeight: 700, fontSize: 11.5, letterSpacing: "0.06em", color: "#8a5a00", marginBottom: 4 }}>INSTRUCTIONS</div>
-          <TextBlock text={model.instructions} style={{ fontSize: 12.5 }} />
-        </div>
-      )}
 
       {images.length > 0 && (
         <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
@@ -7962,6 +7958,12 @@ function ModelBrowserCard({ model }) {
       )}
 
       {MODEL_FIELDS.slice(1).map(([k, l]) => <div key={k} style={{ fontSize: 13, marginBottom: 3 }}><strong>{l}:</strong> {model[k] || "—"}</div>)}
+      {model.instructions && model.instructions.trim() && (
+        <div style={{ background: "#FFF9EC", border: "1px solid #EBCB8B", borderRadius: 6, padding: "8px 12px", marginTop: 10 }}>
+          <div style={{ fontWeight: 700, fontSize: 11.5, letterSpacing: "0.06em", color: "#8a5a00", marginBottom: 4 }}>INSTRUCTIONS</div>
+          <TextBlock text={model.instructions} style={{ fontSize: 12.5 }} />
+        </div>
+      )}
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
     </div>
   );
@@ -9080,7 +9082,6 @@ function ManageModels({ config, refresh, flash, session }) {
             <Field label="Season"><input style={inputStyle} value={form.season} onChange={set("season")} /></Field>
           </div>
           <Field label="Description"><AutoTextarea minRows={3} value={form.description} onChange={set("description")} /></Field>
-          <Field label="Instructions"><AutoTextarea minRows={4} value={form.instructions} placeholder="Paste or type the instructions for this model — bullets and line breaks are kept" onChange={set("instructions")} /></Field>
         </div>
 
         <div style={cardStyle}>
@@ -9097,6 +9098,7 @@ function ManageModels({ config, refresh, flash, session }) {
             <Field label="Arm Hole Finishing"><TagField value={form.armHoleFinishing} onChange={(v) => setForm((f) => ({ ...f, armHoleFinishing: v }))} options={ARM_HOLE_FINISH_OPTIONS} /></Field>
             <Field label="Bottom / Length Finishing"><TagField value={form.bottomFinishing} onChange={(v) => setForm((f) => ({ ...f, bottomFinishing: v }))} options={BOTTOM_FINISH_OPTIONS} /></Field>
           </div>
+          <Field label="Instructions"><AutoTextarea minRows={4} value={form.instructions} placeholder="Paste or type the instructions for this model — bullets and line breaks are kept" onChange={set("instructions")} /></Field>
         </div>
       </div>
 
