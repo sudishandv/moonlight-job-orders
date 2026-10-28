@@ -458,7 +458,7 @@ function Lightbox({ src, alt, onClose }) {
   );
 }
 
-function ConfirmDialog({ title, children, confirmLabel, cancelLabel, busy, confirmDisabled, onConfirm, onCancel }) {
+function ConfirmDialog({ title, children, confirmLabel, cancelLabel, busy, confirmDisabled, danger, onConfirm, onCancel }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div style={{ background: "#fff", borderRadius: 8, padding: 24, maxWidth: 460, width: "100%", boxShadow: "0 12px 40px rgba(0,0,0,0.3)" }}>
@@ -466,10 +466,56 @@ function ConfirmDialog({ title, children, confirmLabel, cancelLabel, busy, confi
         <div style={{ fontSize: 14, color: "#3a3a3a", marginBottom: 20, lineHeight: 1.5 }}>{children}</div>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <button onClick={onCancel} disabled={busy} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "10px 22px", fontSize: 14, fontWeight: 700 }}>{cancelLabel || "No"}</button>
-          <button onClick={onConfirm} disabled={busy || confirmDisabled} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontSize: 14, fontWeight: 700, opacity: (busy || confirmDisabled) ? 0.4 : 1 }}>{busy ? "Saving…" : (confirmLabel || "Yes")}</button>
+          <button onClick={onConfirm} disabled={busy || confirmDisabled} style={{ background: danger ? "#C1302B" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontSize: 14, fontWeight: 700, opacity: (busy || confirmDisabled) ? 0.4 : 1 }}>{busy ? "Saving…" : (confirmLabel || "Yes")}</button>
         </div>
       </div>
     </div>
+  );
+}
+
+// "Are you sure?" for deleting things. If confirmWord is given, the person must type it first.
+function DeleteConfirm({ title, children, confirmWord, onCancel, onConfirm }) {
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const ok = !confirmWord || typed.trim().toLowerCase() === String(confirmWord).trim().toLowerCase();
+  return (
+    <ConfirmDialog title={title} danger confirmLabel="Yes, delete" cancelLabel="No, keep it" busy={busy} confirmDisabled={!ok} onCancel={onCancel}
+      onConfirm={async () => { setBusy(true); await onConfirm(); setBusy(false); }}>
+      {children}
+      {confirmWord && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 12.5, marginBottom: 4 }}>To confirm, type <strong>{confirmWord}</strong></div>
+          <input value={typed} onChange={(e) => setTyped(e.target.value)} style={inputStyle} autoFocus />
+        </div>
+      )}
+    </ConfirmDialog>
+  );
+}
+
+function DeleteOrderDialog({ order, onCancel, onConfirm }) {
+  const started = !["job_created", "job_rejected"].includes(order.status);
+  return (
+    <DeleteConfirm title={`Delete job order ${order.jobOrderNo}?`} confirmWord={started ? String(order.jobOrderNo) : null} onCancel={onCancel} onConfirm={onConfirm}>
+      <div><strong className="mono">{order.jobOrderNo}</strong> · {order.model}{order.color ? ` · ${order.color}` : ""}{order.name ? ` · ${order.name}` : ""}</div>
+      <div style={{ marginTop: 6 }}>Status: <StatusTag status={order.status} /></div>
+      <div style={{ marginTop: 10 }}>This permanently deletes the job order. It cannot be undone.</div>
+      {started && <div style={{ marginTop: 8, color: "#C1302B" }}>Work on this order has already started. Its material, tailor, quality-check and rework records are deleted with it. Courier and delivery proof records are kept, but no longer linked to the order.</div>}
+    </DeleteConfirm>
+  );
+}
+
+function DeleteModelDialog({ model, onCancel, onConfirm }) {
+  const [used, setUsed] = useState(null);
+  useEffect(() => {
+    supabase.from("job_orders").select("id", { count: "exact", head: true }).eq("model", model.modelNo).then(({ count }) => setUsed(count == null ? null : count));
+  }, [model.id]); // eslint-disable-line
+  return (
+    <DeleteConfirm title={`Delete model ${model.modelNo}?`} confirmWord={model.modelNo} onCancel={onCancel} onConfirm={onConfirm}>
+      <div>{model.modelNo}{model.styleName ? ` — ${model.styleName}` : ""}</div>
+      <div style={{ marginTop: 10 }}>This permanently deletes the model with all its photos, colours, fabrics, trims, patterns, size chart, calculations, materials and manpower. It cannot be undone.</div>
+      {used > 0 && <div style={{ marginTop: 8, color: "#C1302B" }}>{used} job order{used === 1 ? "" : "s"} already use{used === 1 ? "s" : ""} this model. They keep their own data, but the model's photos, size chart and calculations will no longer be available for them.</div>}
+      {used === 0 && <div style={{ marginTop: 8, color: "#2F8F46" }}>No job orders use this model.</div>}
+    </DeleteConfirm>
   );
 }
 
@@ -7588,6 +7634,7 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
   useEffect(loadReadOnlyData, [model.id]);
   useEffect(() => { setFormula(model.cuttingFormula || {}); }, [model.id]); // eslint-disable-line
 
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const removeModel = async () => {
     await supabase.from("models").delete().eq("id", model.id);
     notify(session, `${session.name} deleted model ${model.modelNo}`, "model", null);
@@ -7600,6 +7647,7 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
       <div className="no-print" style={{ marginBottom: 14 }}>
         <a className="link" onClick={onBack}>← Back to Models</a>
       </div>
+      {confirmRemove && <DeleteModelDialog model={model} onCancel={() => setConfirmRemove(false)} onConfirm={async () => { await removeModel(); setConfirmRemove(false); }} />}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
         <div>
           <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 24 }}>{model.modelNo}{model.styleName ? ` — ${model.styleName}` : ""}</div>
@@ -7611,7 +7659,7 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
         </div>
         <div style={{ display: "flex", gap: 10 }}>
           {canEdit && !editingModel && <a className="link" onClick={startEditCore}>Edit Model</a>}
-          {canEdit && <a className="link" style={{ color: "#C1302B" }} onClick={removeModel}>Remove Model</a>}
+          {canEdit && <a className="link" style={{ color: "#C1302B" }} onClick={() => setConfirmRemove(true)}>Remove Model</a>}
         </div>
       </div>
 
@@ -7979,6 +8027,8 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     if (openRequest && openRequest.type === "order") { setSelectedId(openRequest.id); openFocus.current = openRequest.focus || null; clearOpenRequest(); }
   }, [openRequest]); // eslint-disable-line
   const [view, setView] = useState("all");
+  const [deleteOrderId, setDeleteOrderId] = useState(null);
+  const [deleteReqId, setDeleteReqId] = useState(null);
   const filtered = useFilteredOrders(view === "all" ? orders : orders.filter((o) => inGroup(view, o)), query, statusFilter);
   const selected = orders.find((o) => o.id === selectedId);
 
@@ -8174,7 +8224,17 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     return (
       <div>
         <SalesTabs subpage={subpage} setSubpage={setSubpage} />
-        <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={true} canCreateOrder={true} onCreateOrder={handleCreateOrderFromRow} onDelete={handleDeleteRequirement} />
+        <RequirementsPage items={requirementItems} profiles={profiles} orders={orders} canDelete={true} canCreateOrder={true} onCreateOrder={handleCreateOrderFromRow} onDelete={(id) => setDeleteReqId(id)} />
+        {deleteReqId && (() => {
+          const it = requirementItems.find((r) => r.id === deleteReqId);
+          const cust = it && profiles.find((p) => p.id === it.profileId);
+          return (
+            <DeleteConfirm title="Delete this requirement?" onCancel={() => setDeleteReqId(null)} onConfirm={async () => { await handleDeleteRequirement(deleteReqId); setDeleteReqId(null); }}>
+              {it && <div><strong>{it.model || it.modelNo}</strong>{cust ? ` · ${cust.name}` : ""}</div>}
+              <div style={{ marginTop: 8 }}>This removes the requirement from the customer's record. Job orders already created from it are not affected. It cannot be undone.</div>
+            </DeleteConfirm>
+          );
+        })()}
       </div>
     );
   }
@@ -8194,11 +8254,15 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
         <button onClick={() => setSubpage("requirement")} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em", marginRight: 8 }}>+ NEW REQUIREMENT</button>
         <button onClick={() => setSubpage("new")} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.03em" }}>+ NEW JOB ORDER</button>
       </div>
-      <OrderTable orders={filtered} onOpen={setSelectedId} showDelete onDelete={handleDeleteOrder} />
+      <OrderTable orders={filtered} onOpen={setSelectedId} showDelete onDelete={(id) => setDeleteOrderId(id)} />
       {selected && <OrderDetail order={selected} role="admin" session={session} onClose={() => setSelectedId(null)} models={config.models} flash={flash} onProductionDone={refresh}
-        onSaveFields={handleSaveFields} onAction={() => {}} onDelete={handleDeleteOrder}
+        onSaveFields={handleSaveFields} onAction={() => {}} onDelete={(id) => setDeleteOrderId(id)}
         onEditFull={(id) => { setEditingOrderId(id); setSelectedId(null); setSubpage("editOrder"); }}
         onViewFull={(id) => { setEditingOrderId(id); setSubpage("viewOrder"); }} />}
+      {deleteOrderId && orders.find((o) => o.id === deleteOrderId) && (
+        <DeleteOrderDialog order={orders.find((o) => o.id === deleteOrderId)} onCancel={() => setDeleteOrderId(null)}
+          onConfirm={async () => { await handleDeleteOrder(deleteOrderId); setDeleteOrderId(null); }} />
+      )}
     </div>
   );
 }
@@ -9039,13 +9103,6 @@ function ManageModels({ config, refresh, flash, session }) {
     setCreating(false);
     await refresh();
     flash("Model created" + (pendingColors.length || pendingSizes.length || Object.keys(photoFiles).length ? " with photos, colors, and sizes" : ""));
-  };
-
-  const remove = async (id) => {
-    const m = config.models.find((x) => x.id === id);
-    await supabase.from("models").delete().eq("id", id);
-    if (m) notify(session, `${session.name} deleted model ${m.modelNo}`, "model", null);
-    await refresh();
   };
 
   return (
