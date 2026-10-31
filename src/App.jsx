@@ -557,6 +557,28 @@ function VideoViewer({ src, onClose }) {
   );
 }
 
+const DOC_EXT = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv", "rtf"];
+const isDocFile = (file) => DOC_EXT.includes(String(file.name || "").split(".").pop().toLowerCase());
+const fileExt = (name) => String(name || "").split(".").pop().toUpperCase().slice(0, 4);
+
+// a document: a tile with its type; tapping opens or downloads it
+function FileTile({ f, onRemove }) {
+  const url = useFileUrl(f.url);
+  const ext = fileExt(f.name);
+  const color = ({ PDF: "#C1302B", DOC: "#2F5F8F", DOCX: "#2F5F8F", XLS: "#2F8F46", XLSX: "#2F8F46", PPT: "#D98E2B", PPTX: "#D98E2B" })[ext] || "#5a5a5a";
+  return (
+    <div style={{ width: 96, position: "relative" }}>
+      <a href={url || undefined} target="_blank" rel="noopener noreferrer" title="Open / download"
+        style={{ width: 96, height: 96, border: "1px solid #E5E5E5", borderRadius: 4, background: "#F7F8FA", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textDecoration: "none", color: "#1A1A1A", gap: 4 }}>
+        <span style={{ fontSize: 28 }}>📄</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color }}>{ext}</span>
+      </a>
+      {onRemove && <span onClick={onRemove} style={{ position: "absolute", top: -6, right: -6, background: "#C1302B", color: "#fff", borderRadius: 10, width: 18, height: 18, fontSize: 12, lineHeight: "18px", textAlign: "center", cursor: "pointer" }}>×</span>}
+      <div style={{ fontSize: 10.5, color: "#8a8a8a", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+    </div>
+  );
+}
+
 // Read-only gallery (view pages, print). Images open in the Lightbox, videos in the VideoViewer.
 function AttachmentGallery({ files }) {
   const [img, setImg] = useState(null);
@@ -565,7 +587,9 @@ function AttachmentGallery({ files }) {
   return (
     <>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-        {files.map((f, i) => (
+        {files.map((f, i) => f.type === "file" ? (
+          <div key={i} className="no-print"><FileTile f={f} /></div>
+        ) : (
           <div key={i} className={f.type === "video" ? "no-print" : undefined} style={{ width: 96 }}>
             {f.type === "video" ? (
               <div onClick={() => setVid(f.url)} style={{ width: 96, height: 96, background: "#1A1A1A", color: "#fff", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 30 }}>▶</div>
@@ -584,7 +608,7 @@ function AttachmentGallery({ files }) {
 }
 
 // Editable: pick photos/videos, they upload straight away and appear as thumbnails with a remove ×.
-function AttachmentField({ files, onChange, disabled, folder, label, live }) {
+function AttachmentField({ files, onChange, disabled, folder, label, live, docs }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const [img, setImg] = useState(null);
@@ -601,12 +625,14 @@ function AttachmentField({ files, onChange, disabled, folder, label, live }) {
     for (const file of chosen) {
       const isVideo = file.type.startsWith("video/");
       const isImage = file.type.startsWith("image/");
-      if (!isVideo && !isImage) { setError(`"${file.name}" isn't a photo or video.`); continue; }
+      const isDoc = !isVideo && !isImage && isDocFile(file);
+      if (!isVideo && !isImage && !(docs && isDoc)) { setError(docs ? `"${file.name}" isn't a photo, video or document (PDF, Word, Excel, PowerPoint, text).` : `"${file.name}" isn't a photo or video.`); continue; }
+      if (isDoc && file.size > 25 * 1024 * 1024) { setError(`"${file.name}" is bigger than 25 MB.`); continue; }
       const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
       const path = `${folder || "order-files"}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${safe}`;
-      const up = await uploadCustomerFile(path, file, file.type);
+      const up = await uploadCustomerFile(path, file, file.type || "application/octet-stream");
       if (up.error) { setError(`Couldn't upload "${file.name}": ${up.error.message}`); continue; }
-      added.push({ url: up.ref, name: file.name, type: isVideo ? "video" : "image", taken_at: new Date(file.lastModified || Date.now()).toISOString(), uploaded_at: new Date().toISOString() });
+      added.push({ url: up.ref, name: file.name, type: isVideo ? "video" : isImage ? "image" : "file", taken_at: new Date(file.lastModified || Date.now()).toISOString(), uploaded_at: new Date().toISOString() });
     }
     setUploading(false);
     if (added.length) onChange([...list, ...added]);
@@ -617,7 +643,9 @@ function AttachmentField({ files, onChange, disabled, folder, label, live }) {
     <div>
       <div style={label13}>{label || "Attachments (photos / videos)"}</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-start" }}>
-        {list.map((f, i) => (
+        {list.map((f, i) => f.type === "file" ? (
+          <FileTile key={i} f={f} onRemove={disabled ? null : () => remove(i)} />
+        ) : (
           <div key={i} style={{ width: 96, position: "relative" }}>
             {f.type === "video" ? (
               <div onClick={() => setVid(f.url)} style={{ width: 96, height: 96, background: "#1A1A1A", color: "#fff", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 30 }}>▶</div>
@@ -633,8 +661,8 @@ function AttachmentField({ files, onChange, disabled, folder, label, live }) {
         {!disabled && (
           <label htmlFor={inputId} style={{ width: 96, height: 96, border: "1px dashed #C9CDD3", borderRadius: 4, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: uploading ? "wait" : "pointer", color: "#8a8a8a", fontSize: 12, textAlign: "center" }}>
             <span style={{ fontSize: 24, color: "#C9CDD3" }}>{uploading ? "…" : "+"}</span>
-            {uploading ? "Uploading" : live ? "Take photo / video" : "Add photo / video"}
-            <input id={inputId} type="file" accept="image/*,video/*" capture={live ? "environment" : undefined} multiple onChange={pick} disabled={uploading} style={{ display: "none" }} />
+            {uploading ? "Uploading" : live ? "Take photo / video" : docs ? "Add photo, video or file" : "Add photo / video"}
+            <input id={inputId} type="file" accept={docs ? "image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf" : "image/*,video/*"} capture={live ? "environment" : undefined} multiple onChange={pick} disabled={uploading} style={{ display: "none" }} />
           </label>
         )}
       </div>
@@ -2767,7 +2795,7 @@ function JobOrderForm({ config, session, orders, onCancel, onSubmit, initialOrde
       </div>
 
       <div style={{ margin: "0 0 16px" }}>
-        <AttachmentField files={form.attachments} onChange={(files) => setForm((f) => ({ ...f, attachments: files }))} disabled={readOnly} />
+        <AttachmentField docs files={form.attachments} onChange={(files) => setForm((f) => ({ ...f, attachments: files }))} disabled={readOnly} label="Customer's special requirement — attach photos, videos or documents" />
       </div>
 
       {model && (
@@ -3119,6 +3147,12 @@ function SubmittedItemCard({ it, idx, nearestLabel, rows, showMeas, onToggleMeas
           </div>
           {tags.length > 0 && <div style={{ fontSize: 12.5, marginTop: 4 }}>{tags.join(" · ")}</div>}
           {it.notes && <div style={{ fontSize: 12, color: "#8a8a8a", marginTop: 2 }}>Notes: {it.notes}</div>}
+          {(it.attachments || []).length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 4 }}>Customer's attachments</div>
+              <AttachmentGallery files={it.attachments} />
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button disabled={!canEdit} title={canEdit ? "" : "Submit the open item first"} onClick={onEdit} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "8px 16px", fontWeight: 700, fontSize: 13, opacity: canEdit ? 1 : 0.45 }}>Edit</button>
@@ -3479,8 +3513,10 @@ function RequirementForm({ config, session, onCancel, onSave }) {
                 {it.modelReq && <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 4 }}>Filled in from this model's requirements — remove anything this customer doesn't want, or add more.</div>}
               </div>
 
-              <div style={{ marginTop: 12 }}>
-                <AttachmentField files={it.attachments} onChange={(files) => setItemAttachments(idx, files)} />
+              <div style={{ marginTop: 14, padding: 12, background: "#FFFBF2", border: "1px dashed #D9B25A", borderRadius: 8 }}>
+                <AttachmentField docs files={it.attachments} onChange={(files) => setItemAttachments(idx, files)}
+                  label="Customer's special requirement — attach photos, videos or documents" />
+                <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 6 }}>For example a sketch, a reference photo, a video, or a PDF / Word / Excel file the customer sent.</div>
               </div>
 
               <div style={{ marginTop: 10 }}>
