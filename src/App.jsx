@@ -1629,6 +1629,81 @@ function TagField({ value, onChange, options, disabled }) {
   );
 }
 
+// One field that works both ways: type to search, or open the list and pick. No separate search box.
+function ComboInput({ value, onChange, options, placeholder, disabled, number, min = 5, max = 70, step = 0.5, width, style }) {
+  const opts = React.useMemo(() => (options || []).map((o) => (typeof o === "string" ? { value: o, label: o, search: o } : { search: o.label, ...o })), [options]);
+  const labelOf = (v) => { const o = opts.find((x) => x.value === v); return o ? o.label : v || ""; };
+  const [text, setText] = useState(labelOf(value));
+  const [open, setOpen] = useState(false);
+  const [typing, setTyping] = useState(false);     // false = just opened (show everything); true = the person has typed (narrow the list)
+  const [hi, setHi] = useState(0);
+  const listRef = React.useRef(null);
+
+  useEffect(() => { if (!open) setText(labelOf(value)); }, [value, open]); // eslint-disable-line   (stay in step with the form)
+
+  const q = text.trim().toLowerCase();
+  const rank = (o) => { const s = String(o.search || o.label).toLowerCase(); return s === q ? 0 : s.startsWith(q) ? 1 : 2; };
+  const shown = typing && q ? opts.filter((o) => String(o.search || o.label).toLowerCase().includes(q)).sort((a, b) => rank(a) - rank(b)) : opts;
+
+  useEffect(() => {   // on opening, jump to the chosen value
+    if (open && !typing) setHi(Math.max(0, shown.findIndex((o) => o.value === value)));
+  }, [open]); // eslint-disable-line
+  useEffect(() => {   // keep the highlighted row visible
+    if (open && listRef.current && listRef.current.children[hi]) listRef.current.children[hi].scrollIntoView({ block: "nearest" });
+  }, [hi, open, typing]);
+
+  const pick = (o) => { onChange(o.value); setText(o.label); setOpen(false); setTyping(false); };
+  const commit = () => {
+    setOpen(false); setTyping(false);
+    const t = text.trim();
+    if (number) {
+      if (t === "") { if (value !== "") onChange(""); setText(""); return; }
+      const n = parseFloat(t.replace(",", "."));
+      if (isNaN(n)) { setText(labelOf(value)); return; }
+      const snapped = Math.min(max, Math.max(min, Math.round(n / step) * step));
+      const v = snapped % 1 === 0 ? String(snapped) : snapped.toFixed(1);
+      onChange(v); setText(v);
+      return;
+    }
+    if (t === "") { if (value) onChange(""); return; }
+    const exact = opts.find((o) => String(o.value).toLowerCase() === t.toLowerCase() || String(o.label).toLowerCase() === t.toLowerCase());
+    if (exact) { onChange(exact.value); setText(exact.label); return; }
+    const cands = opts.filter((o) => String(o.search || o.label).toLowerCase().includes(t.toLowerCase()));
+    if (cands.length === 1) { onChange(cands[0].value); setText(cands[0].label); return; }
+    setText(labelOf(value));       // not a recognised model: go back to what was chosen
+  };
+  const onKey = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, shown.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter") { if (open && typing && shown[hi]) { e.preventDefault(); pick(shown[hi]); } else { commit(); } }
+    else if (e.key === "Escape") { setOpen(false); setTyping(false); setText(labelOf(value)); }
+  };
+
+  return (
+    <div style={{ position: "relative", width: width || "100%" }}>
+      <input value={text} disabled={disabled} placeholder={placeholder} autoComplete="off" inputMode={number ? "decimal" : "text"}
+        onFocus={(e) => { setOpen(true); setTyping(false); e.target.select(); }}
+        onChange={(e) => { setText(e.target.value); setTyping(true); setOpen(true); setHi(0); }}
+        onBlur={commit} onKeyDown={onKey}
+        style={{ ...inputStyle, paddingRight: 24, ...style }} />
+      <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", fontSize: 10, color: "#8a8a8a", pointerEvents: "none" }}>▾</span>
+      {open && !disabled && (
+        <div ref={listRef} style={{ position: "absolute", top: "100%", left: 0, right: 0, minWidth: number ? 84 : 220, zIndex: 80, maxHeight: 240, overflowY: "auto", background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, boxShadow: "0 8px 20px rgba(0,0,0,0.15)", marginTop: 2 }}>
+          {shown.length === 0 ? <div style={{ padding: "8px 10px", fontSize: 12.5, color: "#8a8a8a" }}>No match</div> : shown.map((o, i) => (
+            <div key={o.value} onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.preventDefault(); e.stopPropagation(); pick(o); }} onMouseEnter={() => setHi(i)}
+              style={{ padding: "7px 10px", fontSize: 13.5, cursor: "pointer", background: i === hi ? "#EEF3F9" : "#fff", fontWeight: o.value === value ? 700 : 400 }}>{o.label}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const modelOptionsOf = (models) => (models || []).map((m) => ({
+  value: m.modelNo, label: m.styleName ? `${m.modelNo} — ${m.styleName}` : m.modelNo,
+  search: `${m.modelNo} ${m.styleName || ""} ${m.collectionName || ""}`,   // typing a style or collection name finds the model too
+}));
+
 function Field({ label, children }) {
   return <label style={{ display: "block", marginBottom: 12 }}><div style={label13}>{label}</div>{children}</label>;
 }
@@ -2460,6 +2535,15 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
   const [pickedSize, setPickedSize] = useState("");
   const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [showAllFields, setShowAllFields] = useState(false);
+  const modelOptions = useMemo(() => modelOptionsOf(config.models), [config.models]);
+  const changeModel = (v) => setForm((f) => {
+    const next = { ...f, model: v, color: "", colorSwatch: "" };
+    if (!initialOrder) {          // new order only: fill from the model, unless the person already typed their own
+      const prevAuto = requirementTagsOf(config.models.find((m) => m.modelNo === f.model));
+      if (!f.additionalRequirements || f.additionalRequirements === prevAuto) next.additionalRequirements = requirementTagsOf(config.models.find((m) => m.modelNo === v));
+    }
+    return next;
+  });
   const printRef = React.useRef(null);
   usePrintFit(printRef);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -2509,14 +2593,7 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
         <Field label="Date"><input style={inputStyle} value={isEdit ? fmtDate(initialOrder.createdAt) : fmtDate(new Date())} disabled /></Field>
         <Field label="Job Order No"><input style={inputStyle} value={isEdit ? (initialOrder.jobOrderNo || "—") : "Auto-generated on save"} disabled /></Field>
         <Field label="Order Type"><select style={inputStyle} value={form.orderType} onChange={set("orderType")} disabled={readOnly}>{ORDER_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
-        <Field label="Model"><select style={inputStyle} value={form.model} onChange={(e) => { const v = e.target.value; setForm((f) => {
-          const next = { ...f, model: v, color: "", colorSwatch: "" };
-          if (!initialOrder) {          // new order only: fill from the model, unless the person already typed their own
-            const prevAuto = requirementTagsOf(config.models.find((m) => m.modelNo === f.model));
-            if (!f.additionalRequirements || f.additionalRequirements === prevAuto) next.additionalRequirements = requirementTagsOf(config.models.find((m) => m.modelNo === v));
-          }
-          return next;
-        }); }} disabled={readOnly}>{config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}</option>)}</select></Field>
+        <Field label="Model"><ComboInput value={form.model} disabled={readOnly} onChange={changeModel} options={modelOptions} placeholder="Type or pick a model…" /></Field>
         <Field label="Select Item"><select style={inputStyle} value={form.item} onChange={set("item")} disabled={readOnly}>{ITEM_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
         <Field label="Prepared By"><input style={inputStyle} value={isEdit ? initialOrder.preparedBy : session.name} disabled /></Field>
         <Field label="Branch"><select style={inputStyle} value={form.branch} onChange={set("branch")} disabled={readOnly}>{config.branches.map((b) => <option key={b.id} value={b.name}>{b.name}</option>)}</select></Field>
@@ -2561,10 +2638,7 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
             {readOnly ? (
               <input style={inputStyle} value={form.measurements[k] || ""} disabled />
             ) : (
-              <select value={form.measurements[k] || ""} onChange={setMeasure(k)} style={inputStyle}>
-                <option value="">—</option>
-                {MEASUREMENT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
-              </select>
+              <ComboInput number value={form.measurements[k] || ""} onChange={(v) => setMeasure(k)({ target: { value: v } })} options={MEASUREMENT_OPTIONS} placeholder="—" />
             )}
           </Field>
         ))}
@@ -3028,6 +3102,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
 
   const [lightbox, setLightbox] = useState(null);
   const [formMsg, setFormMsg] = useState("");
+  const modelOptions = useMemo(() => modelOptionsOf(config.models), [config.models]);
   const [collection, setCollection] = useState(EMPTY_COLLECTION);
   const [collectionError, setCollectionError] = useState("");
   const [confirmItem, setConfirmItem] = useState(null);   // index being submitted
@@ -3194,10 +3269,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 16 }}>
         {FITTING_FIELDS_GENERAL.map(([k, l]) => (
           <Field key={k} label={l}>
-            <select value={measurements[k]} onChange={(e) => setMVal(k)(e.target.value)} style={inputStyle}>
-              <option value="">—</option>
-              {MEASUREMENT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
-            </select>
+            <ComboInput number value={measurements[k]} onChange={(v) => setMVal(k)(v)} options={MEASUREMENT_OPTIONS} placeholder="—" />
           </Field>
         ))}
       </div>
@@ -3205,10 +3277,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
         {FITTING_FIELDS_TROUSER.map(([k, l]) => (
           <Field key={k} label={l}>
-            <select value={measurements[k]} onChange={(e) => setMVal(k)(e.target.value)} style={inputStyle}>
-              <option value="">—</option>
-              {MEASUREMENT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
-            </select>
+            <ComboInput number value={measurements[k]} onChange={(v) => setMVal(k)(v)} options={MEASUREMENT_OPTIONS} placeholder="—" />
           </Field>
         ))}
       </div>
@@ -3338,10 +3407,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
         {pickModel && (() => { const m = config.models.find((mm) => mm.modelNo === pickModel); return m ? <ModelThumb model={m} size={56} style={{ borderRadius: 3 }} /> : null; })()}
         <div>
           <div style={label13}>Model</div>
-          <select style={{ ...inputStyle, width: 220 }} value={pickModel} disabled={openIdx !== -1} onChange={(e) => setPickModel(e.target.value)}>
-            <option value="">Select a model…</option>
-            {config.models.map((m) => <option key={m.id} value={m.modelNo}>{m.modelNo}{m.styleName ? ` — ${m.styleName}` : ""}</option>)}
-          </select>
+          <ComboInput width={260} value={pickModel} disabled={openIdx !== -1} onChange={setPickModel} options={modelOptions} placeholder="Type or pick a model…" />
         </div>
         {pickModel && (() => { const m = config.models.find((mm) => mm.modelNo === pickModel); return m && m.possibleCuts ? <div style={{ fontSize: 12, color: "#8a8a8a", alignSelf: "flex-end", paddingBottom: 8 }}>Cuts: {m.possibleCuts}</div> : null; })()}
         <button onClick={addItem} disabled={!pickModel || openIdx !== -1} style={{ background: pickModel && openIdx === -1 ? "#3B6FA0" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "9px 18px", fontSize: 13, fontWeight: 700, alignSelf: "flex-end" }}>+ Add Item</button>
@@ -4720,10 +4786,7 @@ function CustomerDetail({ mobile, profiles, orders, session, refresh, onClose })
             <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginTop: 10 }}>
               {FITTING_FIELDS.map(([k, l]) => (
                 <Field key={k} label={l}>
-                  <select value={form.measurements[k]} onChange={(e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }))} style={inputStyle}>
-                    <option value="">—</option>
-                    {MEASUREMENT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
-                  </select>
+                  <ComboInput number value={form.measurements[k]} onChange={(v) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: v } }))} options={MEASUREMENT_OPTIONS} placeholder="—" />
                 </Field>
               ))}
             </div>
