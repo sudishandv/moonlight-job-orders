@@ -8050,13 +8050,39 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
   );
 }
 
+const normTxt = (s) => String(s == null ? "" : s).trim().replace(/\s+/g, " ");
+const GROUP_BY = [["collectionName", "Collection"], ["category", "Category"], ["season", "Season"], ["productType", "Product type"], ["", "No grouping"]];
+
 function ModelBrowser({ models, canEdit, refresh, flash, session, openRequest, clearOpenRequest }) {
   const [query, setQuery] = useState("");
   const [keywords, setKeywords] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  const [groupBy, setGroupBy] = useState("collectionName");
+  const [view, setView] = useState("grid");
+  const [groupPick, setGroupPick] = useState("");            // one chosen chip ("" = all)
+  const [fCategory, setFCategory] = useState("");
+  const [fSeason, setFSeason] = useState("");
+  const [fType, setFType] = useState("");
+  const [collapsed, setCollapsed] = useState({});
+  const [images, setImages] = useState({});                  // model id -> photos, front first
+  const [colors, setColors] = useState({});                  // model id -> [{ name, swatch }]
+
   useEffect(() => {
     if (openRequest && openRequest.type === "model") { setSelectedId(openRequest.id); clearOpenRequest(); }
   }, [openRequest]); // eslint-disable-line
+  useEffect(() => {                                          // photos and colours for every model, once
+    supabase.from("model_images").select("model_id,url,view_label").then(({ data }) => {
+      const map = {};
+      (data || []).forEach((r) => { (map[r.model_id] = map[r.model_id] || []).push(r); });
+      Object.values(map).forEach((arr) => arr.sort((a, b) => (b.view_label === "Front") - (a.view_label === "Front")));
+      setImages(map);
+    });
+    supabase.from("model_colors").select("model_id,color_name,swatch_url,created_at").order("created_at").then(({ data }) => {
+      const map = {};
+      (data || []).forEach((r) => { (map[r.model_id] = map[r.model_id] || []).push({ name: r.color_name, swatch: r.swatch_url }); });
+      setColors(map);
+    });
+  }, [models.length]);
 
   const addKeyword = () => {
     const k = query.trim();
@@ -8065,64 +8091,192 @@ function ModelBrowser({ models, canEdit, refresh, flash, session, openRequest, c
     setQuery("");
   };
   const removeKeyword = (k) => setKeywords((prev) => prev.filter((x) => x !== k));
-
   const matchesKeyword = (m, k) => {
     const q = k.toLowerCase();
     return [m.modelNo, m.styleName, m.collectionName, m.category, m.productType, m.season, m.description, m.instructions]
-      .filter(Boolean).some((f) => f.toLowerCase().includes(q));
+      .filter(Boolean).some((f) => String(f).toLowerCase().includes(q));
   };
 
-  const filtered = models.filter((m) => {
-    const liveQuery = query.trim();
-    if (keywords.length === 0 && !liveQuery) return true;
-    const allKeywords = liveQuery ? [...keywords, liveQuery] : keywords;
-    return allKeywords.every((k) => matchesKeyword(m, k));
+  const optionsOf = (key) => [...new Set(models.map((m) => normTxt(m[key])).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const base = models.filter((m) => {
+    const live = query.trim();
+    const all = live ? [...keywords, live] : keywords;
+    if (!all.every((k) => matchesKeyword(m, k))) return false;
+    if (fCategory && normTxt(m.category) !== fCategory) return false;
+    if (fSeason && normTxt(m.season) !== fSeason) return false;
+    if (fType && normTxt(m.productType) !== fType) return false;
+    return true;
   });
+
+  // groups (spelling differences in capitals / spaces are treated as the same group)
+  const labels = {};
+  const keyOf = (m) => { if (!groupBy) return "all"; const t = normTxt(m[groupBy]); const k = t.toLowerCase(); if (k && !labels[k]) labels[k] = t; return k; };
+  const groups = {};
+  base.forEach((m) => { const k = keyOf(m); (groups[k] = groups[k] || []).push(m); });
+  Object.values(groups).forEach((arr) => arr.sort((a, b) => String(a.modelNo).localeCompare(String(b.modelNo), undefined, { numeric: true })));
+  const groupKeys = Object.keys(groups).sort((a, b) => (a === "" ? 1 : b === "" ? -1 : labels[a].localeCompare(labels[b])));
+  const groupWord = (GROUP_BY.find((g) => g[0] === groupBy) || ["", "Group"])[1];
+  const labelOf = (k) => (k === "all" ? "All models" : k ? labels[k] : groupBy === "collectionName" ? "No collection" : "Not set");
+  const shownKeys = groupPick && groups[groupPick] ? [groupPick] : groupKeys;
+  const summaryOf = (arr) => {
+    const part = (key) => [...new Set(arr.map((m) => normTxt(m[key])).filter(Boolean))];
+    return (groupBy === "collectionName" ? [...part("category"), ...part("season")] : part("collectionName")).slice(0, 5).join(" · ");
+  };
 
   if (selectedId) {
     const current = models.find((m) => m.id === selectedId);
     if (current) return <ModelDetailPage model={current} models={models} canEdit={canEdit} refresh={refresh} flash={flash} session={session} onBack={() => setSelectedId(null)} />;
   }
 
+  const chip = (on) => ({ padding: "6px 14px", fontSize: 12.5, borderRadius: 16, cursor: "pointer", whiteSpace: "nowrap", border: "1px solid " + (on ? "#1A1A1A" : "#DDE1E7"), background: on ? "#1A1A1A" : "#fff", color: on ? "#fff" : "#1A1A1A" });
+  const sel = { ...inputStyle, width: 170, padding: "7px 9px", fontSize: 13 };
+  const anyFilter = fCategory || fSeason || fType || keywords.length > 0 || query.trim();
+
   return (
-    <div>
-      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>VIEW MODELS</h2>
-      <div className="no-print" style={{ textAlign: "center", marginBottom: 18 }}>
-        <div style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "center", maxWidth: 600 }}>
-          <input
-            placeholder="Search collection, model no, style, category, product type, season…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addKeyword(); } }}
-            style={{ ...inputStyle, width: 320 }}
-          />
-          <button type="button" onClick={addKeyword} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12.5, fontWeight: 700 }}>+ Add Filter</button>
-        </div>
-        {keywords.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", marginTop: 10 }}>
-            {keywords.map((k) => (
-              <span key={k} style={{ background: "#EEF0F2", border: "1px solid #C9CDD3", borderRadius: 12, padding: "3px 10px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                {k}
-                <span onClick={() => removeKeyword(k)} style={{ cursor: "pointer", color: "#C1302B", fontWeight: 700 }}>×</span>
-              </span>
-            ))}
-            <a className="link" style={{ fontSize: 11.5, marginLeft: 4 }} onClick={() => setKeywords([])}>Clear all</a>
-          </div>
-        )}
+    <div style={{ maxWidth: 1400, margin: "0 auto" }}>
+      <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 4 }}>VIEW MODELS</h2>
+      <div style={{ textAlign: "center", fontSize: 12.5, color: "#8a8a8a", marginBottom: 16 }}>
+        {base.length === models.length ? `${models.length} models` : `${base.length} of ${models.length} models`}
+        {groupBy ? ` · ${groupKeys.length} ${groupWord.toLowerCase()}${groupKeys.length === 1 ? "" : "s"}` : ""}
       </div>
-      {filtered.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No models match your search.</div> : (
-        <div style={{ display: "grid", gap: 10 }}>
-          {filtered.map((m) => (
-            <div key={m.id} onClick={() => setSelectedId(m.id)} style={{ border: "1px solid #E5E5E5", padding: 14, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
-              <ModelThumb model={m} size={56} style={{ borderRadius: 3 }} />
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>{m.modelNo}{m.styleName ? ` — ${m.styleName}` : ""}</div>
-                <div style={{ fontSize: 12, color: "#8a8a8a" }}>{[m.collectionName, m.category, m.productType, m.season].filter(Boolean).join(" · ") || "No details yet"}</div>
-              </div>
-            </div>
+
+      <div className="no-print" style={{ display: "flex", gap: 10, justifyContent: "center", alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <input placeholder="Search model no, style, collection, category, season…" value={query} onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addKeyword(); } }} style={{ ...inputStyle, width: 340, maxWidth: "100%" }} />
+        <button type="button" onClick={addKeyword} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "9px 14px", fontSize: 12.5, fontWeight: 700 }}>+ Add Filter</button>
+        <div style={{ display: "inline-flex", border: "1px solid #C9CDD3", borderRadius: 6, overflow: "hidden" }}>
+          <button onClick={() => setView("grid")} style={{ padding: "8px 14px", border: "none", cursor: "pointer", background: view === "grid" ? "#1A1A1A" : "#fff", color: view === "grid" ? "#fff" : "#1A1A1A", fontSize: 12.5, fontWeight: 700 }}>▦ Grid</button>
+          <button onClick={() => setView("list")} style={{ padding: "8px 14px", border: "none", cursor: "pointer", background: view === "list" ? "#1A1A1A" : "#fff", color: view === "list" ? "#fff" : "#1A1A1A", fontSize: 12.5, fontWeight: 700 }}>☰ List</button>
+        </div>
+      </div>
+      {keywords.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", marginBottom: 10 }}>
+          {keywords.map((k) => (
+            <span key={k} style={{ background: "#EEF0F2", border: "1px solid #C9CDD3", borderRadius: 12, padding: "3px 10px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              {k}<span onClick={() => removeKeyword(k)} style={{ cursor: "pointer", color: "#C1302B", fontWeight: 700 }}>×</span>
+            </span>
           ))}
+          <a className="link" style={{ fontSize: 11.5, marginLeft: 4 }} onClick={() => setKeywords([])}>Clear all</a>
         </div>
       )}
+
+      <div className="no-print" style={{ display: "flex", gap: 10, justifyContent: "center", alignItems: "center", flexWrap: "wrap", marginBottom: 14 }}>
+        <span style={{ fontSize: 12, color: "#8a8a8a" }}>Group by</span>
+        <select value={groupBy} onChange={(e) => { setGroupBy(e.target.value); setGroupPick(""); }} style={sel}>{GROUP_BY.map(([k, l]) => <option key={l} value={k}>{l}</option>)}</select>
+        <select value={fCategory} onChange={(e) => setFCategory(e.target.value)} style={sel}><option value="">All categories</option>{optionsOf("category").map((v) => <option key={v}>{v}</option>)}</select>
+        <select value={fSeason} onChange={(e) => setFSeason(e.target.value)} style={sel}><option value="">All seasons</option>{optionsOf("season").map((v) => <option key={v}>{v}</option>)}</select>
+        <select value={fType} onChange={(e) => setFType(e.target.value)} style={sel}><option value="">All product types</option>{optionsOf("productType").map((v) => <option key={v}>{v}</option>)}</select>
+        {anyFilter && <a className="link" style={{ fontSize: 12.5 }} onClick={() => { setFCategory(""); setFSeason(""); setFType(""); setKeywords([]); setQuery(""); setGroupPick(""); }}>Reset</a>}
+      </div>
+
+      {groupBy && groupKeys.length > 1 && (
+        <div className="no-print" style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 8, marginBottom: 14 }}>
+          <button style={chip(!groupPick)} onClick={() => setGroupPick("")}>All ({base.length})</button>
+          {groupKeys.map((k) => <button key={k || "none"} style={chip(groupPick === k)} onClick={() => setGroupPick(groupPick === k ? "" : k)}>{labelOf(k)} ({groups[k].length})</button>)}
+        </div>
+      )}
+
+      {base.length === 0 ? <div style={{ textAlign: "center", padding: 50, color: "#8a8a8a", fontSize: 14 }}>No models match your search.</div> : (
+        <>
+          {shownKeys.length > 1 && groupBy && (
+            <div className="no-print" style={{ textAlign: "right", fontSize: 12, marginBottom: 6 }}>
+              <a className="link" onClick={() => setCollapsed(Object.fromEntries(groupKeys.map((k) => [k, true])))}>Collapse all</a>{" · "}
+              <a className="link" onClick={() => setCollapsed({})}>Expand all</a>
+            </div>
+          )}
+          {shownKeys.map((k) => {
+            const arr = groups[k];
+            const closed = !!collapsed[k] && groupBy;
+            return (
+              <div key={k || "none"} style={{ marginBottom: 30 }}>
+                {groupBy && (
+                  <div onClick={() => setCollapsed((c) => ({ ...c, [k]: !c[k] }))} style={{ display: "flex", alignItems: "baseline", gap: 12, padding: "8px 2px", borderBottom: "2px solid #1A1A1A", marginBottom: 16, cursor: "pointer", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13 }}>{closed ? "▸" : "▾"}</span>
+                    <span style={{ fontFamily: F.display, fontWeight: 700, fontSize: 18, letterSpacing: "0.04em", textTransform: "uppercase" }}>{labelOf(k)}</span>
+                    <span style={{ fontSize: 13, color: "#8a8a8a" }}>{arr.length} model{arr.length === 1 ? "" : "s"}</span>
+                    <span style={{ marginLeft: "auto", fontSize: 12, color: "#8a8a8a" }}>{summaryOf(arr)}</span>
+                  </div>
+                )}
+                {!closed && (
+                  view === "grid"
+                    ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 18 }}>
+                        {arr.map((m) => <ModelGridCard key={m.id} m={m} imgs={images[m.id] || []} cols={colors[m.id] || []} onOpen={() => setSelectedId(m.id)} />)}
+                      </div>
+                    : <div style={{ display: "grid", gap: 10 }}>
+                        {arr.map((m) => <ModelListRow key={m.id} m={m} imgs={images[m.id] || []} cols={colors[m.id] || []} onOpen={() => setSelectedId(m.id)} />)}
+                      </div>
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
+}
+
+function Swatches({ cols, size = 18, max = 6 }) {
+  if (!cols || cols.length === 0) return null;
+  return (
+    <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+      {cols.slice(0, max).map((c, i) => (
+        <span key={i} title={c.name} style={{ width: size, height: size, borderRadius: "50%", border: "1px solid #D5D9DE", overflow: "hidden", background: "#EEE", display: "inline-block" }}>
+          {c.swatch ? <img src={c.swatch} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
+        </span>
+      ))}
+      {cols.length > max && <span style={{ fontSize: 11, color: "#8a8a8a" }}>+{cols.length - max}</span>}
+    </div>
+  );
+}
+
+function ModelGridCard({ m, imgs, cols, onOpen }) {
+  const [hover, setHover] = useState(false);
+  const tag = { fontSize: 11, background: "#F2F4F7", borderRadius: 10, padding: "2px 9px", color: "#4A5468" };
+  return (
+    <div onClick={onOpen} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{ border: "1px solid #E1E5EA", borderRadius: 10, overflow: "hidden", cursor: "pointer", background: "#fff", boxShadow: hover ? "0 8px 24px rgba(20,30,50,0.14)" : "0 1px 4px rgba(20,30,50,0.06)", transform: hover ? "translateY(-2px)" : "none", transition: "all .18s" }}>
+      <div style={{ position: "relative", paddingTop: "133%", background: "#F2F2F2" }}>
+        {imgs[0] ? <img src={imgs[0].url} alt={m.modelNo} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+                 : <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#9aa0a8" }}>No photo</div>}
+        {imgs[1] && <img src={imgs[1].url} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: hover ? 1 : 0, transition: "opacity .25s" }} />}
+        <div className="mono" style={{ position: "absolute", top: 10, left: 10, background: "rgba(26,26,26,0.88)", color: "#fff", fontSize: 12, fontWeight: 700, padding: "4px 10px", borderRadius: 6 }}>{m.modelNo}</div>
+        {m.season && <div style={{ position: "absolute", top: 10, right: 10, background: "rgba(255,255,255,0.92)", fontSize: 10.5, fontWeight: 700, padding: "3px 8px", borderRadius: 10, letterSpacing: "0.04em", textTransform: "uppercase" }}>{m.season}</div>}
+      </div>
+      <div style={{ padding: "12px 14px 14px" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3, minHeight: 18, marginBottom: 6 }}>{m.styleName || <span style={{ color: "#9aa0a8", fontWeight: 400 }}>No style name yet</span>}</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+          {m.category && <span style={tag}>{m.category}</span>}
+          {m.productType && <span style={tag}>{m.productType}</span>}
+        </div>
+        <Swatches cols={cols} />
+        {m.possibleCuts && <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 8 }}>Cuts: {m.possibleCuts}</div>}
+      </div>
+    </div>
+  );
+}
+
+function ModelListRow({ m, imgs, cols, onOpen }) {
+  const tag = { fontSize: 11, background: "#F2F4F7", borderRadius: 10, padding: "2px 9px", color: "#4A5468" };
+  return (
+    <div onClick={onOpen} style={{ border: "1px solid #E1E5EA", borderRadius: 10, padding: 12, display: "flex", alignItems: "center", gap: 16, cursor: "pointer", background: "#fff", flexWrap: "wrap" }}>
+      <div style={{ width: 64, height: 86, borderRadius: 6, overflow: "hidden", background: "#F2F2F2", flexShrink: 0 }}>
+        {imgs[0] ? <img src={imgs[0].url} alt={m.modelNo} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#9aa0a8" }}>No photo</div>}
+      </div>
+      <div style={{ flex: 1, minWidth: 220 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+          <span className="mono" style={{ fontWeight: 700, fontSize: 15 }}>{m.modelNo}</span>
+          <span style={{ fontSize: 14 }}>{m.styleName}</span>
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+          {m.collectionName && <span style={{ ...tag, background: "#EAF1F8", color: "#2F5F8F" }}>{m.collectionName}</span>}
+          {m.category && <span style={tag}>{m.category}</span>}
+          {m.productType && <span style={tag}>{m.productType}</span>}
+          {m.season && <span style={tag}>{m.season}</span>}
+        </div>
+        {m.possibleCuts && <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 6 }}>Cuts: {m.possibleCuts}</div>}
+      </div>
+      <Swatches cols={cols} size={20} max={8} />
+      <span style={{ color: "#9aa0a8", fontSize: 20 }}>›</span>
     </div>
   );
 }
