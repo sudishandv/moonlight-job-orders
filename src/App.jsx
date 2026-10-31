@@ -139,6 +139,7 @@ const ROLE_HOME_CARDS = {
     ["📐", "New Requirement", "Take fitting measurements", "requirement"],
     ["📄", "Requirement List", "Browse saved requirements", "requirements"],
     ["👤", "Customers", "Search profiles & history", "customers"],
+    ["🧥", "View Models", "Browse the model catalog", "items"],
     ["🔔", "Notifications", "Everything that has happened", "notifications"],
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
@@ -176,7 +177,6 @@ const ROLE_HOME_CARDS = {
   model_manager: [
     ["➕", "Add Model", "Create a new style", "models"],
     ["🧥", "View Models", "Browse & edit the catalog", "viewmodels"],
-    ["📊", "Analytics", "Which models and orders perform best", "analytics"],
     ["🔔", "Notifications", "Everything that has happened", "notifications"],
     ["🗂️", "Projects", "Design team projects", "projects"],
   ],
@@ -1489,7 +1489,7 @@ export default function App() {
           ? <ProjectsPage projects={projects} collaborators={projectCollaborators} allUsers={allUsers} session={profile} refresh={refresh} flash={flash} tasks={projectTasks} projectModels={projectModels} models={config.models} />
           : <ProjectsUnderConstruction />
       )}
-      {subpage === "analytics" && (profile.role === "admin" || profile.role === "model_manager") && (
+      {subpage === "analytics" && profile.role === "admin" && (
         <AnalyticsPage orders={orders} models={config.models} />
       )}
       {subpage === "calendar" && (profile.role === "production" || profile.role === "admin") && (
@@ -1736,6 +1736,7 @@ function ComboInput({ value, onChange, options, placeholder, disabled, number, m
     <div style={{ position: "relative", width: width || "100%" }}>
       <input value={text} disabled={disabled} placeholder={placeholder} autoComplete="off" inputMode={number ? "decimal" : "text"}
         onFocus={(e) => { setOpen(true); setTyping(false); e.target.select(); }}
+        onClick={(e) => { if (!open) { setOpen(true); setTyping(false); e.target.select(); } }}
         onChange={(e) => { setText(e.target.value); setTyping(true); setOpen(true); setHi(0); }}
         onBlur={commit} onKeyDown={onKey}
         style={{ ...inputStyle, paddingRight: 24, ...style }} />
@@ -2460,6 +2461,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
   if (subpage === "requirement") {
     return <RequirementForm config={config} session={session} onCancel={() => setSubpage("records")} onSave={handleSaveRequirement} />;
   }
+  if (subpage === "items") return <ModelBrowser models={config.models} canEdit={false} session={session} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />;
   if (subpage === "customers") {
     return <CustomersPage profiles={profiles} orders={orders} session={session} refresh={refresh} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />;
   }
@@ -3241,9 +3243,7 @@ function RequirementForm({ config, session, onCancel, onSave }) {
   const [removeIdx, setRemoveIdx] = useState(null);       // index being removed
   const addBarRef = React.useRef(null);
 
-  const addItem = async () => {
-    const model = config.models.find((m) => m.modelNo === pickModel);
-    if (!model) return;
+  const buildItem = async (model) => {
     const { data: sizes } = await supabase.from("model_sizes").select("*").eq("model_id", model.id);
     const { data: colors } = await supabase.from("model_colors").select("*").eq("model_id", model.id).order("created_at");
     const cuts = cutTagsOf(model);
@@ -3252,16 +3252,26 @@ function RequirementForm({ config, session, onCancel, onSave }) {
       const { data: imgs } = await supabase.from("model_images").select("*").eq("model_id", model.id);
       if (imgs && imgs.length) photoUrl = (imgs.find((d) => d.view_label === "Front") || imgs[0]).url;
     }
-    setItems((it) => [...it, {
-      model: pickModel, modelId: model.id, modelObj: model, photoUrl,
+    return {
+      model: model.modelNo, modelId: model.id, modelObj: model, photoUrl,
       customFields: model.customFields || [], cuts, cut: cuts[0] || null, notes: "", sizes: sizes || [], overrides: {},
       abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: requirementTagsOf(model), modelReq: requirementTagsOf(model), attachments: [],
-      confirmed: false,
-      colors: colors || [],
-      color: (colors && colors[0] && colors[0].color_name) || "",
-      colorSwatch: (colors && colors[0] && colors[0].swatch_url) || "",
-    }]);
+      confirmed: false, colors: colors || [],
+      color: (colors && colors[0] && colors[0].color_name) || "", colorSwatch: (colors && colors[0] && colors[0].swatch_url) || "",
+    };
+  };
+  const addItem = async () => {
+    const model = config.models.find((m) => m.modelNo === pickModel);
+    if (!model) return;
+    const item = await buildItem(model);
+    setItems((it) => [...it, item]);
     setPickModel("");
+  };
+  const changeItemModel = async (idx, modelNo) => {
+    const model = config.models.find((m) => m.modelNo === modelNo);
+    if (!model || items[idx].model === modelNo) return;
+    const fresh = await buildItem(model);
+    setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...fresh, notes: it.notes, attachments: it.attachments, abayaOption: it.abayaOption, buttonFrom: it.buttonFrom, buttonTill: it.buttonTill })));
   };
   const changeItemCut = (idx, cut) => setItems((prev) => prev.map((it, i) => (i !== idx ? it : { ...it, cut, overrides: {} })));
   const setItemCalc = (idx, key, value) => setItems((prev) => prev.map((it, i) => {
@@ -3455,6 +3465,11 @@ function RequirementForm({ config, session, onCancel, onSave }) {
             </div>
 
             <div style={{ flex: 1, minWidth: 320 }}>
+              <div style={{ marginBottom: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={label13}>Model</span>
+                <ComboInput width={320} value={it.model} onChange={(v) => changeItemModel(idx, v)} options={modelOptions} placeholder="Type or pick a model…" />
+                <span style={{ fontSize: 11.5, color: "#8a8a8a" }}>Changing the model resets its colour, cut and calculations; your notes and attachments are kept.</span>
+              </div>
               <div style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", gap: 16, flexWrap: "wrap", marginBottom: 10 }}>
                 {it.cuts && it.cuts.length >= 2 ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -5073,11 +5088,121 @@ function AssignMaterialDialog({ order, models, session, onClose, onDone }) {
   );
 }
 
+const DEFAULT_DEPTS = ["Cutting", "Stitching", "Finishing", "Embroidery", "Pressing"];
+const deptsOf = (workers) => Array.from(new Set([...DEFAULT_DEPTS, ...(workers || []).map((w) => w.department).filter(Boolean)])).sort();
+// if someone types "Ali Stitching" with department Stitching, keep just "Ali"
+const cleanWorkerName = (name, dept) => {
+  let n = String(name || "").trim();
+  if (dept && n.toLowerCase().endsWith(dept.toLowerCase())) n = n.slice(0, n.length - dept.length).replace(/[\s—–-]+$/, "").trim() || n;
+  return n;
+};
+
+async function logOrderNote(session, orderId, note) {
+  const { data } = await supabase.from("job_orders").select("history").eq("id", orderId).single();
+  const history = [...((data && data.history) || []), { at: new Date().toISOString(), by: session.name, note, internal: true }];
+  return supabase.from("job_orders").update({ history, updated_at: new Date().toISOString() }).eq("id", orderId);
+}
+
+function ManageTailorsDialog({ order, session, onClose, onAdd, onChanged }) {
+  const [rows, setRows] = useState(null);
+  const [workers, setWorkers] = useState([]);
+  const [edit, setEdit] = useState(null);            // { id, dept, worker_id, planned_date }
+  const [removing, setRemoving] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const today = localYmd(new Date());
+  const load = () => supabase.from("job_order_tailors").select("*").eq("job_order_id", order.id).order("created_at").then(({ data }) => setRows(data || []));
+  useEffect(() => { load(); supabase.from("workers").select("*").eq("active", true).order("name").then(({ data }) => setWorkers(data || [])); }, []); // eslint-disable-line
+  const depts = deptsOf(workers);
+  const stateOf = (r) => (r.finished_at ? [`Finished ${fmtDateTime(r.finished_at)}`, "#8a8a8a"] : r.started_at ? [`Working since ${fmtDateTime(r.started_at)}`, "#2F8F46"] : [`Planned for ${r.planned_date ? fmtDate(r.planned_date) : "—"}`, "#D98E2B"]);
+  const done = async (note) => { await logOrderNote(session, order.id, note); setEdit(null); setRemoving(null); setBusy(false); await load(); onChanged && onChanged(); };
+
+  const saveEdit = async () => {
+    const old = rows.find((r) => r.id === edit.id);
+    const w = workers.find((x) => x.id === edit.worker_id);
+    if (!old || !w) { setError("Choose the tailor."); return; }
+    setBusy(true); setError("");
+    const task = edit.dept || w.department || null;
+    if (!old.started_at) {                           // not started yet: just change the row
+      const { error: e } = await supabase.from("job_order_tailors").update({ worker_id: w.id, worker_name: w.name, task, planned_date: edit.planned_date || old.planned_date }).eq("id", old.id);
+      if (e) { setError(e.message); setBusy(false); return; }
+      await done(old.worker_id === w.id ? `Tailor ${w.name}: planned date changed to ${edit.planned_date}` : `Tailor changed: ${old.worker_name} → ${w.name}${task ? ` (${task})` : ""}`);
+    } else {                                         // already working: stop them, the replacement starts now
+      if (old.worker_id === w.id) { setBusy(false); setEdit(null); return; }
+      const now = new Date().toISOString();
+      const { error: e1 } = await supabase.from("job_order_tailors").update({ finished_at: now }).eq("id", old.id);
+      if (e1) { setError(e1.message); setBusy(false); return; }
+      const { error: e2 } = await supabase.from("job_order_tailors").insert({ job_order_id: order.id, worker_id: w.id, worker_name: w.name, task, planned_date: today, started_at: now, assigned_by: session.name, rework_id: old.rework_id || null });
+      if (e2) { await supabase.from("job_order_tailors").update({ finished_at: null }).eq("id", old.id); setError(e2.message); setBusy(false); return; }
+      await done(`Tailor replaced: ${old.worker_name} → ${w.name}${task ? ` (${task})` : ""}`);
+    }
+  };
+  const doRemove = async () => {
+    setBusy(true);
+    const r = removing;
+    const { error: e } = r.started_at
+      ? await supabase.from("job_order_tailors").update({ finished_at: new Date().toISOString() }).eq("id", r.id)
+      : await supabase.from("job_order_tailors").delete().eq("id", r.id);
+    if (e) { setError(e.message); setBusy(false); setRemoving(null); return; }
+    await done(`Tailor removed: ${r.worker_name}`);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1050, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 24 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 720 }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 2 }}>Tailors on this job</div>
+        <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 14 }}>Order {order.jobOrderNo} · {order.model}{order.cut ? ` · ${order.cut}` : ""}{order.color ? ` · ${order.color}` : ""}</div>
+        {rows === null ? <div style={{ color: "#8a8a8a" }}>Loading…</div> : rows.length === 0 ? <div style={{ color: "#C1302B", fontSize: 13.5, marginBottom: 10 }}>No tailor is assigned yet.</div> : rows.map((r) => {
+          const st = stateOf(r); const editing = edit && edit.id === r.id;
+          return (
+            <div key={r.id} style={{ border: "1px solid #E5E5E5", borderRadius: 8, padding: "10px 12px", marginBottom: 8, opacity: r.finished_at ? 0.6 : 1 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <div><strong>👤 {r.worker_name}</strong>{r.task ? <span style={{ color: "#5a5a5a" }}> · {r.task}</span> : null}<div style={{ fontSize: 12, color: st[1], fontWeight: 600 }}>{st[0]}</div></div>
+                {!r.finished_at && !editing && (
+                  <div style={{ display: "flex", gap: 14 }}>
+                    <a className="link" onClick={() => setEdit({ id: r.id, dept: r.task || "", worker_id: r.worker_id || "", planned_date: r.planned_date || today })}>Change</a>
+                    <a className="link" style={{ color: "#C1302B" }} onClick={() => setRemoving(r)}>Remove</a>
+                  </div>
+                )}
+              </div>
+              {editing && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+                  <select value={edit.dept} onChange={(e) => setEdit((x) => ({ ...x, dept: e.target.value, worker_id: "" }))} style={{ ...inputStyle, width: 160 }}>
+                    <option value="">All departments</option>{depts.map((d) => <option key={d}>{d}</option>)}
+                  </select>
+                  <select value={edit.worker_id} onChange={(e) => { const w = workers.find((x) => x.id === e.target.value); setEdit((x) => ({ ...x, worker_id: e.target.value, dept: (w && w.department) || x.dept })); }} style={{ ...inputStyle, width: 200 }}>
+                    <option value="">Choose a tailor…</option>
+                    {workers.filter((w) => !edit.dept || (w.department || "") === edit.dept).map((w) => <option key={w.id} value={w.id}>{edit.dept || !w.department ? w.name : `${w.name} (${w.department})`}</option>)}
+                  </select>
+                  {!r.started_at && <input type="date" value={edit.planned_date} min={today} onChange={(e) => setEdit((x) => ({ ...x, planned_date: e.target.value }))} style={{ ...inputStyle, width: 150 }} />}
+                  <button disabled={busy} onClick={saveEdit} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontWeight: 700 }}>Save</button>
+                  <a className="link" onClick={() => setEdit(null)}>Cancel</a>
+                  {r.started_at && <div style={{ width: "100%", fontSize: 11.5, color: "#8a8a8a" }}>{r.worker_name} stops now (their time is kept) and the new tailor starts now.</div>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {error && <div style={{ color: "#C1302B", fontSize: 13, margin: "6px 0" }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "space-between", marginTop: 14, flexWrap: "wrap" }}>
+          <button onClick={onAdd} style={{ background: "#fff", border: "1.5px solid #3B6FA0", color: "#2F5F8F", borderRadius: 6, padding: "10px 16px", fontWeight: 700 }}>+ Add another tailor</button>
+          <button onClick={onClose} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 6, padding: "10px 22px", fontWeight: 700 }}>Done</button>
+        </div>
+      </div>
+      {removing && (
+        <ConfirmDialog title={`Remove ${removing.worker_name}?`} danger confirmLabel="Yes, remove" busy={busy} onCancel={() => setRemoving(null)} onConfirm={doRemove}>
+          {removing.started_at ? "They stop working on this job now; the time they already worked is kept." : "They had not started yet, so they are simply taken off this job."}
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
 // Stage 2: assign tailors (can be planned for any date)
 function AssignTailorsDialog({ order, session, reworkId, onClose, onDone }) {
   const today = localYmd(new Date());
   const [workers, setWorkers] = useState([]);
-  const [crew, setCrew] = useState([{ worker_id: "", task: "", planned_date: today }]);
+  const [crew, setCrew] = useState([{ dept: "", worker_id: "", planned_date: today }]);
   const [adding, setAdding] = useState(null);
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState(null);       // "start" | "plan" | "add"
@@ -5087,12 +5212,20 @@ function AssignTailorsDialog({ order, session, reworkId, onClose, onDone }) {
   const loadWorkers = () => supabase.from("workers").select("*").eq("active", true).order("name").then(({ data }) => setWorkers(data || []));
   useEffect(() => { loadWorkers(); }, []);
   const setRow = (i, patch) => setCrew((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  const pickWorker = (i, id) => { const w = workers.find((x) => x.id === id); setRow(i, { worker_id: id, task: (w && w.department) || "" }); };
+  const depts = deptsOf(workers);
+  const pickDept = (i, dept) => setCrew((rows) => rows.map((r, j) => {
+    if (j !== i) return r;
+    const w = workers.find((x) => x.id === r.worker_id);
+    const keep = w && (!dept || (w.department || "") === dept);
+    return { ...r, dept, worker_id: keep ? r.worker_id : "" };
+  }));
+  const pickWorker = (i, id) => { const w = workers.find((x) => x.id === id); setRow(i, { worker_id: id, dept: (w && w.department) || crew[i].dept }); };
   const saveNewWorker = async () => {
     if (!adding.name.trim()) return;
-    const { error: e } = await supabase.from("workers").insert({ name: adding.name.trim(), department: adding.department.trim() || null });
+    const { data: created, error: e } = await supabase.from("workers").insert({ name: cleanWorkerName(adding.name, adding.department), department: adding.department.trim() || null }).select().single();
     if (e) { setError(e.code === "23505" ? "That tailor is already in the list." : e.message); return; }
-    setAdding(null); setError(""); loadWorkers();
+    setAdding(null); setError(""); await loadWorkers();
+    setCrew((rows) => { const k = rows.findIndex((r) => !r.worker_id); return k < 0 ? rows : rows.map((r, j) => (j === k ? { ...r, worker_id: created.id, dept: created.department || r.dept } : r)); });
   };
   const validate = (mode) => {
     if (!crew.some((c) => c.worker_id)) return "Choose at least one tailor.";
@@ -5106,7 +5239,7 @@ function AssignTailorsDialog({ order, session, reworkId, onClose, onDone }) {
     const startsNow = mode === "start" || mode === "add";
     const rows = crew.filter((c) => c.worker_id).map((c) => {
       const w = workers.find((x) => x.id === c.worker_id);
-      return { job_order_id: order.id, worker_id: c.worker_id, worker_name: w ? w.name : "", task: c.task || null, planned_date: c.planned_date || today, started_at: startsNow ? now : null, assigned_by: session.name, rework_id: reworkId || null };
+      return { job_order_id: order.id, worker_id: c.worker_id, worker_name: w ? w.name : "", task: c.dept || (w && w.department) || null, planned_date: c.planned_date || today, started_at: startsNow ? now : null, assigned_by: session.name, rework_id: reworkId || null };
     });
     const { data: saved, error: e1 } = await supabase.from("job_order_tailors").insert(rows).select("id");
     if (e1) { setError(e1.message); setBusy(false); setConfirm(null); return; }
@@ -5137,22 +5270,27 @@ function AssignTailorsDialog({ order, session, reworkId, onClose, onDone }) {
         </div>
         {crew.map((c, i) => (
           <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
-            <select value={c.worker_id} onChange={(e) => pickWorker(i, e.target.value)} style={{ ...inputStyle, width: 210 }}>
-              <option value="">Choose a tailor…</option>
-              {workers.map((w) => <option key={w.id} value={w.id}>{w.name}{w.department ? ` — ${w.department}` : ""}</option>)}
+            <select value={c.dept} onChange={(e) => pickDept(i, e.target.value)} style={{ ...inputStyle, width: 170 }}>
+              <option value="">All departments</option>{depts.map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
-            <input value={c.task} onChange={(e) => setRow(i, { task: e.target.value })} placeholder="Task / department" list="dept-list" style={{ ...inputStyle, width: 170 }} />
+            <select value={c.worker_id} onChange={(e) => pickWorker(i, e.target.value)} style={{ ...inputStyle, width: 220 }}>
+              <option value="">{c.dept ? `Choose a ${c.dept.toLowerCase()} tailor…` : "Choose a tailor…"}</option>
+              {workers.filter((w) => !c.dept || (w.department || "") === c.dept).map((w) => (
+                <option key={w.id} value={w.id}>{c.dept || !w.department ? w.name : `${w.name} (${w.department})`}</option>
+              ))}
+            </select>
             <input type="date" value={c.planned_date} min={running ? undefined : today} onChange={(e) => setRow(i, { planned_date: e.target.value })} style={{ ...inputStyle, width: 150 }} />
             {crew.length > 1 && <a className="link" style={{ color: "#C1302B", fontSize: 11 }} onClick={() => setCrew((rows) => rows.filter((_, j) => j !== i))}>Remove</a>}
+            {c.dept && workers.filter((w) => (w.department || "") === c.dept).length === 0 && <span style={{ fontSize: 11.5, color: "#C1302B" }}>No tailor in {c.dept} yet — add one below.</span>}
           </div>
         ))}
-        <datalist id="dept-list">{["Cutting", "Stitching", "Finishing", "Embroidery", "Pressing"].map((d) => <option key={d} value={d} />)}</datalist>
+        <datalist id="dept-list2">{depts.map((d) => <option key={d} value={d} />)}</datalist>
         <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", marginTop: 4 }}>
-          <a className="link" style={{ fontSize: 12.5 }} onClick={() => setCrew((rows) => [...rows, { worker_id: "", task: "", planned_date: today }])}>+ Add another tailor</a>
+          <a className="link" style={{ fontSize: 12.5 }} onClick={() => setCrew((rows) => [...rows, { dept: "", worker_id: "", planned_date: today }])}>+ Add another tailor</a>
           {adding ? (
             <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
               <input value={adding.name} onChange={(e) => setAdding({ ...adding, name: e.target.value })} placeholder="New tailor's name" style={{ ...inputStyle, width: 160 }} />
-              <input value={adding.department} onChange={(e) => setAdding({ ...adding, department: e.target.value })} placeholder="Department" list="dept-list" style={{ ...inputStyle, width: 130 }} />
+              <input value={adding.department} onChange={(e) => setAdding({ ...adding, department: e.target.value })} placeholder="Department" list="dept-list2" style={{ ...inputStyle, width: 130 }} />
               <button onClick={saveNewWorker} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 3, padding: "7px 12px", fontSize: 12, fontWeight: 700 }}>Save</button>
               <a className="link" style={{ fontSize: 12 }} onClick={() => setAdding(null)}>Cancel</a>
             </span>
@@ -5270,11 +5408,11 @@ function ProductionActions({ order, session, models, onDone, flash }) {
         {s === "material_assigned" && <button style={pbtn("#1A1A1A")} onClick={() => setDlg("tailors")}>👥 Assign tailors</button>}
         {s === "manpower_planned" && (<>
           <button style={pbtn("#2F8F46")} onClick={() => setDlg("start")}>▶ Start tailoring</button>
-          <button style={pbtn("#5a5a5a", true)} onClick={() => setDlg("tailors")}>👥 Add / plan more tailors</button>
+          <button style={pbtn("#5a5a5a", true)} onClick={() => setDlg("manage")}>👥 Change / add tailors</button>
         </>)}
         {s === "job_in_process" && (<>
           <button style={pbtn("#2F8F46")} onClick={() => setDlg("complete")}>✅ Mark as completed</button>
-          <button style={pbtn("#5a5a5a", true)} onClick={() => setDlg("tailors")}>👥 Add tailors</button>
+          <button style={pbtn("#5a5a5a", true)} onClick={() => setDlg("manage")}>👥 Change / add tailors</button>
         </>)}
         {s === "job_pending_qc" && <button style={pbtn("#1A1A1A")} onClick={() => setDlg("qc")}>🔍 {qcOpen ? "Continue quality check" : "Start quality check"}</button>}
         {s === "job_rework" && <button style={pbtn("#C1302B")} onClick={() => setDlg("rework")}>🔧 Start rework</button>}
@@ -5295,6 +5433,7 @@ function ProductionActions({ order, session, models, onDone, flash }) {
         </ConfirmDialog>
       )}
       {dlg === "material" && <AssignMaterialDialog order={order} models={models} session={session} onClose={() => setDlg(null)} onDone={() => { setDlg(null); flash && flash("Material assigned"); onDone && onDone(); }} />}
+      {dlg === "manage" && <ManageTailorsDialog order={order} session={session} onClose={() => { setDlg(null); onDone && onDone(); }} onAdd={() => setDlg("tailors")} onChanged={() => onDone && onDone()} />}
       {dlg === "tailors" && <AssignTailorsDialog order={order} session={session} reworkId={rework && rework.status === "in_progress" ? rework.id : null} onClose={() => setDlg(null)} onDone={() => { setDlg(null); flash && flash("Tailors saved"); onDone && onDone(); }} />}
       {dlg === "start" && (
         <ConfirmDialog title="Start tailoring now?" confirmLabel="Yes, start" busy={busy} onCancel={() => setDlg(null)} onConfirm={() => run(() => startTailoring(session, order), "Tailoring started")}>
@@ -5370,6 +5509,10 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
   const [confirmDone, setConfirmDone] = useState(false);
   const [confirmStart, setConfirmStart] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [viewMode, setViewMode] = useState("jobs");
+  const [tailorFilter, setTailorFilter] = useState("");
+  const [manage, setManage] = useState(null);
+  const [addTailorsFor, setAddTailorsFor] = useState(null);
 
   useEffect(() => { supabase.from("job_order_tailors").select("*").then(({ data }) => setCrew(data || [])); }, [orders]);   // refreshes live when orders change
 
@@ -5397,6 +5540,55 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
   });
   const who = (o) => (hidePII(session) ? `${o.model}${o.color ? " · " + o.color : ""}` : `${o.name} · ${o.model}`);
   const laneNames = Object.keys(lanes).sort((a, b) => (a === "Unassigned" ? 1 : b === "Unassigned" ? -1 : a.localeCompare(b)));
+  const dayJobs = [];
+  working.forEach((o) => dayJobs.push({ o, planned: false, rows: crew.filter((c) => c.job_order_id === o.id) }));
+  plannedRows.forEach((c) => {
+    const o = orders.find((x) => x.id === c.job_order_id);
+    if (o && !dayJobs.some((j) => j.o.id === o.id)) dayJobs.push({ o, planned: true, rows: crew.filter((x) => x.job_order_id === o.id) });
+  });
+  dayJobs.sort((a, b) => String(a.o.deliveryDate || "9999").localeCompare(String(b.o.deliveryDate || "9999")));
+  const tailorNames = Array.from(new Set(crew.map((c) => c.worker_name))).sort();
+  const shownJobs = tailorFilter ? dayJobs.filter((j) => j.rows.some((r) => r.worker_name === tailorFilter)) : dayJobs;
+  const running = shownJobs.filter((j) => !j.planned && !j.o.productionCompletedAt);
+  const planned = shownJobs.filter((j) => j.planned);
+  const finished = shownJobs.filter((j) => !j.planned && j.o.productionCompletedAt);
+  const shownLaneNames = laneNames.filter((n) => !tailorFilter || n === tailorFilter);
+  const JobCard = ({ j }) => {
+    const { o, planned: isPlanned, rows } = j;
+    const overdue = o.deliveryDate && o.deliveryDate < today && !o.productionCompletedAt;
+    const done = !!o.productionCompletedAt;
+    const left = `5px ${isPlanned ? "dashed #8a8a8a" : "solid " + (done ? "#8a8a8a" : "#2F8F46")}`;
+    return (
+      <div onClick={() => setPickedId(o.id)} style={{ display: "flex", gap: 14, alignItems: "center", padding: "12px 14px", border: "1px solid " + (overdue ? "#E8B9B6" : "#DDE1E7"), borderLeft: left, borderRadius: 8, background: "#fff", cursor: "pointer", marginBottom: 10, flexWrap: "wrap" }}>
+        <ModelThumb model={(models || []).find((m) => m.modelNo === o.model) || { id: null, modelNo: o.model }} width={46} height={62} />
+        <div style={{ minWidth: 170 }}>
+          <div className="mono" style={{ fontWeight: 700, fontSize: 15 }}>{o.jobOrderNo}</div>
+          <div style={{ fontSize: 12.5 }}>{who(o)}{o.cut ? ` · ${o.cut}` : ""}</div>
+          <div style={{ fontSize: 11.5, color: overdue ? "#C1302B" : "#8a8a8a", fontWeight: overdue ? 700 : 400 }}>Due {o.deliveryDate ? fmtDate(o.deliveryDate) : "—"}{overdue ? " · overdue" : ""}</div>
+        </div>
+        <div style={{ flex: 1, minWidth: 220, display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {rows.length === 0 ? <span style={{ color: "#C1302B", fontSize: 12.5, fontWeight: 700 }}>⚠ No tailor assigned</span> : rows.map((r) => (
+            <span key={r.id} title={r.finished_at ? "Finished" : r.started_at ? `Working since ${fmtTime(r.started_at)}` : `Planned for ${r.planned_date ? fmtDate(r.planned_date) : "—"}`}
+              style={{ fontSize: 12.5, padding: "4px 11px", borderRadius: 14, background: r.finished_at ? "#EEF0F2" : r.started_at ? "#E7F4EA" : "#FFF7E6", border: r.started_at || r.finished_at ? "1px solid transparent" : "1px dashed #D9B25A", color: r.finished_at ? "#8a8a8a" : "#1A1A1A" }}>
+              👤 {r.worker_name}{r.task ? ` · ${r.task}` : ""}
+            </span>
+          ))}
+        </div>
+        <div style={{ textAlign: "right", minWidth: 150 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: done ? "#8a8a8a" : isPlanned ? "#D98E2B" : "#2F8F46" }}>
+            {done ? `Done ${fmtTime(o.productionCompletedAt)}` : isPlanned ? "Planned" : `In progress · ${fmtDuration(Date.now() - new Date(o.productionStartedAt))}`}
+          </div>
+          <div style={{ marginTop: 3 }}><StatusTag status={o.status} /></div>
+        </div>
+      </div>
+    );
+  };
+  const group = (title, list, color) => list.length > 0 && (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.05em", color, marginBottom: 8 }}>{title} ({list.length})</div>
+      {list.map((j) => <JobCard key={j.o.id} j={j} />)}
+    </div>
+  );
   const isToday = bounds(day)[0].getTime() === bounds(new Date())[0].getTime();
   const shift = (n) => setDay((d) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; });
   const strip = [-3, -2, -1, 0, 1, 2, 3].map((n) => { const x = new Date(day); x.setDate(x.getDate() + n); return x; });
@@ -5448,11 +5640,25 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
         <span style={{ background: "#EEF0F2", borderRadius: 12, padding: "5px 12px" }}>Sent back for rework: <strong>{orders.filter((o) => o.status === "job_rework").length}</strong></span>
       </div>
 
-      {laneNames.length === 0 ? (
-        <div style={{ textAlign: "center", color: "#8a8a8a", padding: 40, fontSize: 14 }}>Nothing was being made{laneNames.length ? "" : " or planned"} on this day.</div>
+      <div style={{ display: "flex", gap: 10, justifyContent: "center", alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
+        <div style={{ display: "inline-flex", border: "1px solid #C9CDD3", borderRadius: 6, overflow: "hidden" }}>
+          <button onClick={() => setViewMode("jobs")} style={{ padding: "8px 16px", border: "none", cursor: "pointer", fontWeight: 700, fontSize: 12.5, background: viewMode === "jobs" ? "#1A1A1A" : "#fff", color: viewMode === "jobs" ? "#fff" : "#1A1A1A" }}>By job order</button>
+          <button onClick={() => setViewMode("tailors")} style={{ padding: "8px 16px", border: "none", cursor: "pointer", fontWeight: 700, fontSize: 12.5, background: viewMode === "tailors" ? "#1A1A1A" : "#fff", color: viewMode === "tailors" ? "#fff" : "#1A1A1A" }}>By tailor</button>
+        </div>
+        <select value={tailorFilter} onChange={(e) => setTailorFilter(e.target.value)} style={{ ...inputStyle, width: 190 }}>
+          <option value="">All tailors</option>{tailorNames.map((n) => <option key={n}>{n}</option>)}
+        </select>
+      </div>
+
+      {viewMode === "jobs" ? (
+        shownJobs.length === 0
+          ? <div style={{ textAlign: "center", color: "#8a8a8a", padding: 40, fontSize: 14 }}>Nothing was being made or planned on this day{tailorFilter ? ` for ${tailorFilter}` : ""}.</div>
+          : <>{group("IN PROGRESS", running, "#2F8F46")}{group("PLANNED FOR THIS DAY", planned, "#D98E2B")}{group("FINISHED", finished, "#8a8a8a")}</>
+      ) : (shownLaneNames.length === 0 ? (
+        <div style={{ textAlign: "center", color: "#8a8a8a", padding: 40, fontSize: 14 }}>Nothing was being made{shownLaneNames.length ? "" : " or planned"} on this day.</div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
-          {laneNames.map((name) => (
+          {shownLaneNames.map((name) => (
             <div key={name} style={{ border: "1px solid #DDE1E7", borderRadius: 8, padding: 12 }}>
               <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 10, color: name === "Unassigned" ? "#C1302B" : "#1A1A1A" }}>👤 {name} <span style={{ color: "#8a8a8a", fontWeight: 400 }}>· {lanes[name].length}</span></div>
               {lanes[name].map(({ o, planned }) => {
@@ -5468,7 +5674,7 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
             </div>
           ))}
         </div>
-      )}
+      ))}
 
       {picked && (
         <div onClick={() => setPickedId(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
@@ -5495,6 +5701,7 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
               <button onClick={() => setPickedId(null)} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Close</button>
               <button onClick={() => { setPickedId(null); onOpenOrder && onOpenOrder(picked.id); }} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Open full job order</button>
+              {canAct && (picked.status === "manpower_planned" || picked.status === "job_in_process") && <button onClick={() => { setManage(picked); setPickedId(null); }} style={{ background: "#fff", border: "1.5px solid #3B6FA0", color: "#2F5F8F", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>👥 Change tailors</button>}
               {canAct && picked.status === "manpower_planned" && <button onClick={() => setConfirmStart(true)} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Start tailoring</button>}
               {canAct && picked.status === "job_in_process" && <button onClick={() => setConfirmDone(true)} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontWeight: 700 }}>Mark as completed</button>}
             </div>
@@ -5514,6 +5721,9 @@ function ProductionCalendar({ orders, models, session, refresh, flash, onOpenOrd
         </ConfirmDialog>
       )}
 
+      {manage && <ManageTailorsDialog order={manage} session={session} onClose={() => setManage(null)} onAdd={() => { setAddTailorsFor(manage); setManage(null); }} onChanged={refresh} />}
+      {addTailorsFor && <AssignTailorsDialog order={addTailorsFor} session={session} onClose={() => setAddTailorsFor(null)} onDone={() => { setAddTailorsFor(null); flash("Tailors saved"); refresh(); }} />}
+
       {canAct && <WorkersManager flash={flash} />}
     </div>
   );
@@ -5527,7 +5737,7 @@ function WorkersManager({ flash }) {
   useEffect(() => { load(); }, []);
   const add = async () => {
     if (!name.trim()) return;
-    const { error } = await supabase.from("workers").insert({ name: name.trim(), department: dept.trim() || null });
+    const { error } = await supabase.from("workers").insert({ name: cleanWorkerName(name, dept), department: dept.trim() || null });
     if (error) { flash(error.code === "23505" ? "That tailor is already in the list." : error.message); return; }
     setName(""); setDept(""); load();
   };
@@ -5538,7 +5748,8 @@ function WorkersManager({ flash }) {
       <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 12 }}>The people you can assign to a job. They don't need a login. Switch someone off to hide them from the list without losing their history.</div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" style={{ ...inputStyle, width: 200 }} />
-        <input value={dept} onChange={(e) => setDept(e.target.value)} placeholder="Department (Cutting, Stitching…)" style={{ ...inputStyle, width: 230 }} />
+        <input value={dept} onChange={(e) => setDept(e.target.value)} placeholder="Department (Cutting, Stitching…)" list="dept-list3" style={{ ...inputStyle, width: 230 }} />
+        <datalist id="dept-list3">{deptsOf(rows).map((d) => <option key={d} value={d} />)}</datalist>
         <button onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px", fontWeight: 700 }}>+ Add tailor</button>
       </div>
       {rows.length === 0 ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>No tailors yet.</div> : rows.map((w) => (
@@ -7767,6 +7978,7 @@ function ModelManagerPanel({ config, refresh, flash, session, subpage, setSubpag
 }
 
 function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, session }) {
+  const isSales = session && session.role === "sales";
   const [formula, setFormula] = useState(model.cuttingFormula || {});
   const [images, setImages] = useState([]);
   const [colors, setColors] = useState([]);
@@ -7971,6 +8183,7 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
         </div>
       </div>
 
+      {!isSales && (
       <div style={{ ...cardStyle, marginBottom: 16 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>PATTERN & CUTTING SUMMARY</div>
         {(canEdit && editingModel) ? <ModelPatterns model={model} refresh={refresh} flash={flash} /> : patterns.length > 0 ? (
@@ -8000,7 +8213,9 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
           </table>
         ) : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No pattern pieces.</div>}
       </div>
+      )}
 
+      {!isSales && (
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, marginBottom: 16 }}>
         <div style={cardStyle}>
           {(canEdit && editingModel) ? <ModelMaterials model={model} refresh={refresh} flash={flash} /> : (
@@ -8019,8 +8234,9 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
           )}
         </div>
       </div>
+      )}
 
-      {((canEdit && editingModel) || docs.length > 0) && (
+      {!isSales && ((canEdit && editingModel) || docs.length > 0) && (
         <div style={{ ...cardStyle, marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>SKETCHES & REFERENCE DOCUMENTS</div>
           {(canEdit && editingModel) ? <ModelDocuments model={model} session={session} refresh={refresh} flash={flash} /> : (
