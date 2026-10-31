@@ -375,6 +375,31 @@ async function nextJobOrderNumbers(count) {
   return count === 1 ? [String(base)] : Array.from({ length: count }, (_, i) => `${base}-${i + 1}`);
 }
 
+async function joinJobOrderNumbers(base, mobile, count) {
+  const { data, error } = await supabase.rpc("join_job_order_numbers", { p_base: base, p_mobile: mobile || "", p_count: count });
+  if (error) return { error };
+  return { numbers: data };
+}
+
+// the job order numbers that already exist, one entry per number (1001 covers 1001-1, 1001-2 …), newest first
+function familiesOf(orders) {
+  const map = new Map();
+  (orders || []).forEach((o) => {
+    const no = String(o.jobOrderNo || "");
+    if (!/^\d+(-\d+)?$/.test(no)) return;
+    const base = no.split("-")[0];
+    const suffix = no.includes("-") ? parseInt(no.split("-")[1], 10) : 0;
+    const f = map.get(base) || { base, pieces: 0, maxSuffix: 0, hasPlain: false, last: 0, latest: null };
+    f.pieces += 1; f.maxSuffix = Math.max(f.maxSuffix, suffix); if (suffix === 0) f.hasPlain = true;
+    const t = new Date(o.createdAt || 0).getTime();
+    if (t >= f.last) { f.last = t; f.latest = o; }
+    map.set(base, f);
+  });
+  return [...map.values()].sort((a, b) => b.last - a.last);
+}
+const nextNoFor = (f) => `${f.base}-${Math.max(f.maxSuffix, f.hasPlain ? 1 : 0) + 1}`;   // same rule the database uses
+const mobKey = (s) => String(s || "").replace(/\D/g, "").slice(-8);
+
 function diffSummary(before, form, fileChanged) {
   const changed = [];
   const norm = {
@@ -1643,7 +1668,7 @@ function ComboInput({ value, onChange, options, placeholder, disabled, number, m
 
   const q = text.trim().toLowerCase();
   const rank = (o) => { const s = String(o.search || o.label).toLowerCase(); return s === q ? 0 : s.startsWith(q) ? 1 : 2; };
-  const shown = typing && q ? opts.filter((o) => String(o.search || o.label).toLowerCase().includes(q)).sort((a, b) => rank(a) - rank(b)) : opts;
+  const shown = (typing && q ? opts.filter((o) => String(o.search || o.label).toLowerCase().includes(q)).sort((a, b) => rank(a) - rank(b)) : opts).slice(0, 150);
 
   useEffect(() => {   // on opening, jump to the chosen value
     if (open && !typing) setHi(Math.max(0, shown.findIndex((o) => o.value === value)));
@@ -2221,14 +2246,21 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
   const filtered = useFilteredOrders(view === "all" ? orders : orders.filter((o) => inGroup(view, o)), query, statusFilter);
   const selected = orders.find((o) => o.id === selectedId);
 
-  const handleCreate = async (form, file) => {
+  const handleCreate = async (form, file, opts) => {
     let attachmentUrl = null;
     if (file) {
       const up = await uploadCustomerFile(`order-files/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`, file, file.type);
-      if (up.error) { flash("Couldn't upload the attachment: " + up.error.message); return; }
+      if (up.error) { flash("Couldn't upload the attachment: " + up.error.message); return null; }
       attachmentUrl = up.ref;
     }
-    const [jobNo] = await nextJobOrderNumbers(1);
+    let jobNo;
+    if (form.joinBase) {                                   // a piece of an existing job order number
+      const j = await joinJobOrderNumbers(form.joinBase, form.mobile, 1);
+      if (j.error) { flash("Error: " + j.error.message); return null; }
+      jobNo = j.numbers[0];
+    } else {
+      [jobNo] = await nextJobOrderNumbers(1);
+    }
     const now = new Date().toISOString();
     const row = {
       job_order_no: jobNo, invoice_no: form.invoiceNo || null, name: form.name, mobile: form.mobile, order_type: form.orderType,
@@ -2243,12 +2275,17 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
       status: "job_created", history: [{ note: "Job order created by Sales", by: session.name, at: now }],
     };
     const { data, error } = await supabase.from("job_orders").insert(row).select().single();
-    if (error) { flash("Error: " + error.message); return; }
+    if (error) { flash("Error: " + error.message); return null; }
     notify(session, `${session.name} created job order ${jobNo}`, "job_order", row.branch, { type: "order", id: data.id });
     await refresh();
+    if (opts && opts.addAnother) {                          // stay on the form for the next piece
+      flash(`Job order ${jobNo} created — now add the next piece`);
+      return { base: String(jobNo).split("-")[0] };
+    }
     setSubpage("records");
     setSelectedId(data.id);
     flash("Job order created");
+    return { base: String(jobNo).split("-")[0] };
   };
 
   const handleUpdateOrderFull = async (form, file) => {
@@ -2383,7 +2420,7 @@ function SalesPanel({ config, orders, profiles, requirementItems, refresh, sessi
   const handleAction = (id, to, comment) => runHistoryUpdate(id, to, comment ? `${STATUS[to].label}: ${comment}` : STATUS[to].label, comment);
   const handleResubmit = (id) => runHistoryUpdate(id, "job_created", "Resubmitted to Production", "resubmitted to Production");
 
-  if (subpage === "new") return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
+  if (subpage === "new") return <JobOrderForm config={config} session={session} orders={orders} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
   if (subpage === "editOrder") {
     const editing = orders.find((o) => o.id === editingOrderId);
     return <JobOrderForm config={config} session={session} initialOrder={editing} onCancel={() => setSubpage("records")} onSubmit={handleUpdateOrderFull} />;
@@ -2506,7 +2543,7 @@ function CollectionSummary({ order }) {
 
 /* ---------------- Job Order form ---------------- */
 
-function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readOnly }) {
+function JobOrderForm({ config, session, orders, onCancel, onSubmit, initialOrder, readOnly }) {
   const isEdit = !!initialOrder;
   const [form, setForm] = useState(() => isEdit ? {
     name: initialOrder.name || "", mobile: initialOrder.mobile || "", invoiceNo: initialOrder.invoiceNo || "",
@@ -2525,7 +2562,7 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
     sheilaType: SHEILA_TYPES[0], abayaOption: "Normal", buttonFrom: "", buttonTill: "", additionalRequirements: "", attachments: [],
     color: "", colorSwatch: "",
     deliveryDate: "", comments: "",
-    collection: EMPTY_COLLECTION,
+    collection: EMPTY_COLLECTION, joinBase: "",
   });
   const [file, setFile] = useState(null);
   const [dateError, setDateError] = useState(false);
@@ -2535,6 +2572,26 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
   const [pickedSize, setPickedSize] = useState("");
   const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [showAllFields, setShowAllFields] = useState(false);
+  const [joinMode, setJoinMode] = useState(false);
+  const families = useMemo(() => familiesOf(orders), [orders]);
+  const familyOptions = useMemo(() => families.map((f) => ({
+    value: f.base,
+    label: `${f.base} — ${f.latest.name || "—"} · ${f.latest.mobile || ""} · ${f.pieces} piece${f.pieces === 1 ? "" : "s"}`,
+    search: `${f.base} ${f.latest.name || ""} ${f.latest.mobile || ""}`,       // type a number, a name or a mobile
+  })), [families]);
+  const joinedFamily = form.joinBase ? families.find((f) => f.base === form.joinBase) : null;
+  const joinFamily = (base) => {
+    const f = families.find((x) => x.base === base);
+    setForm((fm) => {
+      if (!f) return { ...fm, joinBase: "" };
+      const o = f.latest;                                  // the customer's details come from that order
+      return { ...fm, joinBase: base, name: o.name || fm.name, mobile: o.mobile || fm.mobile, invoiceNo: o.invoiceNo || fm.invoiceNo,
+        branch: o.branch || fm.branch, deliveryDate: o.deliveryDate || fm.deliveryDate, collection: o.collectionMethod ? collectionFromOrder(o) : fm.collection };
+    });
+  };
+  const sameCustomerRecent = !isEdit && !joinMode && mobKey(form.mobile).length >= 6
+    ? families.filter((f) => mobKey(f.latest.mobile) === mobKey(form.mobile) && Date.now() - f.last < 7 * 86400000).slice(0, 2) : [];
+  const pill = (on) => ({ padding: "5px 14px", fontSize: 12.5, borderRadius: 14, cursor: "pointer", border: "1px solid " + (on ? "#1A1A1A" : "#DDE1E7"), background: on ? "#1A1A1A" : "#fff", color: on ? "#fff" : "#1A1A1A" });
   const modelOptions = useMemo(() => modelOptionsOf(config.models), [config.models]);
   const changeModel = (v) => setForm((f) => {
     const next = { ...f, model: v, color: "", colorSwatch: "" };
@@ -2550,6 +2607,24 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
   const setMeasure = (k) => (e) => setForm((f) => ({ ...f, measurements: { ...f.measurements, [k]: e.target.value } }));
   const model = config.models.find((m) => m.modelNo === form.model);
   const valid = form.name.trim() && form.mobile.trim();
+  const submitForm = async (addAnother) => {
+    if (!form.deliveryDate) { setDateError(true); return; }
+    if (session.role !== "production") {
+      const cp = (form.collection.method || !isEdit) ? collectionProblem(form.collection) : "";
+      if (cp) { setCollError(cp); return; }
+    }
+    const res = await onSubmit(form, file, addAnother ? { addAnother: true } : undefined);
+    if (addAnother && res && res.base) {
+      // the next piece of the SAME number: keep the customer, delivery date and collection; start a fresh piece
+      setForm((f) => ({
+        ...f, joinBase: res.base, model: config.models[0]?.modelNo || "", item: ITEM_TYPES[0], sheilaType: SHEILA_TYPES[0], abayaOption: "Normal",
+        measurements: Object.fromEntries(ALL_MEASURE_FIELDS.map(([k]) => [k, ""])), buttonFrom: "", buttonTill: "",
+        additionalRequirements: "", attachments: [], color: "", colorSwatch: "", comments: "",
+      }));
+      setFile(null); setJoinMode(true); setCatalogLoaded(false); setPickedCut(""); setPickedSize("");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
 
   const [modelColors, setModelColors] = useState([]);
   useEffect(() => {
@@ -2588,10 +2663,36 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
     <div ref={printRef} className="print-sheet">
       <h2 style={{ textAlign: "center", fontFamily: F.display, fontWeight: 700, fontSize: 22, letterSpacing: "0.06em", marginBottom: 20 }}>{isEdit ? "EDIT JOB ORDER" : "JOB ORDER"}</h2>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 6 }}>
-        {!hidePII(session) && <Field label="Name"><input style={inputStyle} value={form.name} onChange={set("name")} disabled={readOnly} /></Field>}
-        {!hidePII(session) && <Field label="Mobile No"><input style={inputStyle} value={form.mobile} onChange={set("mobile")} disabled={readOnly} /></Field>}
+        {!hidePII(session) && <Field label="Name"><input style={inputStyle} value={form.name} onChange={set("name")} disabled={readOnly || !!form.joinBase} /></Field>}
+        {!hidePII(session) && <Field label="Mobile No"><input style={inputStyle} value={form.mobile} onChange={set("mobile")} disabled={readOnly || !!form.joinBase} /></Field>}
         <Field label="Date"><input style={inputStyle} value={isEdit ? fmtDate(initialOrder.createdAt) : fmtDate(new Date())} disabled /></Field>
-        <Field label="Job Order No"><input style={inputStyle} value={isEdit ? (initialOrder.jobOrderNo || "—") : "Auto-generated on save"} disabled /></Field>
+        <div style={{ marginBottom: 12 }}>
+          <div style={label13}>Job Order No</div>
+          {isEdit ? <input style={inputStyle} value={initialOrder.jobOrderNo || "—"} disabled /> : (
+            <div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                <button type="button" style={pill(!joinMode)} onClick={() => { setJoinMode(false); setForm((f) => ({ ...f, joinBase: "" })); }}>New number</button>
+                <button type="button" style={pill(joinMode)} onClick={() => setJoinMode(true)}>Add to an existing number</button>
+              </div>
+              {joinMode ? (
+                <>
+                  <ComboInput value={form.joinBase} onChange={joinFamily} options={familyOptions} placeholder="Type a job order number, a name or a mobile…" />
+                  <div style={{ fontSize: 12, marginTop: 4, color: joinedFamily ? "#2F5F8F" : "#8a8a8a" }}>
+                    {joinedFamily
+                      ? <>This job order will be numbered <strong className="mono">{nextNoFor(joinedFamily)}</strong> (order {joinedFamily.base} has {joinedFamily.pieces} piece{joinedFamily.pieces === 1 ? "" : "s"} so far). The customer is taken from that order.</>
+                      : "Pick the job order number this piece belongs to."}
+                  </div>
+                </>
+              ) : <input style={inputStyle} value="Auto-generated on save" disabled />}
+              {sameCustomerRecent.map((f) => (
+                <div key={f.base} style={{ fontSize: 12, marginTop: 6, color: "#2F5F8F" }}>
+                  This customer already has <strong className="mono">{f.base}</strong> ({f.pieces} piece{f.pieces === 1 ? "" : "s"}) —{" "}
+                  <a className="link" onClick={() => { setJoinMode(true); joinFamily(f.base); }}>add a piece to {f.base}</a>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         <Field label="Order Type"><select style={inputStyle} value={form.orderType} onChange={set("orderType")} disabled={readOnly}>{ORDER_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
         <Field label="Model"><ComboInput value={form.model} disabled={readOnly} onChange={changeModel} options={modelOptions} placeholder="Type or pick a model…" /></Field>
         <Field label="Select Item"><select style={inputStyle} value={form.item} onChange={set("item")} disabled={readOnly}>{ITEM_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
@@ -2715,14 +2816,10 @@ function JobOrderForm({ config, session, onCancel, onSubmit, initialOrder, readO
       <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 20 }}>
         <button onClick={() => window.print()} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>PRINT / SAVE PDF</button>
         {!readOnly && (
-          <button disabled={!valid} onClick={() => {
-            if (!form.deliveryDate) { setDateError(true); return; }
-            if (session.role !== "production") {
-              const cp = (form.collection.method || !isEdit) ? collectionProblem(form.collection) : "";
-              if (cp) { setCollError(cp); return; }
-            }
-            onSubmit(form, file);
-          }} style={{ background: valid ? (isEdit ? "#2F8F46" : "#3B6FA0") : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>{isEdit ? "Save Changes" : "SUBMIT"}</button>
+          <button disabled={!valid} onClick={() => submitForm(false)} style={{ background: valid ? (isEdit ? "#2F8F46" : "#3B6FA0") : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>{isEdit ? "Save Changes" : "SUBMIT"}</button>
+        )}
+        {!readOnly && !isEdit && (
+          <button disabled={!valid} onClick={() => submitForm(true)} style={{ background: valid ? "#2F8F46" : "#C9CDD3", color: "#fff", border: "none", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>SUBMIT & ADD ANOTHER PIECE</button>
         )}
         <button onClick={onCancel} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 3, padding: "10px 22px", fontWeight: 700, fontSize: 13.5 }}>{readOnly ? "CLOSE" : "CANCEL"}</button>
       </div>
@@ -8117,14 +8214,21 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
     await refresh(); flash("Changes saved");
   };
 
-  const handleCreate = async (form, file) => {
+  const handleCreate = async (form, file, opts) => {
     let attachmentUrl = null;
     if (file) {
       const up = await uploadCustomerFile(`order-files/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`, file, file.type);
-      if (up.error) { flash("Couldn't upload the attachment: " + up.error.message); return; }
+      if (up.error) { flash("Couldn't upload the attachment: " + up.error.message); return null; }
       attachmentUrl = up.ref;
     }
-    const [jobNo] = await nextJobOrderNumbers(1);
+    let jobNo;
+    if (form.joinBase) {                                   // a piece of an existing job order number
+      const j = await joinJobOrderNumbers(form.joinBase, form.mobile, 1);
+      if (j.error) { flash("Error: " + j.error.message); return null; }
+      jobNo = j.numbers[0];
+    } else {
+      [jobNo] = await nextJobOrderNumbers(1);
+    }
     const now = new Date().toISOString();
     const row = {
       job_order_no: jobNo, invoice_no: form.invoiceNo || null, name: form.name, mobile: form.mobile, order_type: form.orderType,
@@ -8139,12 +8243,17 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
       status: "job_created", history: [{ note: `Job order created by Admin (${session.name})`, by: session.name, at: now }],
     };
     const { data, error } = await supabase.from("job_orders").insert(row).select().single();
-    if (error) { flash("Error: " + error.message); return; }
+    if (error) { flash("Error: " + error.message); return null; }
     notify(session, `${session.name} created job order ${jobNo}`, "job_order", row.branch, { type: "order", id: data.id });
     await refresh();
+    if (opts && opts.addAnother) {                          // stay on the form for the next piece
+      flash(`Job order ${jobNo} created — now add the next piece`);
+      return { base: String(jobNo).split("-")[0] };
+    }
     setSubpage("records");
     setSelectedId(data.id);
     flash("Job order created");
+    return { base: String(jobNo).split("-")[0] };
   };
 
   const handleUpdateOrderFull = async (form, file) => {
@@ -8267,7 +8376,7 @@ function AdminPanel({ config, refresh, orders, profiles, requirementItems, sessi
   if (subpage === "viewmodels") return <ModelBrowser models={config.models} canEdit={true} refresh={refresh} flash={flash} session={session} openRequest={openRequest} clearOpenRequest={clearOpenRequest} />;
   if (subpage === "users") return <AddUsers config={config} />;
   if (subpage === "new") {
-    return <JobOrderForm config={config} session={session} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
+    return <JobOrderForm config={config} session={session} orders={orders} onCancel={() => setSubpage("records")} onSubmit={handleCreate} />;
   }
   if (subpage === "editOrder") {
     const editing = orders.find((o) => o.id === editingOrderId);
