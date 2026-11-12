@@ -8043,7 +8043,19 @@ function ModelCosting({ model, session, flash }) {
     ]);
     setMats(a.data || []); setMen(b.data || []); setLines(c.data || []); setCard(d.data || []);
   };
-  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+  useEffect(() => {
+    load();
+    // the Model Manager edits a material or a manpower line -> the figures follow straight away
+    const changed = () => { load(); setStatus("Updated — the materials or manpower were changed"); setTimeout(() => setStatus(""), 5000); };
+    const back = () => { if (document.visibilityState === "visible") load(); };
+    const ch = supabase.channel("costing-" + model.id)
+      .on("postgres_changes", { event: "*", schema: "public", table: "model_materials", filter: `model_id=eq.${model.id}` }, changed)
+      .on("postgres_changes", { event: "*", schema: "public", table: "model_manpower", filter: `model_id=eq.${model.id}` }, changed)
+      .subscribe();
+    document.addEventListener("visibilitychange", back);
+    window.addEventListener("focus", back);
+    return () => { supabase.removeChannel(ch); document.removeEventListener("visibilitychange", back); window.removeEventListener("focus", back); };
+  }, [model.id]); // eslint-disable-line
 
   const rateFromCard = (kind, key) => { const c = card.find((x) => x.kind === kind && x.key === key); return c ? Number(c.rate) : null; };
   const matRows = (mats || []).map((r) => {
@@ -8272,6 +8284,7 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
   };
 
   useEffect(loadReadOnlyData, [model.id]);
+  useEffect(() => { if (!editingModel) loadReadOnlyData(); }, [editingModel]); // eslint-disable-line
   useEffect(() => { setFormula(model.cuttingFormula || {}); }, [model.id]); // eslint-disable-line
 
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -10610,7 +10623,11 @@ function ModelPatterns({ model, refresh, flash }) {
 function ModelMaterials({ model, refresh, flash }) {
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ material_type: "", material_code: "", quantity: "" });
+  const [editId, setEditId] = useState(null);
+  const [edit, setEdit] = useState({ material_type: "", material_code: "", quantity: "" });
+  const [removing, setRemoving] = useState(null);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const setE = (k) => (e) => setEdit((f) => ({ ...f, [k]: e.target.value }));
 
   const load = () => supabase.from("model_materials").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setRows(data || []));
   useEffect(() => { load(); }, [model.id]); // eslint-disable-line
@@ -10621,26 +10638,45 @@ function ModelMaterials({ model, refresh, flash }) {
     setForm({ material_type: "", material_code: "", quantity: "" });
     await load(); flash("Material added");
   };
-  const remove = async (id) => { await supabase.from("model_materials").delete().eq("id", id); await load(); };
+  const startEdit = (r) => { setEditId(r.id); setEdit({ material_type: r.material_type || "", material_code: r.material_code || "", quantity: r.quantity || "" }); };
+  const saveEdit = async () => {
+    if (!edit.material_type.trim()) { flash("The type of material can't be empty."); return; }
+    const { error } = await supabase.from("model_materials").update({ material_type: edit.material_type.trim(), material_code: edit.material_code.trim(), quantity: edit.quantity.trim() }).eq("id", editId);
+    if (error) { flash("Couldn't save: " + error.message); return; }
+    setEditId(null); await load(); flash("Material updated");
+  };
+  const doRemove = async () => { await supabase.from("model_materials").delete().eq("id", removing.id); setRemoving(null); await load(); };
 
+  const th = { textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" };
+  const td = { padding: "6px 8px", fontSize: 12.5 };
   return (
     <div>
       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>MATERIAL USED</div>
       {rows.length > 0 && (
         <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
           <thead><tr style={{ background: "#F7F7F5" }}>
-            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Type of Material</th>
-            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Material Code</th>
-            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Quantity</th>
-            <th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
+            <th style={th}>Type of Material</th><th style={th}>Material Code</th><th style={th}>Quantity</th><th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => (
+            {rows.map((r) => editId === r.id ? (
+              <tr key={r.id} style={{ borderBottom: "1px solid #E5E5E5", background: "#FFFBF2" }}>
+                <td style={td}><input value={edit.material_type} onChange={setE("material_type")} style={inputStyle} /></td>
+                <td style={td}><input value={edit.material_code} onChange={setE("material_code")} style={inputStyle} /></td>
+                <td style={td}><input value={edit.quantity} onChange={setE("quantity")} style={inputStyle} /></td>
+                <td style={{ ...td, whiteSpace: "nowrap" }}>
+                  <a className="link" style={{ fontSize: 12, color: "#2F8F46", fontWeight: 700, marginRight: 10 }} onClick={saveEdit}>Save</a>
+                  <a className="link" style={{ fontSize: 12 }} onClick={() => setEditId(null)}>Cancel</a>
+                </td>
+              </tr>
+            ) : (
               <tr key={r.id} style={{ borderBottom: "1px solid #E5E5E5" }}>
-                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{r.material_type}</td>
-                <td style={{ padding: "6px 8px", fontSize: 12.5 }} className="mono">{r.material_code || "—"}</td>
-                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{r.quantity || "—"}</td>
-                <td style={{ padding: "6px 8px" }}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => remove(r.id)}>Remove</a></td>
+                <td style={td}>{r.material_type}</td>
+                <td style={td} className="mono">{r.material_code || "—"}</td>
+                <td style={td}>{r.quantity || "—"}</td>
+                <td style={{ ...td, whiteSpace: "nowrap" }}>
+                  <a className="link" style={{ fontSize: 11.5, marginRight: 12 }} onClick={() => startEdit(r)}>Edit</a>
+                  <a className="link" style={{ fontSize: 11.5, color: "#C1302B" }} onClick={() => setRemoving(r)}>Remove</a>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -10652,6 +10688,11 @@ function ModelMaterials({ model, refresh, flash }) {
         <input placeholder="Quantity" value={form.quantity} onChange={set("quantity")} style={{ ...inputStyle, flex: "1 1 90px" }} />
         <button type="button" onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700 }}>+ Add</button>
       </div>
+      {removing && (
+        <ConfirmDialog title={`Remove "${removing.material_type}"?`} danger confirmLabel="Yes, remove" onCancel={() => setRemoving(null)} onConfirm={doRemove}>
+          This line is deleted, and any costing entered for it goes with it. To correct it instead, use <strong>Edit</strong>.
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
@@ -10659,7 +10700,11 @@ function ModelMaterials({ model, refresh, flash }) {
 function ModelManpower({ model, refresh, flash }) {
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ person_name: "", department: "", time_used: "" });
+  const [editId, setEditId] = useState(null);
+  const [edit, setEdit] = useState({ person_name: "", department: "", time_used: "" });
+  const [removing, setRemoving] = useState(null);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const setE = (k) => (e) => setEdit((f) => ({ ...f, [k]: e.target.value }));
 
   const load = () => supabase.from("model_manpower").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setRows(data || []));
   useEffect(() => { load(); }, [model.id]); // eslint-disable-line
@@ -10670,26 +10715,45 @@ function ModelManpower({ model, refresh, flash }) {
     setForm({ person_name: "", department: "", time_used: "" });
     await load(); flash("Manpower entry added");
   };
-  const remove = async (id) => { await supabase.from("model_manpower").delete().eq("id", id); await load(); };
+  const startEdit = (r) => { setEditId(r.id); setEdit({ person_name: r.person_name || "", department: r.department || "", time_used: r.time_used || "" }); };
+  const saveEdit = async () => {
+    if (!edit.person_name.trim()) { flash("The person's name can't be empty."); return; }
+    const { error } = await supabase.from("model_manpower").update({ person_name: edit.person_name.trim(), department: edit.department.trim(), time_used: edit.time_used.trim() }).eq("id", editId);
+    if (error) { flash("Couldn't save: " + error.message); return; }
+    setEditId(null); await load(); flash("Manpower entry updated");
+  };
+  const doRemove = async () => { await supabase.from("model_manpower").delete().eq("id", removing.id); setRemoving(null); await load(); };
 
+  const th = { textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" };
+  const td = { padding: "6px 8px", fontSize: 12.5 };
   return (
     <div>
       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>MANPOWER DETAILS</div>
       {rows.length > 0 && (
         <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
           <thead><tr style={{ background: "#F7F7F5" }}>
-            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Person Name</th>
-            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Department</th>
-            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A" }}>Time Used</th>
-            <th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
+            <th style={th}>Person Name</th><th style={th}>Department</th><th style={th}>Time Used</th><th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => (
+            {rows.map((r) => editId === r.id ? (
+              <tr key={r.id} style={{ borderBottom: "1px solid #E5E5E5", background: "#FFFBF2" }}>
+                <td style={td}><input value={edit.person_name} onChange={setE("person_name")} style={inputStyle} /></td>
+                <td style={td}><input value={edit.department} onChange={setE("department")} style={inputStyle} /></td>
+                <td style={td}><input value={edit.time_used} onChange={setE("time_used")} style={inputStyle} /></td>
+                <td style={{ ...td, whiteSpace: "nowrap" }}>
+                  <a className="link" style={{ fontSize: 12, color: "#2F8F46", fontWeight: 700, marginRight: 10 }} onClick={saveEdit}>Save</a>
+                  <a className="link" style={{ fontSize: 12 }} onClick={() => setEditId(null)}>Cancel</a>
+                </td>
+              </tr>
+            ) : (
               <tr key={r.id} style={{ borderBottom: "1px solid #E5E5E5" }}>
-                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{r.person_name}</td>
-                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{r.department || "—"}</td>
-                <td style={{ padding: "6px 8px", fontSize: 12.5 }}>{r.time_used || "—"}</td>
-                <td style={{ padding: "6px 8px" }}><a className="link" style={{ fontSize: 11, color: "#C1302B" }} onClick={() => remove(r.id)}>Remove</a></td>
+                <td style={td}>{r.person_name}</td>
+                <td style={td}>{r.department || "—"}</td>
+                <td style={td}>{r.time_used || "—"}</td>
+                <td style={{ ...td, whiteSpace: "nowrap" }}>
+                  <a className="link" style={{ fontSize: 11.5, marginRight: 12 }} onClick={() => startEdit(r)}>Edit</a>
+                  <a className="link" style={{ fontSize: 11.5, color: "#C1302B" }} onClick={() => setRemoving(r)}>Remove</a>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -10701,6 +10765,11 @@ function ModelManpower({ model, refresh, flash }) {
         <input placeholder="Time Used (e.g. 2.5 hrs)" value={form.time_used} onChange={set("time_used")} style={{ ...inputStyle, flex: "1 1 110px" }} />
         <button type="button" onClick={add} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700 }}>+ Add</button>
       </div>
+      {removing && (
+        <ConfirmDialog title={`Remove ${String(removing.person_name || "").trim()}?`} danger confirmLabel="Yes, remove" onCancel={() => setRemoving(null)} onConfirm={doRemove}>
+          This line is deleted, and any costing entered for it goes with it. To correct it instead, use <strong>Edit</strong>.
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
