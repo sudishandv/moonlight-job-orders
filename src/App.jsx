@@ -1463,8 +1463,8 @@ export default function App() {
 
   if (session === undefined) return <Loading text="Loading…" />;
   if (!session) return <LoginGate />;
-  if (profile === null) return <NoProfileScreen onSignOut={() => supabase.auth.signOut()} />;
-  if (profile.role === "driver") return <DriverApp profile={profile} onLogout={() => supabase.auth.signOut()} />;
+  if (profile === null) return <NoProfileScreen onSignOut={() => supabase.auth.signOut({ scope: "local" })} />;
+  if (profile.role === "driver") return <DriverApp profile={profile} onLogout={() => supabase.auth.signOut({ scope: "local" })} />;
   if (!config || !orders || !profiles || !requirementItems || !projects || !projectCollaborators || !allUsers || !projectTasks || !projectModels) return withLock(<Loading text="Loading job orders…" />);
 
   const refresh = loadAll;
@@ -1482,7 +1482,7 @@ export default function App() {
   };
 
   return withLock(
-    <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut()} onLock={lock} notifications={notifications} refreshNotifications={loadNotifications} onOpenNotification={openFromNotification} tasks={tasks}>
+    <Shell session={profile} subpage={subpage} setSubpage={setSubpage} onLogout={() => supabase.auth.signOut({ scope: "local" })} onLock={lock} notifications={notifications} refreshNotifications={loadNotifications} onOpenNotification={openFromNotification} tasks={tasks}>
       {subpage === "home" && <HomePage session={profile} setSubpage={setSubpage} tasks={tasks} />}
       {subpage === "projects" && (
         PROJECTS_ENABLED
@@ -1607,6 +1607,18 @@ function Shell({ session, subpage, setSubpage, onLogout, onLock, children, notif
       <div className="shell-content" style={{ padding: "26px 30px 60px" }}>{children}</div>
     </div>
   );
+}
+
+// supabase-js hides the server's answer behind "Edge Function returned a non-2xx status code" — read the real message
+async function functionErrorText(error, data) {
+  if (data && data.error) return data.error;
+  const status = error && error.context && error.context.status;
+  if (status === 401) return "Your sign-in has ended — this happens if you signed out in another window or on another device. Please sign out, sign in again, and try again.";
+  try {
+    const body = error && error.context && typeof error.context.clone === "function" ? await error.context.clone().json() : null;
+    if (body && (body.error || body.message)) return body.error || body.message;
+  } catch (e) { /* the answer was not JSON */ }
+  return (error && error.message) || "Something went wrong.";
 }
 
 function StatusTag({ status }) {
@@ -2173,7 +2185,7 @@ function LockScreen({ profile, onUnlock }) {
         <PinLogin
           embedded previousUser={profile}
           onSuccess={(userId) => { if (userId === profile.id) onUnlock(); else { localStorage.removeItem("ml_locked"); window.location.reload(); } }}
-          onFallback={() => { onUnlock(); supabase.auth.signOut(); }}
+          onFallback={() => { onUnlock(); supabase.auth.signOut({ scope: "local" }); }}
         />
       </div>
     </div>
@@ -9705,6 +9717,12 @@ function AddUsers({ config }) {
       return;
     }
     setCreating(true);
+    const { data: who, error: whoErr } = await supabase.auth.getUser();      // asks the server whether this sign-in is still valid
+    if (whoErr || !who || !who.user) {
+      setCreating(false);
+      setMessage({ type: "error", text: "Your sign-in has ended — this happens if you signed out in another window or on another device. Please sign out, sign in again, and then add the user." });
+      return;
+    }
     const { data: { session } } = await supabase.auth.getSession();
     const { data, error } = await supabase.functions.invoke("create-user", {
       body: { email: form.email.trim(), password: form.password, name: form.name.trim(), role: form.role, branch: form.branch || null },
@@ -9712,7 +9730,7 @@ function AddUsers({ config }) {
     });
     setCreating(false);
     if (error || data?.error) {
-      setMessage({ type: "error", text: data?.error || error?.message || "Something went wrong." });
+      setMessage({ type: "error", text: await functionErrorText(error, data) });
       return;
     }
     setMessage({ type: "success", text: `${form.name} was created successfully with the ${form.role} role.` });
