@@ -7980,9 +7980,10 @@ function ModelManagerPanel({ config, refresh, flash, session, subpage, setSubpag
 /* ---------------- Model costing (Admin only) ---------------- */
 
 const CURRENCY = "QAR";
+const SERVICE_CHARGE_PCT = 35;        // fixed: added automatically on top of every model's total cost
 const money = (n) => (n == null || isNaN(n) ? "—" : Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const numOf = (v) => { const n = parseFloat(String(v == null ? "" : v).replace(",", ".")); return isNaN(n) ? null : n; };
-const EXTRA_PRESETS = ["Packaging", "Service charge", "Transport", "Overhead", "Other"];
+const EXTRA_PRESETS = ["Packaging", "Transport", "Overhead", "Other"];
 const matKey = (r) => String(r.material_code || r.material_type || "").trim().toLowerCase();   // a fabric code, else its name
 const depKey = (r) => String(r.department || r.person_name || "").trim().toLowerCase();         // a role (Tailor, Master…)
 
@@ -8033,15 +8034,20 @@ function ModelCosting({ model, session, flash }) {
   const [card, setCard] = useState([]);
   const [status, setStatus] = useState("");
   const [removing, setRemoving] = useState(null);
+  const [price, setPrice] = useState(null);            // the saved selling price (Admin only)
+  const [priceLocked, setPriceLocked] = useState(true);
+  const [priceDraft, setPriceDraft] = useState("");
+  const [unlockAsk, setUnlockAsk] = useState(false);
 
   const load = async () => {
-    const [a, b, c, d] = await Promise.all([
+    const [a, b, c, d, e] = await Promise.all([
       supabase.from("model_materials").select("*").eq("model_id", model.id).order("created_at"),
       supabase.from("model_manpower").select("*").eq("model_id", model.id).order("created_at"),
       supabase.from("model_costing").select("*").eq("model_id", model.id).order("sort_order").order("updated_at"),
       supabase.from("cost_rates").select("*"),
+      supabase.from("model_pricing").select("*").eq("model_id", model.id).maybeSingle(),
     ]);
-    setMats(a.data || []); setMen(b.data || []); setLines(c.data || []); setCard(d.data || []);
+    setMats(a.data || []); setMen(b.data || []); setLines(c.data || []); setCard(d.data || []); setPrice(e.data || null);
   };
   useEffect(() => {
     load();
@@ -8082,6 +8088,9 @@ function ModelCosting({ model, session, flash }) {
   const matTotal = sum(matRows), menTotal = sum(menRows);
   const extraTotal = extras.reduce((s, l) => s + (Number(l.amount) || 0), 0);
   const total = matTotal + menTotal + extraTotal;
+  const totalR = Math.round(total * 100) / 100;
+  const serviceCharge = Math.round(totalR * SERVICE_CHARGE_PCT) / 100;            // 35% of the total cost, to the cent
+  const finalTotal = Math.round((totalR + serviceCharge) * 100) / 100;
   const missing = matRows.filter((x) => x.amount == null).length + menRows.filter((x) => x.amount == null).length;
   const suggestions = [...matRows.map((x) => ({ ...x, kind: "material" })), ...menRows.map((x) => ({ ...x, kind: "manpower" }))].filter((x) => x.suggestion != null);
 
@@ -8120,6 +8129,17 @@ function ModelCosting({ model, session, flash }) {
     const { error } = await supabase.from("model_costing").delete().eq("id", removing.id);
     if (error) flash("Couldn't remove: " + error.message); else setLines((p) => p.filter((x) => x.id !== removing.id));
     setRemoving(null);
+  };
+
+  const savePrice = async () => {
+    const raw = priceDraft.trim();
+    const n = raw === "" ? null : numOf(raw);
+    if (raw !== "" && (n == null || n < 0)) { flash("Enter a valid amount."); return; }
+    setStatus("Saving…");
+    const { data, error } = await supabase.from("model_pricing")
+      .upsert({ model_id: model.id, selling_price: n, updated_by: session.name, updated_at: new Date().toISOString() }, { onConflict: "model_id" }).select().single();
+    if (error) { setStatus(""); flash("Couldn't save: " + error.message); return; }
+    setPrice(data); setPriceLocked(true); setStatus("Saved ✓");
   };
 
   const th = { textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A", whiteSpace: "nowrap" };
@@ -8207,10 +8227,59 @@ function ModelCosting({ model, session, flash }) {
         {sub("Additional charges", extraTotal)}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderTop: "1px solid #C9CDD3", marginTop: 8, paddingTop: 10 }}>
           <span style={{ fontWeight: 700, fontSize: 13, letterSpacing: "0.05em" }}>TOTAL COST PER PIECE</span>
-          <span className="mono" style={{ fontWeight: 700, fontSize: 22 }}>{CURRENCY} {money(total)}</span>
+          <span className="mono" style={{ fontWeight: 700, fontSize: 17 }}>{CURRENCY} {money(totalR)}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, padding: "6px 0 2px" }}>
+          <span>Service charge ({SERVICE_CHARGE_PCT}%)</span><span className="mono">+ {CURRENCY} {money(serviceCharge)}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderTop: "2px solid #1A1A1A", marginTop: 8, paddingTop: 10 }}>
+          <span style={{ fontWeight: 700, fontSize: 13, letterSpacing: "0.05em" }}>FINAL TOTAL PER PIECE</span>
+          <span className="mono" style={{ fontWeight: 700, fontSize: 24 }}>{CURRENCY} {money(finalTotal)}</span>
         </div>
         {missing > 0 && <div style={{ fontSize: 12, color: "#C1302B", marginTop: 6, textAlign: "right" }}>⚠ {missing} line{missing === 1 ? " has" : "s have"} no rate or quantity yet — the total is not complete.</div>}
       </div>
+
+      <div style={{ marginTop: 18, maxWidth: 440, marginLeft: "auto", padding: 14, background: "#F7F9FB", border: "1px solid #DDE1E7", borderRadius: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <span style={{ fontWeight: 700, fontSize: 13, letterSpacing: "0.05em" }}>SELLING PRICE</span>
+          <span style={{ fontSize: 12, color: priceLocked ? "#8a8a8a" : "#D98E2B", fontWeight: 600 }}>{priceLocked ? "🔒 Locked" : "🔓 Editing"}</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12.5, color: "#8a8a8a" }}>{CURRENCY}</span>
+          <input readOnly={priceLocked} inputMode="decimal" placeholder={priceLocked ? "Not set" : "Enter the selling price"}
+            value={priceLocked ? (price && price.selling_price != null ? money(price.selling_price) : "") : priceDraft}
+            onChange={(e) => setPriceDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !priceLocked) savePrice(); }}
+            style={{ ...inputStyle, width: 170, textAlign: "right", background: priceLocked ? "#EEF0F2" : "#fff", cursor: priceLocked ? "not-allowed" : "text" }} />
+          {priceLocked
+            ? <button onClick={() => setUnlockAsk(true)} style={{ background: "#fff", border: "1.5px solid #3B6FA0", color: "#2F5F8F", borderRadius: 4, padding: "7px 14px", fontWeight: 700, fontSize: 12.5 }}>🔓 Unlock to edit</button>
+            : (<>
+                <button onClick={savePrice} style={{ background: "#2F8F46", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontWeight: 700, fontSize: 12.5 }}>Save & lock</button>
+                <a className="link" style={{ fontSize: 12.5 }} onClick={() => { setPriceLocked(true); setPriceDraft(""); }}>Cancel</a>
+              </>)}
+        </div>
+        {price && price.selling_price != null && priceLocked && (
+          <div style={{ fontSize: 11.5, color: "#8a8a8a", marginTop: 6 }}>Last set by {price.updated_by} · {fmtDateTime(price.updated_at)}</div>
+        )}
+        {price && price.selling_price != null && (() => {
+          const sp = Number(price.selling_price);
+          const margin = Math.round((sp - finalTotal) * 100) / 100;
+          const pct = sp > 0 ? (margin / sp) * 100 : null;
+          return (
+            <div style={{ fontSize: 12.5, marginTop: 8, color: margin < 0 ? "#C1302B" : "#1A1A1A" }}>
+              Margin over the final total: <strong>{CURRENCY} {money(margin)}</strong>{pct != null ? ` (${pct.toFixed(1)}% of the selling price)` : ""}
+              {missing > 0 && <span style={{ color: "#C1302B" }}> — cost not complete yet</span>}
+            </div>
+          );
+        })()}
+      </div>
+
+      {unlockAsk && (
+        <ConfirmDialog title="Unlock the selling price?" confirmLabel="Yes, unlock" onCancel={() => setUnlockAsk(false)}
+          onConfirm={() => { setPriceDraft(price && price.selling_price != null ? String(price.selling_price) : ""); setPriceLocked(false); setUnlockAsk(false); }}>
+          Only Admin can change the selling price. It locks again as soon as you save.
+        </ConfirmDialog>
+      )}
 
       {removing && (
         <ConfirmDialog title={`Remove "${removing.label || "this charge"}"?`} danger confirmLabel="Yes, remove" onCancel={() => setRemoving(null)} onConfirm={removeExtra}>
