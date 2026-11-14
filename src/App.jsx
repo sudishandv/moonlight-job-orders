@@ -5012,30 +5012,38 @@ function AssignMaterialDialog({ order, models, session, onClose, onDone }) {
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [vers, setVers] = useState([]);                // the versions of this model (empty = a single costing)
+  const [pickV, setPickV] = useState("");
 
   useEffect(() => {
     if (!model) { setMats([]); return; }
+    supabase.from("model_versions").select("name,sort_order").eq("model_id", model.id).order("sort_order").then(({ data }) => setVers((data || []).map((v) => v.name)));
     supabase.from("model_materials").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => {
       setMats((data || []).map((m) => {
         const n = parseFloat(m.quantity);
-        return { material_type: m.material_type || "", material_code: m.material_code || "", required: m.quantity || "", assigned: isNaN(n) ? "" : String(n) };
+        return { material_type: m.material_type || "", material_code: m.material_code || "", required: m.quantity || "", assigned: isNaN(n) ? "" : String(n), variant: m.variant || "" };
       }));
     });
   }, []); // eslint-disable-line
 
+  const hasV = vers.length > 0;
+  // with versions, only the lines of the chosen version apply (lines added by hand here always apply)
+  const applies = (m) => !m.variant || (pickV && m.variant.toLowerCase() === pickV.toLowerCase());
+  const activeRows = (mats || []).filter(applies);
   const setMat = (i, patch) => setMats((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const validate = () => {
-    for (const m of (mats || []).filter((r) => r.material_type.trim() || r.assigned.trim())) {
+    if (hasV && !pickV) return "Choose which version this order is made in.";
+    for (const m of activeRows.filter((r) => r.material_type.trim() || r.assigned.trim())) {
       if (!m.material_type.trim()) return "Every material row needs a material name.";
       if (m.assigned === "" || isNaN(parseFloat(m.assigned)) || parseFloat(m.assigned) < 0) return `Enter the meters assigned for ${m.material_type}.`;
     }
     return "";
   };
-  const short = (mats || []).filter((m) => { const r = parseFloat(m.required), a = parseFloat(m.assigned); return !isNaN(r) && !isNaN(a) && a < r; });
+  const short = activeRows.filter((m) => { const r = parseFloat(m.required), a = parseFloat(m.assigned); return !isNaN(r) && !isNaN(a) && a < r; });
 
   const doSave = async () => {
     setBusy(true); setError("");
-    const rows = (mats || []).filter((m) => m.material_type.trim()).map((m) => ({
+    const rows = activeRows.filter((m) => m.material_type.trim()).map((m) => ({
       job_order_id: order.id, material_type: m.material_type.trim(), material_code: m.material_code || null,
       required_qty: m.required || null, assigned_qty: m.assigned || null, created_by: session.name,
     }));
@@ -5064,12 +5072,21 @@ function AssignMaterialDialog({ order, models, session, onClose, onDone }) {
         <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 8 }}>Filled from this model's "Material Used". Enter the meters actually issued; add anything extra below.</div>
         {mats === null ? <div style={{ fontSize: 13, color: "#8a8a8a" }}>Loading…</div> : (
           <>
-            {mats.length === 0 && <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 8 }}>No material is listed for this model. Add what you issued, or continue without.</div>}
-            {mats.length > 0 && (
+            {hasV && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Which version is this order made in? <span style={{ color: "#C1302B" }}>*</span></div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {vers.map((v) => { const on = v.toLowerCase() === pickV.toLowerCase(); return <button key={v} type="button" onClick={() => { setPickV(v); setError(""); }} style={{ padding: "6px 18px", fontSize: 13, fontWeight: 700, borderRadius: 18, cursor: "pointer", border: "1px solid " + (on ? "#1A1A1A" : "#C9CDD3"), background: on ? "#1A1A1A" : "#fff", color: on ? "#fff" : "#1A1A1A" }}>{v}</button>; })}
+                </div>
+                {!pickV && <div style={{ fontSize: 12, color: "#8a8a8a", marginTop: 6 }}>Choose the version first — only that version's materials are listed.</div>}
+              </div>
+            )}
+            {activeRows.length === 0 && (!hasV || pickV) && <div style={{ fontSize: 13, color: "#8a8a8a", marginBottom: 8 }}>No material is listed for this {hasV ? "version" : "model"}. Add what you issued, or continue without.</div>}
+            {activeRows.length > 0 && (
               <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8 }}>
                 <thead><tr><th style={th}>Material</th><th style={th}>Code</th><th style={th}>Required (model)</th><th style={th}>Assigned (meters)</th><th style={th}></th></tr></thead>
                 <tbody>
-                  {mats.map((m, i) => (
+                  {mats.map((m, i) => !applies(m) ? null : (
                     <tr key={i} style={{ borderBottom: "1px solid #E5E5E5" }}>
                       <td style={td}><input value={m.material_type} onChange={(e) => setMat(i, { material_type: e.target.value })} style={{ ...inputStyle, width: 170 }} /></td>
                       <td style={td}><input value={m.material_code} onChange={(e) => setMat(i, { material_code: e.target.value })} style={{ ...inputStyle, width: 110 }} /></td>
@@ -5081,7 +5098,7 @@ function AssignMaterialDialog({ order, models, session, onClose, onDone }) {
                 </tbody>
               </table>
             )}
-            <a className="link" style={{ fontSize: 12.5 }} onClick={() => setMats((rows) => [...rows, { material_type: "", material_code: "", required: "", assigned: "" }])}>+ Add another material</a>
+            {(!hasV || pickV) && <a className="link" style={{ fontSize: 12.5 }} onClick={() => setMats((rows) => [...rows, { material_type: "", material_code: "", required: "", assigned: "", variant: "" }])}>+ Add another material</a>}
           </>
         )}
         {error && <div style={{ color: "#C1302B", fontSize: 13, marginTop: 14 }}>{error}</div>}
@@ -8046,25 +8063,36 @@ function ModelCosting({ model, session, flash }) {
   const [card, setCard] = useState([]);
   const [status, setStatus] = useState("");
   const [removing, setRemoving] = useState(null);
-  const [price, setPrice] = useState(null);            // the saved selling price (Admin only)
+  const [prices, setPrices] = useState([]);            // the saved selling prices, one per version (Admin only)
+  const [versions, setVersions] = useState([]);        // this model's versions (empty = a single costing)
+  const [activeV, setActiveV] = useState("");
+  const [dlg, setDlg] = useState(null);                // "new" | "rename" | "delete"
+  const [editMat, setEditMat] = useState(null);
+  const [editMen, setEditMen] = useState(null);
+  const [addMat, setAddMat] = useState(null);
+  const [addMen, setAddMen] = useState(null);
+  const [removingLine, setRemovingLine] = useState(null);
+  const ownEdit = React.useRef(0);                     // set when Admin edits a line here, so the "changed by someone" note is not shown for it
+  useEffect(() => { ownEdit.current = dlg ? Date.now() + 600000 : Date.now(); }, [dlg]);     // creating / renaming / deleting a version moves lines about too
   const [priceLocked, setPriceLocked] = useState(true);
   const [priceDraft, setPriceDraft] = useState("");
   const [unlockAsk, setUnlockAsk] = useState(false);
 
   const load = async () => {
-    const [a, b, c, d, e] = await Promise.all([
+    const [a, b, c, d, e, f] = await Promise.all([
       supabase.from("model_materials").select("*").eq("model_id", model.id).order("created_at"),
       supabase.from("model_manpower").select("*").eq("model_id", model.id).order("created_at"),
       supabase.from("model_costing").select("*").eq("model_id", model.id).order("sort_order").order("updated_at"),
       supabase.from("cost_rates").select("*"),
-      supabase.from("model_pricing").select("*").eq("model_id", model.id).maybeSingle(),
+      supabase.from("model_pricing").select("*").eq("model_id", model.id),
+      supabase.from("model_versions").select("*").eq("model_id", model.id).order("sort_order"),
     ]);
-    setMats(a.data || []); setMen(b.data || []); setLines(c.data || []); setCard(d.data || []); setPrice(e.data || null);
+    setMats(a.data || []); setMen(b.data || []); setLines(c.data || []); setCard(d.data || []); setPrices(e.data || []); setVersions(f.data || []);
   };
   useEffect(() => {
     load();
     // the Model Manager edits a material or a manpower line -> the figures follow straight away
-    const changed = () => { load(); setStatus("Updated — the materials or manpower were changed"); setTimeout(() => setStatus(""), 5000); };
+    const changed = () => { load(); if (Date.now() - ownEdit.current < 4000) return; setStatus("Updated — the materials or manpower were changed"); setTimeout(() => setStatus(""), 5000); };
     const back = () => { if (document.visibilityState === "visible") load(); };
     const ch = supabase.channel("costing-" + model.id)
       .on("postgres_changes", { event: "*", schema: "public", table: "model_materials", filter: `model_id=eq.${model.id}` }, changed)
@@ -8076,7 +8104,7 @@ function ModelCosting({ model, session, flash }) {
   }, [model.id]); // eslint-disable-line
 
   const rateFromCard = (kind, key) => { const c = card.find((x) => x.kind === kind && x.key === key); return c ? Number(c.rate) : null; };
-  const matRows = (mats || []).map((r) => {
+  const allMatRows = (mats || []).map((r) => {
     const l = lines.find((x) => x.material_id === r.id);
     const read = readQuantity(r.quantity);
     const qty = l && l.qty != null ? Number(l.qty) : read.qty;
@@ -8086,7 +8114,7 @@ function ModelCosting({ model, session, flash }) {
     const suggestion = rate == null ? rateFromCard("material", matKey(r)) : null;
     return { r, read, qty, rate, suggestion, amount: qty != null && rate != null ? qty * rate : null };
   });
-  const menRows = (men || []).map((r) => {
+  const allMenRows = (men || []).map((r) => {
     const l = lines.find((x) => x.manpower_id === r.id);
     const read = readHours(r.time_used);
     const hours = l && l.qty != null ? Number(l.qty) : read.hours;
@@ -8094,7 +8122,19 @@ function ModelCosting({ model, session, flash }) {
     const suggestion = rate == null ? rateFromCard("manpower", depKey(r)) : null;
     return { r, read, hours, rate, suggestion, amount: hours != null && rate != null ? hours * rate : null };
   });
-  const extras = lines.filter((l) => l.kind === "extra");
+  const allExtras = lines.filter((l) => l.kind === "extra");
+
+  // VERSIONS: a model made in more than one fabric / style has a complete costing for each version
+  const vkey = (s) => String(s || "").trim().toLowerCase();
+  const variants = versions.map((v) => v.name);
+  const hasVariants = variants.length > 0;
+  const activeKey = hasVariants ? (variants.some((v) => vkey(v) === vkey(activeV)) ? vkey(activeV) : vkey(variants[0])) : "";
+  const activeLabel = hasVariants ? variants.find((v) => vkey(v) === activeKey) : "";
+  const inVersion = (r, key) => !key || vkey(r.variant) === key;            // with versions, every line belongs to exactly one
+  const matRows = allMatRows.filter((x) => inVersion(x.r, activeKey));
+  const menRows = allMenRows.filter((x) => inVersion(x.r, activeKey));
+  const extras = allExtras.filter((l) => inVersion(l, activeKey));
+  useEffect(() => { setPriceLocked(true); setPriceDraft(""); }, [activeKey]); // eslint-disable-line
 
   const sum = (arr) => arr.reduce((s, x) => s + (x.amount || 0), 0);
   const matTotal = sum(matRows), menTotal = sum(menRows);
@@ -8104,7 +8144,17 @@ function ModelCosting({ model, session, flash }) {
   const serviceCharge = Math.round(totalR * SERVICE_CHARGE_PCT) / 100;            // 35% of the total cost, to the cent
   const finalTotal = Math.round((totalR + serviceCharge) * 100) / 100;
   const missing = matRows.filter((x) => x.amount == null).length + menRows.filter((x) => x.amount == null).length;
-  const suggestions = [...matRows.map((x) => ({ ...x, kind: "material" })), ...menRows.map((x) => ({ ...x, kind: "manpower" }))].filter((x) => x.suggestion != null);
+  const price = prices.find((p) => vkey(p.variant) === activeKey) || null;      // the selling price of the version on screen
+  const totalsFor = (key) => {
+    const mr = allMatRows.filter((x) => inVersion(x.r, key)), nr = allMenRows.filter((x) => inVersion(x.r, key));
+    const ex = allExtras.filter((l) => inVersion(l, key)).reduce((s, l) => s + (Number(l.amount) || 0), 0);
+    const t = Math.round((sum(mr) + sum(nr) + ex) * 100) / 100;
+    const sc = Math.round(t * SERVICE_CHARGE_PCT) / 100;
+    const p = prices.find((q) => vkey(q.variant) === key);
+    return { mat: sum(mr), men: sum(nr), ex, t, sc, fin: Math.round((t + sc) * 100) / 100, miss: mr.filter((x) => x.amount == null).length + nr.filter((x) => x.amount == null).length, price: p && p.selling_price != null ? Number(p.selling_price) : null };
+  };
+
+  const suggestions = [...allMatRows.map((x) => ({ ...x, kind: "material" })), ...allMenRows.map((x) => ({ ...x, kind: "manpower" }))].filter((x) => x.suggestion != null);
 
   const keep = (data) => setLines((prev) => (prev.some((x) => x.id === data.id) ? prev.map((x) => (x.id === data.id ? data : x)) : [...prev, data]));
   const saveLine = async (kind, row, patch) => {
@@ -8127,7 +8177,7 @@ function ModelCosting({ model, session, flash }) {
 
   const addExtra = async (label) => {
     setStatus("Saving…");
-    const { data, error } = await supabase.from("model_costing").insert({ model_id: model.id, kind: "extra", label, amount: null, sort_order: extras.length, updated_by: session.name }).select().single();
+    const { data, error } = await supabase.from("model_costing").insert({ model_id: model.id, kind: "extra", label, amount: null, sort_order: extras.length, updated_by: session.name, variant: hasVariants ? activeLabel : null }).select().single();
     if (error) { setStatus(""); flash("Couldn't add: " + error.message); return; }
     keep(data); setStatus("Saved ✓");
   };
@@ -8143,15 +8193,56 @@ function ModelCosting({ model, session, flash }) {
     setRemoving(null);
   };
 
+  // Admin changes the lines of the version on screen, right here (only that version changes)
+  const vOf = () => (hasVariants ? activeLabel : null);
+  const startEditMat = (r) => setEditMat({ id: r.id, material_type: r.material_type || "", material_code: r.material_code || "", quantity: r.quantity || "" });
+  const startEditMen = (r) => setEditMen({ id: r.id, person_name: String(r.person_name || "").trim(), department: String(r.department || "").trim(), time_used: r.time_used || "" });
+  const saveMatEdit = async () => {
+    if (!editMat.material_type.trim()) { flash("The type of material can't be empty."); return; }
+    setStatus("Saving…"); ownEdit.current = Date.now();
+    const { error } = await supabase.from("model_materials").update({ material_type: editMat.material_type.trim(), material_code: editMat.material_code.trim(), quantity: editMat.quantity.trim() }).eq("id", editMat.id);
+    if (error) { setStatus(""); flash("Couldn't save: " + error.message); return; }
+    setEditMat(null); await load(); setStatus("Saved ✓");
+  };
+  const saveMenEdit = async () => {
+    if (!editMen.person_name.trim()) { flash("The person's name can't be empty."); return; }
+    setStatus("Saving…"); ownEdit.current = Date.now();
+    const { error } = await supabase.from("model_manpower").update({ person_name: editMen.person_name.trim(), department: editMen.department.trim(), time_used: editMen.time_used.trim() }).eq("id", editMen.id);
+    if (error) { setStatus(""); flash("Couldn't save: " + error.message); return; }
+    setEditMen(null); await load(); setStatus("Saved ✓");
+  };
+  const addMaterial = async () => {
+    if (!addMat.material_type.trim()) { flash("Enter the type of material."); return; }
+    setStatus("Saving…"); ownEdit.current = Date.now();
+    const { error } = await supabase.from("model_materials").insert({ model_id: model.id, material_type: addMat.material_type.trim(), material_code: addMat.material_code.trim(), quantity: addMat.quantity.trim(), variant: vOf() });
+    if (error) { setStatus(""); flash("Couldn't add: " + error.message); return; }
+    setAddMat(null); await load(); setStatus("Saved ✓");
+  };
+  const addPerson = async () => {
+    if (!addMen.person_name.trim()) { flash("Enter the person's name."); return; }
+    setStatus("Saving…"); ownEdit.current = Date.now();
+    const { error } = await supabase.from("model_manpower").insert({ model_id: model.id, person_name: addMen.person_name.trim(), department: addMen.department.trim(), time_used: addMen.time_used.trim(), variant: vOf() });
+    if (error) { setStatus(""); flash("Couldn't add: " + error.message); return; }
+    setAddMen(null); await load(); setStatus("Saved ✓");
+  };
+  const doRemoveLine = async () => {
+    const { kind, row } = removingLine;
+    ownEdit.current = Date.now();
+    const { error } = await supabase.from(kind === "material" ? "model_materials" : "model_manpower").delete().eq("id", row.id);
+    setRemovingLine(null);
+    if (error) { flash("Couldn't remove: " + error.message); return; }
+    await load(); setStatus("Saved ✓");
+  };
+
   const savePrice = async () => {
     const raw = priceDraft.trim();
     const n = raw === "" ? null : numOf(raw);
     if (raw !== "" && (n == null || n < 0)) { flash("Enter a valid amount."); return; }
     setStatus("Saving…");
     const { data, error } = await supabase.from("model_pricing")
-      .upsert({ model_id: model.id, selling_price: n, updated_by: session.name, updated_at: new Date().toISOString() }, { onConflict: "model_id" }).select().single();
+      .upsert({ model_id: model.id, variant: activeLabel, selling_price: n, updated_by: session.name, updated_at: new Date().toISOString() }, { onConflict: "model_id,variant" }).select().single();
     if (error) { setStatus(""); flash("Couldn't save: " + error.message); return; }
-    setPrice(data); setPriceLocked(true); setStatus("Saved ✓");
+    setPrices((p) => [...p.filter((x) => vkey(x.variant) !== activeKey), data]); setPriceLocked(true); setStatus("Saved ✓");
   };
 
   const th = { textAlign: "left", padding: "6px 8px", fontSize: 11.5, fontWeight: 700, borderBottom: "2px solid #1A1A1A", whiteSpace: "nowrap" };
@@ -8169,6 +8260,24 @@ function ModelCosting({ model, session, flash }) {
       </div>
       <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 12 }}>Built from the materials and manpower entered for this model. Type the rates; everything saves when you leave a box.</div>
 
+      {hasVariants ? (
+        <div style={{ marginBottom: 14, padding: "12px 14px", background: "#FAFBFC", border: "1px solid #E5E8EC", borderRadius: 8 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 10 }}>This model is made in {variants.length} version{variants.length === 1 ? "" : "s"}</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {variants.map((v) => { const on = vkey(v) === activeKey; return <button key={v} onClick={() => setActiveV(v)} style={{ padding: "7px 18px", fontSize: 13, fontWeight: 700, borderRadius: 18, cursor: "pointer", border: "1px solid " + (on ? "#1A1A1A" : "#C9CDD3"), background: on ? "#1A1A1A" : "#fff", color: on ? "#fff" : "#1A1A1A" }}>{v}</button>; })}
+            <button onClick={() => setDlg("new")} style={{ padding: "7px 16px", fontSize: 13, fontWeight: 700, borderRadius: 18, cursor: "pointer", border: "1px dashed #3B6FA0", background: "#fff", color: "#2F5F8F" }}>+ New version</button>
+          </div>
+          <div style={{ marginTop: 9, fontSize: 12.5, color: "#5a5a5a" }}>
+            Showing the costing of <strong>{activeLabel}</strong> &nbsp;·&nbsp; <a className="link" onClick={() => setDlg("rename")}>Rename</a> &nbsp;·&nbsp; <a className="link" style={{ color: "#C1302B" }} onClick={() => setDlg("delete")}>Delete this version</a>
+          </div>
+        </div>
+      ) : (
+        <div style={{ marginBottom: 14, padding: "10px 14px", background: "#FAFBFC", border: "1px dashed #C9CDD3", borderRadius: 8, fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span>This model has one costing. Made in another fabric or style too?</span>
+          <button onClick={() => setDlg("new")} style={{ padding: "7px 16px", fontSize: 13, fontWeight: 700, borderRadius: 18, cursor: "pointer", border: "1px dashed #3B6FA0", background: "#fff", color: "#2F5F8F" }}>+ New version</button>
+        </div>
+      )}
+
       {suggestions.length > 0 && (
         <div style={{ background: "#EEF5FB", border: "1px solid #BBD0E6", borderRadius: 6, padding: "8px 12px", marginBottom: 12, fontSize: 12.5, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <span>Rates found for <strong>{suggestions.length}</strong> line{suggestions.length === 1 ? "" : "s"} from your other models.</span>
@@ -8177,33 +8286,72 @@ function ModelCosting({ model, session, flash }) {
       )}
 
       <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.05em", margin: "6px 0" }}>MATERIALS</div>
-      {mats === null ? <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>Loading…</div> : matRows.length === 0 ? <div style={{ fontSize: 12.5, color: "#8a8a8a", marginBottom: 8 }}>No materials have been entered for this model yet (the Model Manager adds them under Material Used).</div> : (
+      {mats === null ? <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>Loading…</div> : matRows.length === 0 ? <div style={{ fontSize: 12.5, color: "#8a8a8a", marginBottom: 8 }}>No materials have been entered for this {hasVariants ? "version" : "model"} yet (the Model Manager adds them under Material Used{hasVariants ? ", or add one here" : ""}).</div> : (
         <div style={{ overflowX: "auto", marginBottom: 8 }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={th}>Material</th><th style={th}>As entered</th><th style={{ ...th, textAlign: "right" }}>Qty used</th><th style={{ ...th, textAlign: "right" }}>Rate / unit</th><th style={{ ...th, textAlign: "right" }}>Amount</th></tr></thead>
+            <thead><tr><th style={th}>Material</th><th style={th}>As entered</th><th style={{ ...th, textAlign: "right" }}>Qty used</th><th style={{ ...th, textAlign: "right" }}>Rate / unit</th><th style={{ ...th, textAlign: "right" }}>Amount</th>{hasVariants && <th style={th}></th>}</tr></thead>
             <tbody>
-              {matRows.map((x) => (
+              {matRows.map((x) => (hasVariants && editMat && editMat.id === x.r.id) ? (
+                <tr key={x.r.id} style={{ background: "#FFFBF2" }}>
+                  <td style={td}>
+                    <input placeholder="Type of material" value={editMat.material_type} onChange={(e) => setEditMat((f) => ({ ...f, material_type: e.target.value }))} style={{ ...inputStyle, marginBottom: 4 }} />
+                    <input placeholder="Material code" value={editMat.material_code} onChange={(e) => setEditMat((f) => ({ ...f, material_code: e.target.value }))} style={inputStyle} />
+                  </td>
+                  <td style={td}><input placeholder="Quantity" value={editMat.quantity} onChange={(e) => setEditMat((f) => ({ ...f, quantity: e.target.value }))} style={inputStyle} /></td>
+                  <td style={{ ...td, fontSize: 11, color: "#8a8a8a" }} colSpan={3}>A new quantity replaces the quantity used; a new code asks for the rate again.</td>
+                  <td style={{ ...td, whiteSpace: "nowrap" }}>
+                    <a className="link" style={{ fontSize: 12, color: "#2F8F46", fontWeight: 700, marginRight: 10 }} onClick={saveMatEdit}>Save</a>
+                    <a className="link" style={{ fontSize: 12 }} onClick={() => setEditMat(null)}>Cancel</a>
+                  </td>
+                </tr>
+              ) : (
                 <tr key={x.r.id}>
                   <td style={td}>{x.r.material_type}{x.r.material_code ? <div className="mono" style={{ fontSize: 11, color: "#8a8a8a" }}>{x.r.material_code}</div> : null}</td>
                   <td style={td}>{x.r.quantity || "—"}{x.read.kind === "amount" && <div style={{ fontSize: 10.5, color: "#8a8a8a" }}>amount given in the details</div>}{x.read.kind === "unclear" && <div style={{ fontSize: 10.5, color: "#C1302B" }}>couldn't read this — enter the quantity used</div>}</td>
                   <td style={right}><NumCell value={x.qty} placeholder="qty" warn={x.qty == null} onCommit={(n) => saveLine("material", x.r, { qty: n === x.read.qty ? null : n })} /></td>
                   <td style={right}><NumCell value={x.rate} placeholder={x.suggestion != null ? String(x.suggestion) : "rate"} warn={x.rate == null} onCommit={(n) => saveLine("material", x.r, { rate: n })} /></td>
                   <td style={{ ...right, fontWeight: 700 }}>{money(x.amount)}</td>
+                  {hasVariants && (
+                    <td style={{ ...td, whiteSpace: "nowrap" }}>
+                      <a className="link" style={{ fontSize: 11.5, marginRight: 10 }} onClick={() => startEditMat(x.r)}>Edit</a>
+                      <a className="link" style={{ fontSize: 11.5, color: "#C1302B" }} onClick={() => setRemovingLine({ kind: "material", row: x.r })}>Remove</a>
+                    </td>
+                  )}
                 </tr>
               ))}
-              <tr><td colSpan={4} style={{ ...right, fontWeight: 700 }}>Materials total</td><td style={{ ...right, fontWeight: 700 }}>{CURRENCY} {money(matTotal)}</td></tr>
+              <tr><td colSpan={4} style={{ ...right, fontWeight: 700 }}>Materials total</td><td style={{ ...right, fontWeight: 700 }}>{CURRENCY} {money(matTotal)}</td>{hasVariants && <td style={td}></td>}</tr>
             </tbody>
           </table>
         </div>
       )}
+      {hasVariants && mats !== null && (addMat ? (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+          <input placeholder="Type of Material" value={addMat.material_type} onChange={(e) => setAddMat((f) => ({ ...f, material_type: e.target.value }))} style={{ ...inputStyle, flex: "1 1 140px", width: "auto" }} />
+          <input placeholder="Material Code" value={addMat.material_code} onChange={(e) => setAddMat((f) => ({ ...f, material_code: e.target.value }))} style={{ ...inputStyle, flex: "1 1 110px", width: "auto" }} />
+          <input placeholder="Quantity" value={addMat.quantity} onChange={(e) => setAddMat((f) => ({ ...f, quantity: e.target.value }))} style={{ ...inputStyle, flex: "1 1 90px", width: "auto" }} />
+          <button type="button" onClick={addMaterial} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700 }}>+ Add to {activeLabel}</button>
+          <a className="link" style={{ fontSize: 12 }} onClick={() => setAddMat(null)}>Cancel</a>
+        </div>
+      ) : <a className="link" style={{ fontSize: 12.5 }} onClick={() => setAddMat({ material_type: "", material_code: "", quantity: "" })}>+ Add a material</a>)}
 
       <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.05em", margin: "16px 0 6px" }}>MANPOWER</div>
-      {menRows.length === 0 ? <div style={{ fontSize: 12.5, color: "#8a8a8a", marginBottom: 8 }}>No manpower has been entered for this model yet.</div> : (
+      {menRows.length === 0 ? <div style={{ fontSize: 12.5, color: "#8a8a8a", marginBottom: 8 }}>No manpower has been entered for this {hasVariants ? "version" : "model"} yet.</div> : (
         <div style={{ overflowX: "auto", marginBottom: 8 }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={th}>Person</th><th style={th}>Role</th><th style={th}>Time entered</th><th style={{ ...th, textAlign: "right" }}>Hours</th><th style={{ ...th, textAlign: "right" }}>Hourly rate</th><th style={{ ...th, textAlign: "right" }}>Amount</th></tr></thead>
+            <thead><tr><th style={th}>Person</th><th style={th}>Role</th><th style={th}>Time entered</th><th style={{ ...th, textAlign: "right" }}>Hours</th><th style={{ ...th, textAlign: "right" }}>Hourly rate</th><th style={{ ...th, textAlign: "right" }}>Amount</th>{hasVariants && <th style={th}></th>}</tr></thead>
             <tbody>
-              {menRows.map((x) => (
+              {menRows.map((x) => (hasVariants && editMen && editMen.id === x.r.id) ? (
+                <tr key={x.r.id} style={{ background: "#FFFBF2" }}>
+                  <td style={td}><input placeholder="Person name" value={editMen.person_name} onChange={(e) => setEditMen((f) => ({ ...f, person_name: e.target.value }))} style={inputStyle} /></td>
+                  <td style={td}><input placeholder="Role / department" value={editMen.department} onChange={(e) => setEditMen((f) => ({ ...f, department: e.target.value }))} style={inputStyle} /></td>
+                  <td style={td}><input placeholder="e.g. 2.5 hrs" value={editMen.time_used} onChange={(e) => setEditMen((f) => ({ ...f, time_used: e.target.value }))} style={inputStyle} /></td>
+                  <td style={{ ...td, fontSize: 11, color: "#8a8a8a" }} colSpan={3}>A new time replaces the hours; a new role asks for the hourly rate again.</td>
+                  <td style={{ ...td, whiteSpace: "nowrap" }}>
+                    <a className="link" style={{ fontSize: 12, color: "#2F8F46", fontWeight: 700, marginRight: 10 }} onClick={saveMenEdit}>Save</a>
+                    <a className="link" style={{ fontSize: 12 }} onClick={() => setEditMen(null)}>Cancel</a>
+                  </td>
+                </tr>
+              ) : (
                 <tr key={x.r.id}>
                   <td style={td}>{String(x.r.person_name || "").trim()}</td>
                   <td style={td}>{String(x.r.department || "").trim() || "—"}</td>
@@ -8211,13 +8359,28 @@ function ModelCosting({ model, session, flash }) {
                   <td style={right}><NumCell value={x.hours == null ? null : Math.round(x.hours * 100) / 100} placeholder="hrs" warn={x.hours == null} onCommit={(n) => saveLine("manpower", x.r, { qty: n === x.read.hours ? null : n })} /></td>
                   <td style={right}><NumCell value={x.rate} placeholder={x.suggestion != null ? String(x.suggestion) : "rate"} warn={x.rate == null} onCommit={(n) => saveLine("manpower", x.r, { rate: n })} /></td>
                   <td style={{ ...right, fontWeight: 700 }}>{money(x.amount)}</td>
+                  {hasVariants && (
+                    <td style={{ ...td, whiteSpace: "nowrap" }}>
+                      <a className="link" style={{ fontSize: 11.5, marginRight: 10 }} onClick={() => startEditMen(x.r)}>Edit</a>
+                      <a className="link" style={{ fontSize: 11.5, color: "#C1302B" }} onClick={() => setRemovingLine({ kind: "manpower", row: x.r })}>Remove</a>
+                    </td>
+                  )}
                 </tr>
               ))}
-              <tr><td colSpan={5} style={{ ...right, fontWeight: 700 }}>Manpower total</td><td style={{ ...right, fontWeight: 700 }}>{CURRENCY} {money(menTotal)}</td></tr>
+              <tr><td colSpan={5} style={{ ...right, fontWeight: 700 }}>Manpower total</td><td style={{ ...right, fontWeight: 700 }}>{CURRENCY} {money(menTotal)}</td>{hasVariants && <td style={td}></td>}</tr>
             </tbody>
           </table>
         </div>
       )}
+      {hasVariants && mats !== null && (addMen ? (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+          <input placeholder="Person Name" value={addMen.person_name} onChange={(e) => setAddMen((f) => ({ ...f, person_name: e.target.value }))} style={{ ...inputStyle, flex: "1 1 140px", width: "auto" }} />
+          <input placeholder="Role / Department" value={addMen.department} onChange={(e) => setAddMen((f) => ({ ...f, department: e.target.value }))} style={{ ...inputStyle, flex: "1 1 110px", width: "auto" }} />
+          <input placeholder="Time Used (e.g. 2.5 hrs)" value={addMen.time_used} onChange={(e) => setAddMen((f) => ({ ...f, time_used: e.target.value }))} style={{ ...inputStyle, flex: "1 1 110px", width: "auto" }} />
+          <button type="button" onClick={addPerson} style={{ background: "#3B6FA0", color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700 }}>+ Add to {activeLabel}</button>
+          <a className="link" style={{ fontSize: 12 }} onClick={() => setAddMen(null)}>Cancel</a>
+        </div>
+      ) : <a className="link" style={{ fontSize: 12.5 }} onClick={() => setAddMen({ person_name: "", department: "", time_used: "" })}>+ Add a person</a>)}
 
       <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.05em", margin: "16px 0 6px" }}>ADDITIONAL CHARGES</div>
       {extras.map((l) => (
@@ -8245,7 +8408,7 @@ function ModelCosting({ model, session, flash }) {
           <span>Service charge ({SERVICE_CHARGE_PCT}%)</span><span className="mono">+ {CURRENCY} {money(serviceCharge)}</span>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderTop: "2px solid #1A1A1A", marginTop: 8, paddingTop: 10 }}>
-          <span style={{ fontWeight: 700, fontSize: 13, letterSpacing: "0.05em" }}>FINAL TOTAL PER PIECE</span>
+          <span style={{ fontWeight: 700, fontSize: 13, letterSpacing: "0.05em" }}>FINAL TOTAL PER PIECE{hasVariants ? ` — ${activeLabel.toUpperCase()}` : ""}</span>
           <span className="mono" style={{ fontWeight: 700, fontSize: 24 }}>{CURRENCY} {money(finalTotal)}</span>
         </div>
         {missing > 0 && <div style={{ fontSize: 12, color: "#C1302B", marginTop: 6, textAlign: "right" }}>⚠ {missing} line{missing === 1 ? " has" : "s have"} no rate or quantity yet — the total is not complete.</div>}
@@ -8253,7 +8416,7 @@ function ModelCosting({ model, session, flash }) {
 
       <div style={{ marginTop: 18, maxWidth: 440, marginLeft: "auto", padding: 14, background: "#F7F9FB", border: "1px solid #DDE1E7", borderRadius: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <span style={{ fontWeight: 700, fontSize: 13, letterSpacing: "0.05em" }}>SELLING PRICE</span>
+          <span style={{ fontWeight: 700, fontSize: 13, letterSpacing: "0.05em" }}>SELLING PRICE{hasVariants ? ` — ${activeLabel.toUpperCase()}` : ""}</span>
           <span style={{ fontSize: 12, color: priceLocked ? "#8a8a8a" : "#D98E2B", fontWeight: 600 }}>{priceLocked ? "🔒 Locked" : "🔓 Editing"}</span>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -8286,10 +8449,50 @@ function ModelCosting({ model, session, flash }) {
         })()}
       </div>
 
+      {variants.length > 1 && (
+        <div style={{ marginTop: 20 }}>
+          <div style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: "0.05em", margin: "0 0 6px" }}>COMPARE THE VERSIONS</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={th}>Version</th><th style={{ ...th, textAlign: "right" }}>Materials</th><th style={{ ...th, textAlign: "right" }}>Manpower</th><th style={{ ...th, textAlign: "right" }}>Charges</th><th style={{ ...th, textAlign: "right" }}>Cost</th><th style={{ ...th, textAlign: "right" }}>+ {SERVICE_CHARGE_PCT}%</th><th style={{ ...th, textAlign: "right" }}>Final total</th><th style={{ ...th, textAlign: "right" }}>Selling price</th><th style={{ ...th, textAlign: "right" }}>Margin</th></tr></thead>
+              <tbody>
+                {variants.map((v) => {
+                  const k = vkey(v); const t = totalsFor(k);
+                  const margin = t.price != null ? Math.round((t.price - t.fin) * 100) / 100 : null;
+                  return (
+                    <tr key={v} onClick={() => setActiveV(v)} style={{ cursor: "pointer", background: k === activeKey ? "#F4F8FC" : "transparent" }}>
+                      <td style={{ ...td, fontWeight: 700 }}>{v}{t.miss > 0 && <span title="some lines have no rate yet" style={{ color: "#C1302B" }}> ⚠</span>}</td>
+                      <td style={right}>{money(t.mat)}</td><td style={right}>{money(t.men)}</td><td style={right}>{money(t.ex)}</td><td style={right}>{money(t.t)}</td><td style={right}>{money(t.sc)}</td>
+                      <td style={{ ...right, fontWeight: 700 }}>{money(t.fin)}</td><td style={right}>{t.price != null ? money(t.price) : "—"}</td>
+                      <td style={{ ...right, color: margin != null && margin < 0 ? "#C1302B" : "#1A1A1A" }}>{margin != null ? money(margin) : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11, color: "#8a8a8a", marginTop: 4 }}>Click a row to open that version. ⚠ = some lines have no rate yet.</div>
+        </div>
+      )}
+
       {unlockAsk && (
         <ConfirmDialog title="Unlock the selling price?" confirmLabel="Yes, unlock" onCancel={() => setUnlockAsk(false)}
           onConfirm={() => { setPriceDraft(price && price.selling_price != null ? String(price.selling_price) : ""); setPriceLocked(false); setUnlockAsk(false); }}>
           Only Admin can change the selling price. It locks again as soon as you save.
+        </ConfirmDialog>
+      )}
+
+      {dlg === "new" && <NewVersionDialog model={model} versions={variants} activeLabel={activeLabel} onClose={() => setDlg(null)} onCreated={(name) => { setDlg(null); setActiveV(name); load(); flash(`Version "${name}" created`); }} />}
+      {dlg === "rename" && <RenameVersionDialog model={model} current={activeLabel} onClose={() => setDlg(null)} onDone={(name) => { setDlg(null); setActiveV(name); load(); flash("Version renamed"); }} />}
+      {dlg === "delete" && (
+        <ConfirmDialog title={`Delete the version "${activeLabel}"?`} danger confirmLabel="Yes, delete it" onCancel={() => setDlg(null)}
+          onConfirm={async () => { const { error } = await supabase.rpc("delete_model_version", { p_model: model.id, p_name: activeLabel }); setDlg(null); if (error) flash("Couldn't delete: " + error.message); else { setActiveV(""); await load(); flash("Version deleted"); } }}>
+          Its materials, manpower, rates and extra charges are deleted for good. {variants.length === 2 ? "The other version stays, and the model goes back to a single costing." : "The other versions are not touched."}
+        </ConfirmDialog>
+      )}
+      {removingLine && (
+        <ConfirmDialog title={`Remove "${removingLine.kind === "material" ? removingLine.row.material_type : String(removingLine.row.person_name || "").trim()}"?`} danger confirmLabel="Yes, remove" onCancel={() => setRemovingLine(null)} onConfirm={doRemoveLine}>
+          This line and its costing are removed{hasVariants ? ` from ${activeLabel} only` : ""}.
         </ConfirmDialog>
       )}
 
@@ -8547,7 +8750,7 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
           {(canEdit && editingModel) ? <ModelMaterials model={model} refresh={refresh} flash={flash} /> : (
             <div>
               <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>MATERIAL USED</div>
-              {materials.length > 0 ? materials.map((r) => <div key={r.id} style={{ fontSize: 12.5, padding: "4px 0" }}>{r.material_type} — {r.material_code || "—"} — Qty {r.quantity || "—"}</div>) : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No materials.</div>}
+              {materials.length > 0 ? <LinesByVersion rows={materials} line={(r) => <div key={r.id} style={{ fontSize: 12.5, padding: "4px 0" }}>{r.material_type} — {r.material_code || "—"} — Qty {r.quantity || "—"}</div>} /> : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No materials.</div>}
             </div>
           )}
         </div>
@@ -8555,7 +8758,7 @@ function ModelDetailPage({ model, models, canEdit, refresh, flash, onBack, sessi
           {(canEdit && editingModel) ? <ModelManpower model={model} refresh={refresh} flash={flash} /> : (
             <div>
               <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>MANPOWER DETAILS</div>
-              {manpower.length > 0 ? manpower.map((r) => <div key={r.id} style={{ fontSize: 12.5, padding: "4px 0" }}>{r.person_name} — {r.department || "—"} — {r.time_used || "—"}</div>) : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No manpower entries.</div>}
+              {manpower.length > 0 ? <LinesByVersion rows={manpower} line={(r) => <div key={r.id} style={{ fontSize: 12.5, padding: "4px 0" }}>{r.person_name} — {r.department || "—"} — {r.time_used || "—"}</div>} /> : <div style={{ fontSize: 12.5, color: "#8a8a8a" }}>No manpower entries.</div>}
             </div>
           )}
         </div>
@@ -10707,21 +10910,137 @@ function ModelPatterns({ model, refresh, flash }) {
   );
 }
 
+function LinesByVersion({ rows, line }) {
+  const groups = [];
+  rows.forEach((r) => {
+    const k = String(r.variant || "").trim();
+    let g = groups.find((x) => x.k.toLowerCase() === k.toLowerCase());
+    if (!g) { g = { k, rows: [] }; groups.push(g); }
+    g.rows.push(r);
+  });
+  return groups.map((g) => (
+    <div key={g.k || "all"} style={{ marginBottom: 8 }}>
+      {g.k && groups.length > 0 && <div style={{ fontSize: 11.5, fontWeight: 700, color: "#2F5F8F", margin: "4px 0 2px", letterSpacing: "0.04em" }}>{g.k.toUpperCase()}</div>}
+      {g.rows.map((r) => line(r))}
+    </div>
+  ));
+}
+
+// the version buttons used by the Model Manager's editors
+
+function VersionChips({ versions, value, onPick }) {
+  if (!versions.length) return null;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ fontSize: 11.5, color: "#8a8a8a", marginBottom: 5 }}>This model is made in {versions.length} versions. Choose the version to see and change.</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {versions.map((v) => { const on = v.toLowerCase() === value.toLowerCase(); return <button key={v} type="button" onClick={() => onPick(v)} style={{ padding: "5px 16px", fontSize: 12.5, fontWeight: 700, borderRadius: 16, cursor: "pointer", border: "1px solid " + (on ? "#1A1A1A" : "#C9CDD3"), background: on ? "#1A1A1A" : "#fff", color: on ? "#fff" : "#1A1A1A" }}>{v}</button>; })}
+      </div>
+    </div>
+  );
+}
+
+// Admin: make a new version of a model by copying an existing one
+
+function NewVersionDialog({ model, versions, activeLabel, onClose, onCreated }) {
+  const first = versions.length === 0;
+  const [baseName, setBaseName] = useState("Version 1");
+  const [name, setName] = useState(`Version ${versions.length + (first ? 2 : 1)}`);
+  const [from, setFrom] = useState(activeLabel || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const submit = async () => {
+    setError("");
+    const n = name.trim();
+    if (first && !baseName.trim()) { setError("Give the current costing a name."); return; }
+    if (!n) { setError("Give the new version a name."); return; }
+    if (first && baseName.trim().toLowerCase() === n.toLowerCase()) { setError("The two versions need different names."); return; }
+    setBusy(true);
+    const { data, error: e } = await supabase.rpc("create_model_version", { p_model: model.id, p_from: first ? baseName.trim() : from, p_new: n });
+    setBusy(false);
+    if (e) { setError(e.message); return; }
+    onCreated(data || n);
+  };
+  const lab = { fontSize: 12, fontWeight: 600, color: "#5a5a5a", margin: "12px 0 4px" };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1050, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 24 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 520 }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 4 }}>New version of this model</div>
+        <div style={{ fontSize: 13, color: "#5a5a5a", lineHeight: 1.5 }}>
+          {first ? "The costing you have now becomes the first version, and the new version starts as an exact copy of it." : "The new version starts as an exact copy of the version you choose."} Everything is copied — materials, manpower, rates, quantities and extra charges — and then you change what is different. The selling price is not copied.
+        </div>
+        {first ? (
+          <>
+            <div style={lab}>Name of the current costing</div>
+            <input value={baseName} onChange={(e) => setBaseName(e.target.value)} placeholder="e.g. Velvet" style={inputStyle} />
+          </>
+        ) : (
+          <>
+            <div style={lab}>Copy everything from</div>
+            <select value={from} onChange={(e) => setFrom(e.target.value)} style={inputStyle}>{versions.map((v) => <option key={v} value={v}>{v}</option>)}</select>
+          </>
+        )}
+        <div style={lab}>Name of the new version</div>
+        <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} placeholder="e.g. Crepe" style={inputStyle} />
+        {error && <div style={{ color: "#C1302B", fontSize: 13, marginTop: 10 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 20 }}>
+          <button onClick={onClose} disabled={busy} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "9px 20px", fontWeight: 700 }}>{busy ? "Creating…" : "Create version"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RenameVersionDialog({ model, current, onClose, onDone }) {
+  const [name, setName] = useState(current);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const submit = async () => {
+    if (!name.trim()) { setError("Give the version a name."); return; }
+    setBusy(true); setError("");
+    const { data, error: e } = await supabase.rpc("rename_model_version", { p_model: model.id, p_old: current, p_new: name.trim() });
+    setBusy(false);
+    if (e) { setError(e.message); return; }
+    onDone(data || name.trim());
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1050, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 24 }}>
+      <div style={{ background: "#fff", borderRadius: 8, padding: 24, width: "100%", maxWidth: 440 }}>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, marginBottom: 10 }}>Rename this version</div>
+        <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} style={inputStyle} />
+        {error && <div style={{ color: "#C1302B", fontSize: 13, marginTop: 10 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
+          <button onClick={onClose} disabled={busy} style={{ background: "#fff", border: "1px solid #C9CDD3", borderRadius: 4, padding: "9px 18px", fontWeight: 700 }}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{ background: "#1A1A1A", color: "#fff", border: "none", borderRadius: 4, padding: "9px 20px", fontWeight: 700 }}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ModelMaterials({ model, refresh, flash }) {
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ material_type: "", material_code: "", quantity: "" });
   const [editId, setEditId] = useState(null);
   const [edit, setEdit] = useState({ material_type: "", material_code: "", quantity: "" });
   const [removing, setRemoving] = useState(null);
+  const [versions, setVersions] = useState([]); const [vSel, setVSel] = useState("");
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const setE = (k) => (e) => setEdit((f) => ({ ...f, [k]: e.target.value }));
 
   const load = () => supabase.from("model_materials").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setRows(data || []));
-  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+  useEffect(() => {
+    load();
+    supabase.from("model_versions").select("name,sort_order").eq("model_id", model.id).order("sort_order").then(({ data }) => setVersions((data || []).map((v) => v.name)));
+  }, [model.id]); // eslint-disable-line
+  const hasV = versions.length > 0;
+  const activeV = hasV ? (versions.find((v) => v.toLowerCase() === vSel.toLowerCase()) || versions[0]) : "";
+  const shown = hasV ? rows.filter((r) => String(r.variant || "").trim().toLowerCase() === activeV.toLowerCase()) : rows;
 
   const add = async () => {
     if (!form.material_type.trim()) return;
-    await supabase.from("model_materials").insert({ model_id: model.id, ...form });
+    await supabase.from("model_materials").insert({ model_id: model.id, ...form, variant: hasV ? activeV : null });
     setForm({ material_type: "", material_code: "", quantity: "" });
     await load(); flash("Material added");
   };
@@ -10739,13 +11058,14 @@ function ModelMaterials({ model, refresh, flash }) {
   return (
     <div>
       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>MATERIAL USED</div>
-      {rows.length > 0 && (
+      <VersionChips versions={versions} value={activeV} onPick={setVSel} />
+      {shown.length > 0 && (
         <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
           <thead><tr style={{ background: "#F7F7F5" }}>
             <th style={th}>Type of Material</th><th style={th}>Material Code</th><th style={th}>Quantity</th><th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => editId === r.id ? (
+            {shown.map((r) => editId === r.id ? (
               <tr key={r.id} style={{ borderBottom: "1px solid #E5E5E5", background: "#FFFBF2" }}>
                 <td style={td}><input value={edit.material_type} onChange={setE("material_type")} style={inputStyle} /></td>
                 <td style={td}><input value={edit.material_code} onChange={setE("material_code")} style={inputStyle} /></td>
@@ -10790,15 +11110,22 @@ function ModelManpower({ model, refresh, flash }) {
   const [editId, setEditId] = useState(null);
   const [edit, setEdit] = useState({ person_name: "", department: "", time_used: "" });
   const [removing, setRemoving] = useState(null);
+  const [versions, setVersions] = useState([]); const [vSel, setVSel] = useState("");
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const setE = (k) => (e) => setEdit((f) => ({ ...f, [k]: e.target.value }));
 
   const load = () => supabase.from("model_manpower").select("*").eq("model_id", model.id).order("created_at").then(({ data }) => setRows(data || []));
-  useEffect(() => { load(); }, [model.id]); // eslint-disable-line
+  useEffect(() => {
+    load();
+    supabase.from("model_versions").select("name,sort_order").eq("model_id", model.id).order("sort_order").then(({ data }) => setVersions((data || []).map((v) => v.name)));
+  }, [model.id]); // eslint-disable-line
+  const hasV = versions.length > 0;
+  const activeV = hasV ? (versions.find((v) => v.toLowerCase() === vSel.toLowerCase()) || versions[0]) : "";
+  const shown = hasV ? rows.filter((r) => String(r.variant || "").trim().toLowerCase() === activeV.toLowerCase()) : rows;
 
   const add = async () => {
     if (!form.person_name.trim()) return;
-    await supabase.from("model_manpower").insert({ model_id: model.id, ...form });
+    await supabase.from("model_manpower").insert({ model_id: model.id, ...form, variant: hasV ? activeV : null });
     setForm({ person_name: "", department: "", time_used: "" });
     await load(); flash("Manpower entry added");
   };
@@ -10816,13 +11143,14 @@ function ModelManpower({ model, refresh, flash }) {
   return (
     <div>
       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>MANPOWER DETAILS</div>
-      {rows.length > 0 && (
+      <VersionChips versions={versions} value={activeV} onPick={setVSel} />
+      {shown.length > 0 && (
         <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
           <thead><tr style={{ background: "#F7F7F5" }}>
             <th style={th}>Person Name</th><th style={th}>Department</th><th style={th}>Time Used</th><th style={{ borderBottom: "2px solid #1A1A1A" }}></th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => editId === r.id ? (
+            {shown.map((r) => editId === r.id ? (
               <tr key={r.id} style={{ borderBottom: "1px solid #E5E5E5", background: "#FFFBF2" }}>
                 <td style={td}><input value={edit.person_name} onChange={setE("person_name")} style={inputStyle} /></td>
                 <td style={td}><input value={edit.department} onChange={setE("department")} style={inputStyle} /></td>
